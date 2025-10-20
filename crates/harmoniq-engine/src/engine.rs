@@ -7,7 +7,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::{
     graph::{self, GraphHandle},
-    plugin::PluginId,
+    plugin::{MidiEvent, PluginId},
     AudioBuffer, AudioProcessor, BufferConfig,
 };
 
@@ -58,6 +58,7 @@ pub enum EngineCommand {
     SetTempo(f32),
     SetTransport(TransportState),
     ReplaceGraph(GraphHandle),
+    SubmitMidi(Vec<MidiEvent>),
 }
 
 /// Central Harmoniq engine responsible for orchestrating the processing graph.
@@ -69,6 +70,7 @@ pub struct HarmoniqEngine {
     next_plugin_id: AtomicU64,
     transport: RwLock<TransportState>,
     command_queue: Arc<ArrayQueue<EngineCommand>>,
+    pending_midi: Mutex<Vec<MidiEvent>>,
 }
 
 impl HarmoniqEngine {
@@ -81,6 +83,7 @@ impl HarmoniqEngine {
             next_plugin_id: AtomicU64::new(1),
             transport: RwLock::new(TransportState::Stopped),
             command_queue,
+            pending_midi: Mutex::new(Vec::new()),
             config,
         })
     }
@@ -141,12 +144,24 @@ impl HarmoniqEngine {
             }
             EngineCommand::SetTransport(state) => self.set_transport(state),
             EngineCommand::ReplaceGraph(graph) => self.replace_graph(graph)?,
+            EngineCommand::SubmitMidi(events) => {
+                let mut pending = self.pending_midi.lock();
+                pending.extend(events);
+            }
         }
         Ok(())
     }
 
     pub fn process_block(&mut self, output: &mut AudioBuffer) -> anyhow::Result<()> {
         self.drain_command_queue()?;
+        let pending_midi = {
+            let mut queue = self.pending_midi.lock();
+            if queue.is_empty() {
+                Vec::new()
+            } else {
+                std::mem::take(&mut *queue)
+            }
+        };
         let graph = match self.graph.read().clone() {
             Some(graph) => graph,
             None => {
@@ -161,6 +176,9 @@ impl HarmoniqEngine {
             let Some(processor) = processors.get_mut(plugin_id) else {
                 anyhow::bail!("Missing processor for plugin ID: {:?}", plugin_id);
             };
+            if !pending_midi.is_empty() {
+                processor.process_midi(&pending_midi)?;
+            }
             let mut buffer = AudioBuffer::from_config(self.config.clone());
             processor.process(&mut buffer)?;
             scratch_buffers.push(buffer);

@@ -19,6 +19,13 @@ use parking_lot::Mutex;
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
+mod audio;
+mod midi;
+
+use audio::{
+    available_backends, describe_layout, AudioBackend, AudioRuntimeOptions, RealtimeAudio,
+};
+use midi::list_midi_inputs;
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Harmoniq Studio prototype")]
 struct Cli {
@@ -45,6 +52,26 @@ struct Cli {
     /// Initial tempo used for transport and offline bouncing
     #[arg(long, default_value_t = 120.0)]
     tempo: f32,
+
+    /// Preferred realtime audio backend
+    #[arg(long, default_value_t = AudioBackend::Auto)]
+    audio_backend: AudioBackend,
+
+    /// Disable realtime audio streaming
+    #[arg(long, default_value_t = false)]
+    disable_audio: bool,
+
+    /// Name of the MIDI controller or input port to connect
+    #[arg(long)]
+    midi_input: Option<String>,
+
+    /// List available realtime audio backends
+    #[arg(long, default_value_t = false)]
+    list_audio_backends: bool,
+
+    /// List available MIDI input ports
+    #[arg(long, default_value_t = false)]
+    list_midi_inputs: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +193,38 @@ fn main() -> anyhow::Result<()> {
 
     let args = Cli::parse();
 
+    if args.list_audio_backends {
+        let hosts = available_backends();
+        if hosts.is_empty() {
+            println!("No realtime audio hosts reported by the system.");
+        } else {
+            println!("Available realtime audio backends:");
+            for (backend, host_name) in hosts {
+                println!("  - {backend} ({host_name})");
+            }
+        }
+        return Ok(());
+    }
+
+    if args.list_midi_inputs {
+        let ports = list_midi_inputs().context("failed to list MIDI inputs")?;
+        if ports.is_empty() {
+            println!("No MIDI input ports detected.");
+        } else {
+            println!("Available MIDI inputs:");
+            for port in ports {
+                println!("  - {port}");
+            }
+        }
+        return Ok(());
+    }
+
+    let runtime_options = AudioRuntimeOptions::new(
+        args.audio_backend,
+        args.midi_input.clone(),
+        !args.disable_audio,
+    );
+
     if let Some(path) = args.bounce.clone() {
         let config = BufferConfig::new(args.sample_rate, args.block_size, ChannelLayout::Stereo);
         let bounced_path = offline_bounce_to_wav(
@@ -180,44 +239,69 @@ fn main() -> anyhow::Result<()> {
     }
 
     if args.headless {
-        run_headless(args.sample_rate, args.block_size, args.tempo)
+        run_headless(&args, runtime_options)
     } else {
-        run_ui(args.sample_rate, args.block_size, args.tempo)
+        run_ui(&args, runtime_options)
     }
 }
 
-fn run_headless(sample_rate: f32, block_size: usize, tempo: f32) -> anyhow::Result<()> {
-    let config = BufferConfig::new(sample_rate, block_size, ChannelLayout::Stereo);
+fn run_headless(args: &Cli, runtime: AudioRuntimeOptions) -> anyhow::Result<()> {
+    let config = BufferConfig::new(args.sample_rate, args.block_size, ChannelLayout::Stereo);
     let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
     configure_demo_graph(&mut engine, &DemoGraphConfig::headless_default())?;
     engine.set_transport(TransportState::Playing);
-    engine.execute_command(EngineCommand::SetTempo(tempo))?;
+    engine.execute_command(EngineCommand::SetTempo(args.tempo))?;
 
-    let mut buffer = harmoniq_engine::AudioBuffer::from_config(config.clone());
-    for _ in 0..10 {
-        engine.process_block(&mut buffer)?;
-        std::thread::sleep(Duration::from_millis(10));
+    if runtime.is_enabled() {
+        let command_queue = engine.command_queue();
+        let engine = Arc::new(Mutex::new(engine));
+        let stream =
+            RealtimeAudio::start(Arc::clone(&engine), command_queue, config.clone(), runtime)?;
+
+        println!(
+            "Streaming realtime audio via {} on '{}' ({} layout) – press Ctrl+C to stop.",
+            stream.backend(),
+            stream.device_name(),
+            describe_layout(config.layout)
+        );
+
+        let running = Arc::new(AtomicBool::new(true));
+        let running_clone = Arc::clone(&running);
+        ctrlc::set_handler(move || {
+            running_clone.store(false, Ordering::SeqCst);
+        })?;
+
+        while running.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    } else {
+        let mut buffer = harmoniq_engine::AudioBuffer::from_config(config.clone());
+        for _ in 0..10 {
+            engine.process_block(&mut buffer)?;
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        println!(
+            "Rendered {} frames across {} channels at {:.1} BPM",
+            buffer.len(),
+            config.layout.channels(),
+            args.tempo
+        );
     }
-
-    println!(
-        "Rendered {} frames across {} channels at {:.1} BPM",
-        buffer.len(),
-        config.layout.channels(),
-        tempo
-    );
 
     Ok(())
 }
 
-fn run_ui(sample_rate: f32, block_size: usize, tempo: f32) -> anyhow::Result<()> {
+fn run_ui(args: &Cli, runtime: AudioRuntimeOptions) -> anyhow::Result<()> {
     let native_options = NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
         ..Default::default()
     };
 
-    let config = BufferConfig::new(sample_rate, block_size, ChannelLayout::Stereo);
+    let config = BufferConfig::new(args.sample_rate, args.block_size, ChannelLayout::Stereo);
     let config_for_app = config.clone();
-    let tempo_for_app = tempo;
+    let tempo_for_app = args.tempo;
+    let runtime_for_app = runtime.clone();
 
     eframe::run_native(
         "Harmoniq Studio",
@@ -225,13 +309,14 @@ fn run_ui(sample_rate: f32, block_size: usize, tempo: f32) -> anyhow::Result<()>
         Box::new(move |cc| {
             install_image_loaders(&cc.egui_ctx);
             let config = config_for_app.clone();
-            let app = match HarmoniqStudioApp::new(config, tempo_for_app, cc) {
-                Ok(app) => app,
-                Err(err) => {
-                    eprintln!("Failed to initialise Harmoniq Studio UI: {err:?}");
-                    process::exit(1);
-                }
-            };
+            let app =
+                match HarmoniqStudioApp::new(config, tempo_for_app, runtime_for_app.clone(), cc) {
+                    Ok(app) => app,
+                    Err(err) => {
+                        eprintln!("Failed to initialise Harmoniq Studio UI: {err:?}");
+                        process::exit(1);
+                    }
+                };
             Box::new(app)
         }),
     )
@@ -240,44 +325,64 @@ fn run_ui(sample_rate: f32, block_size: usize, tempo: f32) -> anyhow::Result<()>
 
 struct EngineRunner {
     _engine: Arc<Mutex<HarmoniqEngine>>,
-    running: Arc<AtomicBool>,
+    running: Option<Arc<AtomicBool>>,
     thread: Option<std::thread::JoinHandle<()>>,
+    _realtime: Option<RealtimeAudio>,
 }
 
 impl EngineRunner {
-    fn start(engine: Arc<Mutex<HarmoniqEngine>>) -> Self {
-        let running = Arc::new(AtomicBool::new(true));
-        let thread_running = Arc::clone(&running);
-        let engine_clone = Arc::clone(&engine);
+    fn start(
+        engine: Arc<Mutex<HarmoniqEngine>>,
+        config: BufferConfig,
+        command_queue: harmoniq_engine::EngineCommandQueue,
+        runtime: AudioRuntimeOptions,
+    ) -> anyhow::Result<Self> {
+        if runtime.is_enabled() {
+            let realtime =
+                RealtimeAudio::start(Arc::clone(&engine), command_queue, config, runtime)?;
+            Ok(Self {
+                _engine: engine,
+                running: None,
+                thread: None,
+                _realtime: Some(realtime),
+            })
+        } else {
+            let running = Arc::new(AtomicBool::new(true));
+            let thread_running = Arc::clone(&running);
+            let engine_clone = Arc::clone(&engine);
 
-        let thread = std::thread::spawn(move || {
-            let mut buffer = {
-                let engine = engine_clone.lock();
-                AudioBuffer::from_config(engine.config().clone())
-            };
+            let thread = std::thread::spawn(move || {
+                let mut buffer = {
+                    let engine = engine_clone.lock();
+                    AudioBuffer::from_config(engine.config().clone())
+                };
 
-            while thread_running.load(Ordering::SeqCst) {
-                {
-                    let mut engine = engine_clone.lock();
-                    if let Err(err) = engine.process_block(&mut buffer) {
-                        error!(?err, "engine processing failed");
+                while thread_running.load(Ordering::SeqCst) {
+                    {
+                        let mut engine = engine_clone.lock();
+                        if let Err(err) = engine.process_block(&mut buffer) {
+                            error!(?err, "engine processing failed");
+                        }
                     }
+                    std::thread::sleep(Duration::from_millis(10));
                 }
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        });
+            });
 
-        Self {
-            _engine: engine,
-            running,
-            thread: Some(thread),
+            Ok(Self {
+                _engine: engine,
+                running: Some(running),
+                thread: Some(thread),
+                _realtime: None,
+            })
         }
     }
 }
 
 impl Drop for EngineRunner {
     fn drop(&mut self) {
-        self.running.store(false, Ordering::SeqCst);
+        if let Some(running) = &self.running {
+            running.store(false, Ordering::SeqCst);
+        }
         if let Some(handle) = self.thread.take() {
             let _ = handle.join();
         }
@@ -309,6 +414,7 @@ impl HarmoniqStudioApp {
     fn new(
         config: BufferConfig,
         initial_tempo: f32,
+        runtime: AudioRuntimeOptions,
         cc: &CreationContext<'_>,
     ) -> anyhow::Result<Self> {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
@@ -321,7 +427,12 @@ impl HarmoniqStudioApp {
 
         let command_queue = engine.command_queue();
         let engine = Arc::new(Mutex::new(engine));
-        let engine_runner = EngineRunner::start(Arc::clone(&engine));
+        let engine_runner = EngineRunner::start(
+            Arc::clone(&engine),
+            config.clone(),
+            command_queue.clone(),
+            runtime,
+        )?;
 
         let tracks: Vec<Track> = (0..48).map(|index| Track::with_index(index + 1)).collect();
         let track_count = tracks.len();
