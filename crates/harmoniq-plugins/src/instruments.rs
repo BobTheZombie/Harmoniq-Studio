@@ -1602,77 +1602,229 @@ impl PluginFactory for OrganPianoFactory {
 // --- Bass Synth --------------------------------------------------------------------------
 
 const BASS_LEVEL: &str = "bass.level";
-const BASS_DRIVE: &str = "bass.drive";
+const BASS_OSC_MIX: &str = "bass.osc_mix";
+const BASS_SUB_LEVEL: &str = "bass.sub_level";
+const BASS_DETUNE: &str = "bass.detune";
 const BASS_FILTER: &str = "bass.filter";
+const BASS_RESONANCE: &str = "bass.resonance";
+const BASS_ENV_AMOUNT: &str = "bass.env_amount";
+const BASS_ATTACK: &str = "bass.attack";
+const BASS_DECAY: &str = "bass.decay";
+const BASS_SUSTAIN: &str = "bass.sustain";
+const BASS_RELEASE: &str = "bass.release";
+const BASS_GLIDE: &str = "bass.glide";
+
+#[derive(Debug, Clone)]
+struct LadderFilter {
+    sample_rate: f32,
+    stages: [f32; 4],
+}
+
+impl Default for LadderFilter {
+    fn default() -> Self {
+        Self {
+            sample_rate: 44_100.0,
+            stages: [0.0; 4],
+        }
+    }
+}
+
+impl LadderFilter {
+    fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate.max(1.0);
+    }
+
+    fn process(&mut self, input: f32, cutoff: f32, resonance: f32) -> f32 {
+        let freq = cutoff.clamp(20.0, self.sample_rate * 0.45);
+        let g = (2.0 * PI * freq / self.sample_rate).clamp(0.0, 1.0);
+        let res = resonance.clamp(0.0, 1.0) * 4.0;
+        let mut x = (input - self.stages[3] * res).tanh();
+        for stage in &mut self.stages {
+            *stage += g * (x - *stage);
+            x = (*stage).tanh();
+        }
+        self.stages[3]
+    }
+
+    fn reset(&mut self) {
+        self.stages = [0.0; 4];
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct BassSynth {
     sample_rate: f32,
-    phase: f32,
-    frequency: f32,
-    velocity: f32,
-    filter_state: f32,
+    osc1_phase: f32,
+    osc2_phase: f32,
+    sub_phase: f32,
+    current_freq: f32,
+    target_freq: f32,
+    note_velocity: f32,
+    amp_envelope: AdsrEnvelope,
+    filter_envelope: AdsrEnvelope,
+    filter: LadderFilter,
     parameters: ParameterSet,
 }
 
 impl Default for BassSynth {
     fn default() -> Self {
-        Self {
+        let parameters = ParameterSet::new(bass_layout());
+        let mut synth = Self {
             sample_rate: 44_100.0,
-            phase: 0.0,
-            frequency: 55.0,
-            velocity: 0.0,
-            filter_state: 0.0,
-            parameters: ParameterSet::new(bass_layout()),
-        }
+            osc1_phase: 0.0,
+            osc2_phase: 0.0,
+            sub_phase: 0.0,
+            current_freq: 55.0,
+            target_freq: 55.0,
+            note_velocity: 0.0,
+            amp_envelope: AdsrEnvelope::default(),
+            filter_envelope: AdsrEnvelope::default(),
+            filter: LadderFilter::default(),
+            parameters,
+        };
+        synth.sync_envelopes();
+        synth
     }
 }
 
 impl BassSynth {
+    fn sync_envelopes(&mut self) {
+        let attack = self
+            .parameters
+            .get(&ParameterId::from(BASS_ATTACK))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.005);
+        let decay = self
+            .parameters
+            .get(&ParameterId::from(BASS_DECAY))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.18);
+        let sustain = self
+            .parameters
+            .get(&ParameterId::from(BASS_SUSTAIN))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.6);
+        let release = self
+            .parameters
+            .get(&ParameterId::from(BASS_RELEASE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.15);
+
+        self.amp_envelope
+            .set_params(attack, decay, sustain, release);
+        self.filter_envelope
+            .set_params(attack, decay, sustain, release);
+    }
+
+    fn update_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate;
+        self.amp_envelope.set_sample_rate(sample_rate);
+        self.filter_envelope.set_sample_rate(sample_rate);
+        self.filter.set_sample_rate(sample_rate);
+    }
+
+    fn advance_phase(phase: &mut f32, freq: f32, sample_rate: f32) -> f32 {
+        let increment = 2.0 * PI * freq / sample_rate;
+        *phase = (*phase + increment).rem_euclid(2.0 * PI);
+        *phase
+    }
+
     fn render_sample(&mut self) -> f32 {
         let level = self
             .parameters
             .get(&ParameterId::from(BASS_LEVEL))
             .and_then(ParameterValue::as_continuous)
-            .unwrap_or(0.8);
-        let drive = self
+            .unwrap_or(0.9);
+        let osc_mix = self
             .parameters
-            .get(&ParameterId::from(BASS_DRIVE))
+            .get(&ParameterId::from(BASS_OSC_MIX))
             .and_then(ParameterValue::as_continuous)
-            .unwrap_or(1.2);
+            .unwrap_or(0.4);
+        let sub_level = self
+            .parameters
+            .get(&ParameterId::from(BASS_SUB_LEVEL))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.6);
+        let detune = self
+            .parameters
+            .get(&ParameterId::from(BASS_DETUNE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.0);
         let cutoff = self
             .parameters
             .get(&ParameterId::from(BASS_FILTER))
             .and_then(ParameterValue::as_continuous)
-            .unwrap_or(200.0);
+            .unwrap_or(220.0);
+        let resonance = self
+            .parameters
+            .get(&ParameterId::from(BASS_RESONANCE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.3);
+        let env_amount = self
+            .parameters
+            .get(&ParameterId::from(BASS_ENV_AMOUNT))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.5);
+        let glide = self
+            .parameters
+            .get(&ParameterId::from(BASS_GLIDE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.02);
 
-        let increment = 2.0 * PI * self.frequency / self.sample_rate;
-        self.phase = (self.phase + increment).rem_euclid(2.0 * PI);
-        let saw = 1.0 - (self.phase / PI);
-        let driven = (saw * drive).tanh();
-        let rc = (2.0 * PI * cutoff / self.sample_rate).clamp(0.0, 0.5);
-        self.filter_state += rc * (driven - self.filter_state);
-        self.filter_state * level * self.velocity
+        if glide <= 0.0001 {
+            self.current_freq = self.target_freq;
+        } else {
+            let coeff = (-1.0 / (self.sample_rate * glide.max(0.0001))).exp();
+            self.current_freq = self.target_freq + (self.current_freq - self.target_freq) * coeff;
+        }
+
+        let osc2_freq = self.current_freq * 2.0_f32.powf(detune / 12.0);
+        let sub_freq = (self.current_freq / 2.0).max(20.0);
+
+        let phase1 = Self::advance_phase(&mut self.osc1_phase, self.current_freq, self.sample_rate);
+        let phase2 = Self::advance_phase(&mut self.osc2_phase, osc2_freq, self.sample_rate);
+        let phase_sub = Self::advance_phase(&mut self.sub_phase, sub_freq, self.sample_rate);
+
+        let saw = (phase1 / PI) - 1.0;
+        let square = if phase2 < PI { 1.0 } else { -1.0 };
+        let sub = if phase_sub < PI { 1.0 } else { -1.0 };
+
+        let osc_mix = osc_mix.clamp(0.0, 1.0);
+        let primary = saw * (1.0 - osc_mix) + square * osc_mix;
+        let combined = (primary + sub * sub_level).tanh();
+
+        let env_value = self.amp_envelope.next();
+        let filter_env_value = self.filter_envelope.next();
+
+        let dynamic_cutoff =
+            cutoff + env_amount * filter_env_value * (self.sample_rate * 0.45 - cutoff);
+        let filtered = self.filter.process(combined, dynamic_cutoff, resonance);
+
+        (filtered * level * env_value * self.note_velocity).clamp(-1.0, 1.0)
     }
 }
 
 impl AudioProcessor for BassSynth {
     fn descriptor(&self) -> PluginDescriptor {
-        PluginDescriptor::new("harmoniq.bass", "Bass Synth", "Harmoniq Labs")
-            .with_description("Monophonic bass synthesizer")
+        PluginDescriptor::new("harmoniq.bass", "Mini Moog Bass", "Harmoniq Labs")
+            .with_description("Monophonic Mini Moog inspired bass synthesizer")
     }
 
     fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
-        self.sample_rate = config.sample_rate;
+        self.update_sample_rate(config.sample_rate);
         Ok(())
     }
 
     fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
-        if self.velocity == 0.0 {
+        self.sync_envelopes();
+        if !self.amp_envelope.is_active() && self.note_velocity == 0.0 {
             buffer.clear();
             return Ok(());
         }
         fill_buffer(buffer, || self.render_sample());
+        if !self.amp_envelope.is_active() {
+            self.note_velocity = 0.0;
+        }
         Ok(())
     }
 
@@ -1686,11 +1838,19 @@ impl MidiProcessor for BassSynth {
         for event in events {
             match event {
                 MidiEvent::NoteOn { note, velocity, .. } => {
-                    self.frequency = midi_note_to_freq(*note);
-                    self.velocity = *velocity as f32 / 127.0;
+                    let freq = midi_note_to_freq(*note);
+                    self.target_freq = freq;
+                    if self.note_velocity == 0.0 {
+                        self.current_freq = freq;
+                        self.filter.reset();
+                    }
+                    self.note_velocity = (*velocity as f32 / 127.0).clamp(0.0, 1.0);
+                    self.amp_envelope.trigger();
+                    self.filter_envelope.trigger();
                 }
                 MidiEvent::NoteOff { .. } => {
-                    self.velocity = 0.0;
+                    self.amp_envelope.release();
+                    self.filter_envelope.release();
                 }
                 _ => {}
             }
@@ -1713,20 +1873,70 @@ fn bass_layout() -> ParameterLayout {
     ParameterLayout::new(vec![
         ParameterDefinition::new(
             BASS_LEVEL,
-            "Level",
-            ParameterKind::continuous(0.0..=1.5, 0.8),
+            "Output Level",
+            ParameterKind::continuous(0.0..=1.5, 0.9),
         ),
         ParameterDefinition::new(
-            BASS_DRIVE,
-            "Drive",
-            ParameterKind::continuous(0.5..=4.0, 1.2),
+            BASS_OSC_MIX,
+            "Oscillator Mix",
+            ParameterKind::continuous(0.0..=1.0, 0.4),
         ),
         ParameterDefinition::new(
             BASS_FILTER,
-            "Filter",
-            ParameterKind::continuous(40.0..=1_000.0, 200.0),
+            "Filter Cutoff",
+            ParameterKind::continuous(20.0..=5_000.0, 220.0),
         )
         .with_unit("Hz"),
+        ParameterDefinition::new(
+            BASS_SUB_LEVEL,
+            "Sub Level",
+            ParameterKind::continuous(0.0..=1.0, 0.6),
+        ),
+        ParameterDefinition::new(
+            BASS_DETUNE,
+            "Osc2 Detune",
+            ParameterKind::continuous(-12.0..=12.0, 0.0),
+        )
+        .with_unit("st"),
+        ParameterDefinition::new(
+            BASS_RESONANCE,
+            "Resonance",
+            ParameterKind::continuous(0.0..=1.0, 0.3),
+        ),
+        ParameterDefinition::new(
+            BASS_ENV_AMOUNT,
+            "Filter Env Amt",
+            ParameterKind::continuous(0.0..=1.0, 0.5),
+        ),
+        ParameterDefinition::new(
+            BASS_ATTACK,
+            "Attack",
+            ParameterKind::continuous(0.001..=0.5, 0.005),
+        )
+        .with_unit("s"),
+        ParameterDefinition::new(
+            BASS_DECAY,
+            "Decay",
+            ParameterKind::continuous(0.01..=2.0, 0.18),
+        )
+        .with_unit("s"),
+        ParameterDefinition::new(
+            BASS_SUSTAIN,
+            "Sustain",
+            ParameterKind::continuous(0.0..=1.0, 0.6),
+        ),
+        ParameterDefinition::new(
+            BASS_RELEASE,
+            "Release",
+            ParameterKind::continuous(0.01..=1.5, 0.15),
+        )
+        .with_unit("s"),
+        ParameterDefinition::new(
+            BASS_GLIDE,
+            "Glide",
+            ParameterKind::continuous(0.0..=0.5, 0.02),
+        )
+        .with_unit("s"),
     ])
 }
 
@@ -1734,7 +1944,7 @@ pub struct BassSynthFactory;
 
 impl PluginFactory for BassSynthFactory {
     fn descriptor(&self) -> PluginDescriptor {
-        PluginDescriptor::new("harmoniq.bass", "Bass Synth", "Harmoniq Labs")
+        PluginDescriptor::new("harmoniq.bass", "Mini Moog Bass", "Harmoniq Labs")
     }
 
     fn parameter_layout(&self) -> std::sync::Arc<ParameterLayout> {
