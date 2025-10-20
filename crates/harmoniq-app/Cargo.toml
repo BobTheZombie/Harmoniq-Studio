@@ -1,0 +1,13 @@
+[package]
+name = "harmoniq-app"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+harmoniq-engine = { path = "../harmoniq-engine" }
+harmoniq-plugins = { path = "../harmoniq-plugins" }
+anyhow.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }

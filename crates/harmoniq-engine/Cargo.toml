@@ -1,0 +1,27 @@
+[package]
+name = "harmoniq-engine"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rand.workspace = true
+parking_lot.workspace = true
+tracing = "0.1"
+
+[features]
+default = ["native"]
+native = []
+wasm = []
+vst2 = []
+vst3 = []
+au = []
+rtas = []
+
+[dev-dependencies]
+serde_json.workspace = true
+rand.workspace = true
