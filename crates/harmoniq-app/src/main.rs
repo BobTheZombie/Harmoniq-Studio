@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use clap::Parser;
-use eframe::egui::{self, Align2, Color32, FontId, RichText, Sense, Stroke};
+use eframe::egui::{self, Align2, Color32, FontId, PointerButton, RichText, Sense, Stroke};
 use eframe::{App, CreationContext, NativeOptions};
 use egui_extras::install_image_loaders;
 use harmoniq_engine::{
@@ -554,6 +554,7 @@ struct HarmoniqStudioApp {
     next_track_index: usize,
     next_clip_index: usize,
     next_color_index: usize,
+    playlist: PlaylistViewState,
     piano_roll: PianoRollState,
     last_error: Option<String>,
     status_message: Option<String>,
@@ -604,6 +605,7 @@ impl HarmoniqStudioApp {
             next_track_index: track_count,
             next_clip_index: 1,
             next_color_index: 0,
+            playlist: PlaylistViewState::default(),
             piano_roll: PianoRollState::default(),
             last_error: None,
             status_message: None,
@@ -1068,6 +1070,7 @@ impl HarmoniqStudioApp {
             }
         });
 
+        ui.add_space(4.0);
         ui.separator();
 
         enum ClipAction {
@@ -1075,113 +1078,488 @@ impl HarmoniqStudioApp {
             Stop(usize, usize),
         }
 
-        let mut pending_clip_action: Option<ClipAction> = None;
+        let pixels_per_beat = self.playlist.pixels_per_beat;
+        let track_height = self.playlist.track_height;
+        let automation_height = self.playlist.automation_lane_height;
+        let header_width = 190.0;
+        let ruler_height = 28.0;
+        let row_gap = 6.0;
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            for (track_idx, track) in self.tracks.iter_mut().enumerate() {
-                let is_selected = self.selected_track == Some(track_idx);
-                let header = ui.selectable_label(is_selected, &track.name);
-                if header.clicked() {
-                    self.selected_track = Some(track_idx);
-                }
-
-                ui.add_space(2.0);
-
-                for (clip_idx, clip) in track.clips.iter().enumerate() {
-                    let clip_selected = self.selected_clip == Some((track_idx, clip_idx));
-                    let label = format!(
-                        "{} — start {:.1} • len {:.1}",
-                        clip.name, clip.start_beat, clip.length_beats
-                    );
-                    let tooltip = format!(
-                        "Clip on {}\nStart: {:.1} beats\nLength: {:.1} beats",
-                        track.name, clip.start_beat, clip.length_beats
-                    );
-                    let fill = if clip_selected {
-                        clip.color.gamma_multiply(0.45)
-                    } else {
-                        clip.color.gamma_multiply(0.25)
-                    };
-
-                    let inner = egui::Frame::group(ui.style()).fill(fill).show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let launch_label = clip.launch_state.button_label();
-                            let launch_button = ui.button(launch_label);
-                            if launch_button.clicked() {
-                                pending_clip_action = Some(if clip.launch_state.is_playing() {
-                                    ClipAction::Stop(track_idx, clip_idx)
-                                } else {
-                                    ClipAction::Launch(track_idx, clip_idx)
-                                });
-                            }
-
-                            let response = ui.add_sized(
-                                [ui.available_width(), 24.0],
-                                egui::SelectableLabel::new(clip_selected, label.clone()),
-                            );
-                            if response.clicked() {
-                                self.selected_clip = Some((track_idx, clip_idx));
-                                self.selected_track = Some(track_idx);
-                            }
-                            response.on_hover_text(tooltip.clone());
-                        });
-                        ui.label(format!("State: {}", clip.launch_state.status_label()));
-                    });
-                    inner.response.on_hover_text(tooltip);
-
-                    ui.add_space(2.0);
-                }
-
-                ui.add_space(6.0);
-
-                for lane in track.automation_lanes.iter_mut() {
-                    let header_text = format!("Automation: {}", lane.parameter());
-                    ui.collapsing(header_text, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.colored_label(lane.color(), lane.parameter());
-                            ui.checkbox(&mut lane.visible, "Visible");
-                            if ui.button("Add Point").clicked() {
-                                let template_point = lane
-                                    .points
-                                    .last()
-                                    .cloned()
-                                    .unwrap_or_else(|| AutomationPoint::new(0.0, 0.5));
-                                lane.add_point(AutomationPoint::new(
-                                    template_point.beat + 1.0,
-                                    template_point.value,
-                                ));
-                            }
-                        });
-
-                        let mut remove_point: Option<usize> = None;
-                        let can_remove_points = lane.points.len() > 1;
-                        for (point_idx, point) in lane.points.iter_mut().enumerate() {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("Point {}", point_idx + 1));
-                                ui.add(
-                                    egui::DragValue::new(&mut point.beat)
-                                        .clamp_range(0.0..=256.0)
-                                        .speed(0.1)
-                                        .suffix(" beat"),
-                                );
-                                ui.add(
-                                    egui::Slider::new(&mut point.value, 0.0..=1.0).text("Value"),
-                                );
-                                if can_remove_points && ui.button("Remove").clicked() {
-                                    remove_point = Some(point_idx);
-                                }
-                            });
-                        }
-
-                        if let Some(point_idx) = remove_point {
-                            lane.points.remove(point_idx);
-                        }
-                    });
-
-                    ui.add_space(6.0);
+        let mut max_position = self.bounce_length_beats.max(16.0);
+        for track in &self.tracks {
+            for clip in &track.clips {
+                max_position = max_position.max(clip.start_beat + clip.length_beats);
+            }
+            for lane in &track.automation_lanes {
+                for point in &lane.points {
+                    max_position = max_position.max(point.beat);
                 }
             }
-        });
+        }
+        let visible_beats = (max_position.ceil() + 4.0).max(16.0);
+        let timeline_width = pixels_per_beat * visible_beats;
+
+        let mut total_height = ruler_height + row_gap;
+        for track in &self.tracks {
+            total_height += track_height + row_gap;
+            for lane in &track.automation_lanes {
+                if lane.visible {
+                    total_height += automation_height + row_gap;
+                }
+            }
+        }
+        total_height = total_height.max(ui.available_height());
+        let desired_width = (header_width + timeline_width + 120.0).max(ui.available_width());
+
+        let mut pending_clip_action: Option<ClipAction> = None;
+        let mut track_to_select: Option<usize> = None;
+        let mut clip_to_select: Option<(usize, usize)> = None;
+
+        egui::ScrollArea::both()
+            .id_source("playlist_scroll")
+            .show(ui, |ui| {
+                let desired_size = egui::vec2(desired_width, total_height);
+                let (response, painter) = ui.allocate_painter(desired_size, Sense::click());
+                let rect = response.rect;
+
+                let header_column_rect = egui::Rect::from_min_max(
+                    rect.min,
+                    egui::pos2(rect.left() + header_width, rect.bottom()),
+                );
+                let ruler_rect = egui::Rect::from_min_max(
+                    egui::pos2(header_column_rect.right(), rect.top()),
+                    egui::pos2(rect.right(), rect.top() + ruler_height),
+                );
+                let timeline_rect = egui::Rect::from_min_max(
+                    egui::pos2(header_column_rect.right(), ruler_rect.bottom()),
+                    rect.max(),
+                );
+
+                painter.rect_filled(rect, 0.0, Color32::from_rgb(18, 18, 22));
+                painter.rect_filled(header_column_rect, 0.0, Color32::from_rgb(32, 32, 38));
+                painter.rect_filled(timeline_rect, 0.0, Color32::from_rgb(20, 20, 26));
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(header_column_rect.left(), rect.top()),
+                        egui::pos2(header_column_rect.right(), ruler_rect.bottom()),
+                    ),
+                    0.0,
+                    Color32::from_rgb(38, 38, 46),
+                );
+                painter.rect_filled(ruler_rect, 0.0, Color32::from_rgb(26, 26, 32));
+
+                let total_beats = visible_beats as usize;
+                for beat in 0..=total_beats {
+                    let x = header_column_rect.right() + beat as f32 * pixels_per_beat;
+                    let is_measure = beat % 4 == 0;
+                    let color = if is_measure {
+                        Color32::from_rgb(70, 70, 78)
+                    } else {
+                        Color32::from_rgb(48, 48, 54)
+                    };
+                    painter.line_segment(
+                        [
+                            egui::pos2(x, timeline_rect.top()),
+                            egui::pos2(x, timeline_rect.bottom()),
+                        ],
+                        Stroke::new(if is_measure { 1.5 } else { 1.0 }, color),
+                    );
+                    if is_measure {
+                        let bar_idx = beat / 4 + 1;
+                        painter.text(
+                            egui::pos2(x + 6.0, ruler_rect.center().y),
+                            Align2::LEFT_CENTER,
+                            format!("Bar {bar_idx}"),
+                            FontId::proportional(13.0),
+                            Color32::from_gray(210),
+                        );
+                    }
+                }
+
+                let pointer_pos = response.interact_pointer_pos();
+                let clicked = response.clicked_by(PointerButton::Primary);
+                let double_clicked = response.double_clicked_by(PointerButton::Primary);
+                let right_clicked = response.clicked_by(PointerButton::Secondary);
+
+                let mut cursor_y = timeline_rect.top() + row_gap;
+                for (track_idx, track) in self.tracks.iter_mut().enumerate() {
+                    let track_header_rect = egui::Rect::from_min_max(
+                        egui::pos2(header_column_rect.left(), cursor_y),
+                        egui::pos2(header_column_rect.right(), cursor_y + track_height),
+                    );
+                    let track_lane_rect = egui::Rect::from_min_max(
+                        egui::pos2(timeline_rect.left(), cursor_y),
+                        egui::pos2(timeline_rect.right(), cursor_y + track_height),
+                    );
+                    let is_selected = self.selected_track == Some(track_idx);
+
+                    let header_fill = if is_selected {
+                        Color32::from_rgb(58, 66, 90)
+                    } else {
+                        Color32::from_rgb(40, 40, 46)
+                    };
+                    painter.rect_filled(track_header_rect, 6.0, header_fill);
+                    painter.rect_stroke(
+                        track_header_rect,
+                        6.0,
+                        Stroke::new(1.0, Color32::from_rgb(70, 70, 78)),
+                    );
+
+                    if is_selected {
+                        painter.rect_filled(
+                            track_lane_rect,
+                            0.0,
+                            Color32::from_rgba_unmultiplied(80, 110, 150, 35),
+                        );
+                    }
+
+                    painter.text(
+                        egui::pos2(
+                            track_header_rect.left() + 12.0,
+                            track_header_rect.center().y,
+                        ),
+                        Align2::LEFT_CENTER,
+                        format!("{:02} {}", track_idx + 1, track.name),
+                        FontId::proportional(14.0),
+                        Color32::from_gray(220),
+                    );
+
+                    let button_size = egui::vec2(28.0, 20.0);
+                    let button_gap = 8.0;
+                    let mute_rect = egui::Rect::from_min_size(
+                        egui::pos2(
+                            track_header_rect.right() - button_gap - button_size.x * 2.0,
+                            track_header_rect.center().y - button_size.y * 0.5,
+                        ),
+                        button_size,
+                    );
+                    let solo_rect = egui::Rect::from_min_size(
+                        egui::pos2(
+                            track_header_rect.right() - button_gap - button_size.x,
+                            track_header_rect.center().y - button_size.y * 0.5,
+                        ),
+                        button_size,
+                    );
+
+                    let mute_color = if track.muted {
+                        Color32::from_rgb(140, 60, 60)
+                    } else {
+                        Color32::from_rgb(60, 60, 66)
+                    };
+                    painter.rect_filled(mute_rect, 4.0, mute_color);
+                    painter.rect_stroke(
+                        mute_rect,
+                        4.0,
+                        Stroke::new(1.0, Color32::from_rgb(26, 26, 32)),
+                    );
+                    painter.text(
+                        mute_rect.center(),
+                        Align2::CENTER_CENTER,
+                        "M",
+                        FontId::proportional(13.0),
+                        Color32::from_gray(230),
+                    );
+
+                    let solo_color = if track.solo {
+                        Color32::from_rgb(60, 130, 90)
+                    } else {
+                        Color32::from_rgb(60, 60, 66)
+                    };
+                    painter.rect_filled(solo_rect, 4.0, solo_color);
+                    painter.rect_stroke(
+                        solo_rect,
+                        4.0,
+                        Stroke::new(1.0, Color32::from_rgb(26, 26, 32)),
+                    );
+                    painter.text(
+                        solo_rect.center(),
+                        Align2::CENTER_CENTER,
+                        "S",
+                        FontId::proportional(13.0),
+                        Color32::from_gray(230),
+                    );
+
+                    if clicked {
+                        if let Some(pos) = pointer_pos {
+                            if mute_rect.contains(pos) {
+                                track.muted = !track.muted;
+                            } else if solo_rect.contains(pos) {
+                                track.solo = !track.solo;
+                            } else if track_header_rect.contains(pos) {
+                                track_to_select = Some(track_idx);
+                            }
+                        }
+                    }
+
+                    let mut clip_y = track_lane_rect.top() + 6.0;
+                    let clip_height = track_lane_rect.height() - 12.0;
+                    for (clip_idx, clip) in track.clips.iter_mut().enumerate() {
+                        let clip_start = track_lane_rect.left() + clip.start_beat * pixels_per_beat;
+                        let clip_width = clip.length_beats.max(0.25) * pixels_per_beat;
+                        let clip_rect = egui::Rect::from_min_max(
+                            egui::pos2(clip_start, clip_y),
+                            egui::pos2(clip_start + clip_width, clip_y + clip_height),
+                        );
+                        let clip_selected = self.selected_clip == Some((track_idx, clip_idx));
+                        let clip_hovered = pointer_pos
+                            .map(|pos| clip_rect.contains(pos))
+                            .unwrap_or(false);
+
+                        let mut fill = if clip_selected {
+                            clip.color
+                        } else {
+                            clip.color.gamma_multiply(0.75)
+                        };
+                        if clip_hovered {
+                            fill = fill.gamma_multiply(1.1);
+                        }
+                        if clip.launch_state.is_playing() {
+                            fill = fill.gamma_multiply(1.2);
+                        }
+
+                        painter.rect_filled(clip_rect, 6.0, fill);
+                        let border_color = if clip.launch_state.is_playing() {
+                            Color32::from_rgb(255, 200, 60)
+                        } else if clip_selected {
+                            Color32::from_rgb(220, 220, 220)
+                        } else {
+                            Color32::from_rgb(30, 30, 34)
+                        };
+                        painter.rect_stroke(clip_rect, 6.0, Stroke::new(1.5, border_color));
+
+                        painter.text(
+                            egui::pos2(clip_rect.left() + 10.0, clip_rect.center().y),
+                            Align2::LEFT_CENTER,
+                            clip.name.as_str(),
+                            FontId::proportional(13.0),
+                            Color32::from_gray(240),
+                        );
+                        painter.text(
+                            egui::pos2(clip_rect.right() - 10.0, clip_rect.bottom() - 8.0),
+                            Align2::RIGHT_BOTTOM,
+                            format!("{:.1} – {:.1}", clip.start_beat, clip.length_beats),
+                            FontId::proportional(11.0),
+                            Color32::from_gray(220),
+                        );
+                        if clip.launch_state.is_playing() {
+                            painter.text(
+                                egui::pos2(clip_rect.left() + 10.0, clip_rect.top() + 6.0),
+                                Align2::LEFT_TOP,
+                                "▶",
+                                FontId::proportional(12.0),
+                                Color32::from_gray(240),
+                            );
+                        }
+
+                        if clip_hovered && clicked {
+                            clip_to_select = Some((track_idx, clip_idx));
+                            track_to_select = Some(track_idx);
+                        }
+                        if clip_hovered && double_clicked {
+                            if clip.launch_state.is_playing() {
+                                pending_clip_action = Some(ClipAction::Stop(track_idx, clip_idx));
+                            } else {
+                                pending_clip_action = Some(ClipAction::Launch(track_idx, clip_idx));
+                            }
+                        }
+                    }
+
+                    cursor_y += track_height + row_gap;
+
+                    for lane in track.automation_lanes.iter_mut() {
+                        let lane_header_rect = egui::Rect::from_min_max(
+                            egui::pos2(header_column_rect.left(), cursor_y),
+                            egui::pos2(header_column_rect.right(), cursor_y + automation_height),
+                        );
+                        let lane_rect = egui::Rect::from_min_max(
+                            egui::pos2(timeline_rect.left(), cursor_y),
+                            egui::pos2(timeline_rect.right(), cursor_y + automation_height),
+                        );
+
+                        let header_fill = if lane.visible {
+                            Color32::from_rgb(36, 36, 42)
+                        } else {
+                            Color32::from_rgb(32, 32, 36)
+                        };
+                        painter.rect_filled(lane_header_rect, 6.0, header_fill);
+                        painter.rect_stroke(
+                            lane_header_rect,
+                            6.0,
+                            Stroke::new(1.0, Color32::from_rgb(60, 60, 68)),
+                        );
+                        painter.text(
+                            egui::pos2(lane_header_rect.left() + 12.0, lane_header_rect.center().y),
+                            Align2::LEFT_CENTER,
+                            format!("Automation {}", lane.parameter()),
+                            FontId::proportional(12.0),
+                            lane.color(),
+                        );
+
+                        let lane_button_size = egui::vec2(32.0, 18.0);
+                        let lane_button_gap = 6.0;
+                        let visibility_rect = egui::Rect::from_min_size(
+                            egui::pos2(
+                                lane_header_rect.right() - lane_button_gap - lane_button_size.x,
+                                lane_header_rect.center().y - lane_button_size.y * 0.5,
+                            ),
+                            lane_button_size,
+                        );
+                        let add_rect = egui::Rect::from_min_size(
+                            egui::pos2(
+                                visibility_rect.left() - lane_button_gap - lane_button_size.x,
+                                lane_header_rect.center().y - lane_button_size.y * 0.5,
+                            ),
+                            lane_button_size,
+                        );
+
+                        let add_color = lane.color().gamma_multiply(0.6);
+                        painter.rect_filled(add_rect, 4.0, add_color);
+                        painter.rect_stroke(
+                            add_rect,
+                            4.0,
+                            Stroke::new(1.0, Color32::from_rgb(26, 26, 32)),
+                        );
+                        painter.text(
+                            add_rect.center(),
+                            Align2::CENTER_CENTER,
+                            "+",
+                            FontId::proportional(14.0),
+                            Color32::from_gray(240),
+                        );
+
+                        let visibility_color = if lane.visible {
+                            Color32::from_rgb(70, 110, 150)
+                        } else {
+                            Color32::from_rgb(60, 60, 66)
+                        };
+                        painter.rect_filled(visibility_rect, 4.0, visibility_color);
+                        painter.rect_stroke(
+                            visibility_rect,
+                            4.0,
+                            Stroke::new(1.0, Color32::from_rgb(26, 26, 32)),
+                        );
+                        painter.text(
+                            visibility_rect.center(),
+                            Align2::CENTER_CENTER,
+                            if lane.visible { "On" } else { "Off" },
+                            FontId::proportional(11.0),
+                            Color32::from_gray(230),
+                        );
+
+                        if lane.visible {
+                            painter.rect_filled(
+                                lane_rect,
+                                4.0,
+                                Color32::from_rgba_unmultiplied(
+                                    lane.color().r(),
+                                    lane.color().g(),
+                                    lane.color().b(),
+                                    28,
+                                ),
+                            );
+                            painter.rect_stroke(
+                                lane_rect,
+                                4.0,
+                                Stroke::new(1.0, Color32::from_rgb(36, 36, 42)),
+                            );
+
+                            let mut last_point_pos: Option<egui::Pos2> = None;
+                            let mut remove_point: Option<usize> = None;
+                            let vertical_padding = 8.0;
+                            let usable_height = lane_rect.height() - vertical_padding * 2.0;
+                            for (point_idx, point) in lane.points.iter().enumerate() {
+                                let x = lane_rect.left() + point.beat * pixels_per_beat;
+                                let value = point.value.clamp(0.0, 1.0);
+                                let y =
+                                    lane_rect.bottom() - vertical_padding - value * usable_height;
+                                let pos = egui::pos2(x, y);
+                                if let Some(prev) = last_point_pos {
+                                    painter
+                                        .line_segment([prev, pos], Stroke::new(1.5, lane.color()));
+                                }
+                                last_point_pos = Some(pos);
+                                painter.circle_filled(pos, 4.0, lane.color());
+                                painter.circle_stroke(
+                                    pos,
+                                    4.0,
+                                    Stroke::new(1.0, Color32::from_rgb(20, 20, 24)),
+                                );
+                                if right_clicked {
+                                    if let Some(pointer) = pointer_pos {
+                                        if pointer.distance(pos) <= 8.0 && lane.points.len() > 1 {
+                                            remove_point = Some(point_idx);
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(idx) = remove_point {
+                                lane.points.remove(idx);
+                            }
+                            if double_clicked {
+                                if let Some(pointer) = pointer_pos {
+                                    if lane_rect.contains(pointer) {
+                                        let beat = ((pointer.x - lane_rect.left())
+                                            / pixels_per_beat)
+                                            .max(0.0);
+                                        let value = ((lane_rect.bottom() - pointer.y)
+                                            / lane_rect.height())
+                                        .clamp(0.0, 1.0);
+                                        lane.add_point(AutomationPoint::new(beat, value));
+                                    }
+                                }
+                            }
+                        } else {
+                            painter.rect_filled(lane_rect, 4.0, Color32::from_rgb(24, 24, 30));
+                            painter.rect_stroke(
+                                lane_rect,
+                                4.0,
+                                Stroke::new(1.0, Color32::from_rgb(34, 34, 40)),
+                            );
+                            painter.text(
+                                lane_rect.center(),
+                                Align2::CENTER_CENTER,
+                                "Hidden",
+                                FontId::proportional(12.0),
+                                Color32::from_gray(170),
+                            );
+                        }
+
+                        if clicked {
+                            if let Some(pos) = pointer_pos {
+                                if add_rect.contains(pos) {
+                                    let template_point = lane
+                                        .points
+                                        .last()
+                                        .cloned()
+                                        .unwrap_or_else(|| AutomationPoint::new(0.0, 0.5));
+                                    lane.add_point(AutomationPoint::new(
+                                        template_point.beat + 1.0,
+                                        template_point.value,
+                                    ));
+                                } else if visibility_rect.contains(pos) {
+                                    lane.visible = !lane.visible;
+                                } else if lane_rect.contains(pos) || lane_header_rect.contains(pos)
+                                {
+                                    track_to_select = Some(track_idx);
+                                    clip_to_select = None;
+                                }
+                            }
+                        }
+
+                        cursor_y += automation_height + row_gap;
+                    }
+                }
+            });
+
+        if let Some((track_idx, clip_idx)) = clip_to_select {
+            self.selected_clip = Some((track_idx, clip_idx));
+            self.selected_track = Some(track_idx);
+        } else if let Some(track_idx) = track_to_select {
+            if self.selected_track != Some(track_idx) {
+                self.selected_clip = None;
+            }
+            self.selected_track = Some(track_idx);
+        }
 
         if let Some(action) = pending_clip_action {
             match action {
@@ -2116,6 +2494,11 @@ impl AutomationLane {
 
     fn add_point(&mut self, point: AutomationPoint) {
         self.points.push(point);
+        self.points.sort_by(|a, b| {
+            a.beat
+                .partial_cmp(&b.beat)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 }
 
@@ -2132,6 +2515,23 @@ impl Note {
             start_beats,
             length_beats,
             pitch,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PlaylistViewState {
+    pixels_per_beat: f32,
+    track_height: f32,
+    automation_lane_height: f32,
+}
+
+impl Default for PlaylistViewState {
+    fn default() -> Self {
+        Self {
+            pixels_per_beat: 80.0,
+            track_height: 54.0,
+            automation_lane_height: 42.0,
         }
     }
 }
