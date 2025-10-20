@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use clap::Parser;
-use eframe::egui::{self, Color32};
-use eframe::{App, CreationContext, Frame, NativeOptions};
+use eframe::egui::{self, Align2, Color32, FontId, RichText, Sense, Stroke};
+use eframe::{App, CreationContext, NativeOptions};
 use egui_extras::install_image_loaders;
 use harmoniq_engine::{
     AudioBuffer, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine,
@@ -290,6 +290,7 @@ struct HarmoniqStudioApp {
     engine_config: BufferConfig,
     graph_config: DemoGraphConfig,
     tracks: Vec<Track>,
+    master_track: MasterChannel,
     selected_track: Option<usize>,
     selected_clip: Option<(usize, usize)>,
     tempo: f32,
@@ -322,17 +323,22 @@ impl HarmoniqStudioApp {
         let engine = Arc::new(Mutex::new(engine));
         let engine_runner = EngineRunner::start(Arc::clone(&engine));
 
+        let tracks: Vec<Track> = (0..48).map(|index| Track::with_index(index + 1)).collect();
+        let track_count = tracks.len();
+        let master_track = MasterChannel::default();
+
         let mut app = Self {
             _engine_runner: engine_runner,
             command_queue,
             engine_config: config.clone(),
             graph_config,
-            tracks: vec![Track::new("Lead"), Track::new("Drums"), Track::new("Bass")],
+            tracks,
+            master_track,
             selected_track: Some(0),
             selected_clip: Some((0, 0)),
             tempo: initial_tempo,
             transport_state: TransportState::Stopped,
-            next_track_index: 3,
+            next_track_index: track_count,
             next_clip_index: 1,
             next_color_index: 0,
             piano_roll: PianoRollState::default(),
@@ -347,6 +353,16 @@ impl HarmoniqStudioApp {
     }
 
     fn initialise_demo_clips(&mut self) {
+        if let Some(track) = self.tracks.get_mut(0) {
+            track.name = "Lead".into();
+        }
+        if let Some(track) = self.tracks.get_mut(1) {
+            track.name = "Drums".into();
+        }
+        if let Some(track) = self.tracks.get_mut(2) {
+            track.name = "Bass".into();
+        }
+
         let lead_intro_color = self.next_color();
         let lead_hook_color = self.next_color();
         let lead_automation_color = self.next_color();
@@ -458,9 +474,8 @@ impl HarmoniqStudioApp {
     }
 
     fn add_track(&mut self) {
-        let name = format!("Track {}", self.next_track_index + 1);
         self.next_track_index += 1;
-        self.tracks.push(Track::new(name));
+        self.tracks.push(Track::with_index(self.next_track_index));
     }
 
     fn stop_all_clips(&mut self) {
@@ -857,35 +872,195 @@ impl HarmoniqStudioApp {
         ui.label("Select a clip to edit its notes.");
     }
 
-    fn draw_mixer(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Mixer");
-        ui.add_space(4.0);
-        egui::ScrollArea::horizontal().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for track in &mut self.tracks {
-                    ui.group(|ui| {
-                        ui.set_min_width(120.0);
-                        ui.vertical(|ui| {
-                            ui.label(&track.name);
-                            ui.add_space(8.0);
-                            ui.add(
-                                egui::Slider::new(&mut track.volume, 0.0..=1.2)
-                                    .vertical()
-                                    .text("Vol"),
-                            );
-                            ui.add(egui::Slider::new(&mut track.pan, -1.0..=1.0).text("Pan"));
-                            ui.checkbox(&mut track.muted, "Mute");
-                            ui.checkbox(&mut track.solo, "Solo");
-                        });
-                    });
+    fn update_mixer_visuals(&mut self, ctx: &egui::Context) {
+        let time = ctx.input(|i| i.time);
+        let any_solo = self.tracks.iter().any(|track| track.solo);
+        let transport_playing = matches!(self.transport_state, TransportState::Playing);
+        for (index, track) in self.tracks.iter_mut().enumerate() {
+            track.update_meter(time, index, transport_playing, any_solo);
+        }
+        self.master_track.update_from_tracks(&self.tracks);
+    }
+
+    fn draw_meter(ui: &mut egui::Ui, meter: &TrackMeter) {
+        let desired_size = egui::vec2(32.0, 120.0);
+        let (rect, _) = ui.allocate_exact_size(desired_size, Sense::hover());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 4.0, Color32::from_rgb(28, 28, 28));
+        painter.rect_stroke(rect, 4.0, Stroke::new(1.0, Color32::from_rgb(60, 60, 60)));
+
+        let gutter = 3.0;
+        let bar_width = (rect.width() - gutter * 3.0) / 2.0;
+        let max_height = rect.height() - gutter * 2.0;
+        let left_height = meter.left_level().clamp(0.0, 1.0) * max_height;
+        let right_height = meter.right_level().clamp(0.0, 1.0) * max_height;
+
+        let left_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + gutter, rect.bottom() - gutter - left_height),
+            egui::pos2(rect.left() + gutter + bar_width, rect.bottom() - gutter),
+        );
+        let right_rect = egui::Rect::from_min_max(
+            egui::pos2(
+                rect.right() - gutter - bar_width,
+                rect.bottom() - gutter - right_height,
+            ),
+            egui::pos2(rect.right() - gutter, rect.bottom() - gutter),
+        );
+
+        painter.rect_filled(left_rect, 2.0, Color32::from_rgb(0x2d, 0xb6, 0xff));
+        painter.rect_filled(right_rect, 2.0, Color32::from_rgb(0xff, 0x82, 0xaa));
+
+        let rms_height = meter.rms_level().clamp(0.0, 1.0) * max_height;
+        let rms_y = rect.bottom() - gutter - rms_height;
+        painter.line_segment(
+            [
+                egui::pos2(rect.left() + gutter, rms_y),
+                egui::pos2(rect.right() - gutter, rms_y),
+            ],
+            Stroke::new(1.0, Color32::from_rgb(90, 90, 90)),
+        );
+    }
+
+    fn draw_effects_ui(effects: &mut Vec<MixerEffect>, ui: &mut egui::Ui) {
+        if effects.is_empty() {
+            ui.label(RichText::new("No effects loaded").italics().weak());
+        }
+
+        let mut removal: Option<usize> = None;
+        for (index, effect) in effects.iter_mut().enumerate() {
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(effect.effect_type.display_name()).strong());
+                    let toggle_label = if effect.enabled { "Bypass" } else { "Enable" };
+                    if ui.button(toggle_label).clicked() {
+                        effect.enabled = !effect.enabled;
+                    }
+                    if ui.button("Remove").clicked() {
+                        removal = Some(index);
+                    }
+                });
+                ui.label(
+                    RichText::new(effect.effect_type.identifier())
+                        .small()
+                        .color(Color32::from_gray(170)),
+                );
+            });
+        }
+
+        if let Some(index) = removal {
+            effects.remove(index);
+        }
+
+        ui.menu_button(RichText::new("+ Add Effect").strong(), |ui| {
+            for effect_type in EffectType::all() {
+                if ui.button(effect_type.display_name()).clicked() {
+                    effects.push(MixerEffect::new(*effect_type));
+                    ui.close_menu();
                 }
+            }
+        });
+    }
+
+    fn draw_track_strip(
+        ui: &mut egui::Ui,
+        index: usize,
+        track: &mut Track,
+        is_selected: bool,
+    ) -> bool {
+        let fill = if track.muted {
+            Color32::from_rgb(70, 40, 40)
+        } else if track.solo {
+            Color32::from_rgb(40, 70, 55)
+        } else if is_selected {
+            Color32::from_rgb(45, 55, 75)
+        } else {
+            Color32::from_rgb(35, 35, 35)
+        };
+        let mut frame = egui::Frame::group(ui.style());
+        frame.fill = fill;
+        frame.stroke = Stroke::new(1.0, Color32::from_rgb(60, 60, 60));
+        let mut clicked = false;
+        frame.show(ui, |ui| {
+            ui.set_min_width(150.0);
+            ui.vertical(|ui| {
+                let label = format!("{:02} {}", index + 1, track.name);
+                if ui
+                    .selectable_label(is_selected, RichText::new(label).strong())
+                    .clicked()
+                {
+                    clicked = true;
+                }
+                ui.add_space(6.0);
+                Self::draw_meter(ui, &track.meter);
+                ui.add_space(6.0);
+                ui.add(Knob::new(&mut track.volume, 0.0, 1.5, 0.9, "Vol"));
+                ui.add(Knob::new(&mut track.pan, -1.0, 1.0, 0.0, "Pan"));
+                ui.horizontal(|ui| {
+                    ui.toggle_value(&mut track.muted, "Mute");
+                    ui.toggle_value(&mut track.solo, "Solo");
+                });
+                ui.label(
+                    RichText::new(format!("{:.1} dB", track.meter.level_db()))
+                        .small()
+                        .color(Color32::from_gray(180)),
+                );
+                ui.separator();
+                ui.label(RichText::new("Effects").strong().small());
+                Self::draw_effects_ui(&mut track.effects, ui);
             });
         });
+        ui.add_space(8.0);
+        clicked
+    }
+
+    fn draw_master_strip(ui: &mut egui::Ui, master: &mut MasterChannel) {
+        let mut frame = egui::Frame::group(ui.style());
+        frame.fill = Color32::from_rgb(40, 45, 70);
+        frame.stroke = Stroke::new(1.0, Color32::from_rgb(70, 70, 90));
+        frame.show(ui, |ui| {
+            ui.set_min_width(170.0);
+            ui.vertical(|ui| {
+                ui.label(RichText::new(&master.name).strong());
+                ui.add_space(6.0);
+                Self::draw_meter(ui, &master.meter);
+                ui.add_space(6.0);
+                ui.add(Knob::new(&mut master.volume, 0.0, 1.5, 1.0, "Vol"));
+                ui.label(
+                    RichText::new(format!("{:.1} dB", master.meter.level_db()))
+                        .small()
+                        .color(Color32::from_gray(200)),
+                );
+                ui.separator();
+                ui.label(RichText::new("Master Effects").strong().small());
+                Self::draw_effects_ui(&mut master.effects, ui);
+            });
+        });
+    }
+
+    fn draw_mixer(&mut self, ui: &mut egui::Ui) {
+        self.update_mixer_visuals(ui.ctx());
+        ui.heading("Mixer");
+        ui.add_space(4.0);
+        let mut new_selection = None;
+        egui::ScrollArea::horizontal().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for (index, track) in self.tracks.iter_mut().enumerate() {
+                    if Self::draw_track_strip(ui, index, track, self.selected_track == Some(index))
+                    {
+                        new_selection = Some(index);
+                    }
+                }
+                Self::draw_master_strip(ui, &mut self.master_track);
+            });
+        });
+        if let Some(selection) = new_selection {
+            self.selected_track = Some(selection);
+        }
     }
 }
 
 impl App for HarmoniqStudioApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::TopBottomPanel::top("transport").show(ctx, |ui| self.draw_transport_toolbar(ui));
 
         egui::SidePanel::left("playlist")
@@ -935,6 +1110,8 @@ struct Track {
     pan: f32,
     muted: bool,
     solo: bool,
+    effects: Vec<MixerEffect>,
+    meter: TrackMeter,
 }
 
 impl Track {
@@ -947,7 +1124,13 @@ impl Track {
             pan: 0.0,
             muted: false,
             solo: false,
+            effects: Vec::new(),
+            meter: TrackMeter::default(),
         }
+    }
+
+    fn with_index(index: usize) -> Self {
+        Self::new(format!("Track {index:02}"))
     }
 
     fn add_clip(&mut self, clip: Clip) {
@@ -973,6 +1156,278 @@ impl Track {
 
     fn has_playing_clips(&self) -> bool {
         self.clips.iter().any(|clip| clip.launch_state.is_playing())
+    }
+
+    fn update_meter(&mut self, time: f64, index: usize, transport_playing: bool, any_solo: bool) {
+        let mut activity = if transport_playing {
+            if self.has_playing_clips() {
+                1.0
+            } else {
+                0.4
+            }
+        } else {
+            0.15
+        };
+        if self.muted {
+            activity *= 0.1;
+        }
+        if any_solo && !self.solo {
+            activity *= 0.1;
+        }
+        let lfo = ((time + index as f64 * 0.37).sin() as f32 * 0.5 + 0.5).powf(0.8);
+        let level = (self.volume * activity * lfo).clamp(0.0, 1.5);
+        let pan = self.pan.clamp(-1.0, 1.0);
+        let left_weight = (1.0 - pan) * 0.5;
+        let right_weight = (1.0 + pan) * 0.5;
+        let left = (level * left_weight).clamp(0.0, 1.0);
+        let right = (level * right_weight).clamp(0.0, 1.0);
+        self.meter.update(left, right);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EffectType {
+    ParametricEq,
+    Compressor,
+    Limiter,
+    Reverb,
+    Delay,
+    Chorus,
+    Flanger,
+    Phaser,
+    Distortion,
+    AutoFilter,
+    StereoEnhancer,
+    NoiseGate,
+}
+
+impl EffectType {
+    fn all() -> &'static [EffectType] {
+        &[
+            EffectType::ParametricEq,
+            EffectType::Compressor,
+            EffectType::Limiter,
+            EffectType::Reverb,
+            EffectType::Delay,
+            EffectType::Chorus,
+            EffectType::Flanger,
+            EffectType::Phaser,
+            EffectType::Distortion,
+            EffectType::AutoFilter,
+            EffectType::StereoEnhancer,
+            EffectType::NoiseGate,
+        ]
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self {
+            EffectType::ParametricEq => "Parametric EQ",
+            EffectType::Compressor => "Compressor",
+            EffectType::Limiter => "Limiter",
+            EffectType::Reverb => "Reverb",
+            EffectType::Delay => "Delay / Echo",
+            EffectType::Chorus => "Chorus",
+            EffectType::Flanger => "Flanger",
+            EffectType::Phaser => "Phaser",
+            EffectType::Distortion => "Distortion / Saturation",
+            EffectType::AutoFilter => "Filter / Auto Filter",
+            EffectType::StereoEnhancer => "Stereo Enhancer",
+            EffectType::NoiseGate => "Noise Gate / Expander",
+        }
+    }
+
+    fn identifier(&self) -> &'static str {
+        match self {
+            EffectType::ParametricEq => "harmoniq.effects.parametric_eq",
+            EffectType::Compressor => "harmoniq.effects.compressor",
+            EffectType::Limiter => "harmoniq.effects.limiter",
+            EffectType::Reverb => "harmoniq.effects.reverb",
+            EffectType::Delay => "harmoniq.effects.delay",
+            EffectType::Chorus => "harmoniq.effects.chorus",
+            EffectType::Flanger => "harmoniq.effects.flanger",
+            EffectType::Phaser => "harmoniq.effects.phaser",
+            EffectType::Distortion => "harmoniq.effects.distortion",
+            EffectType::AutoFilter => "harmoniq.effects.autofilter",
+            EffectType::StereoEnhancer => "harmoniq.effects.stereo_enhancer",
+            EffectType::NoiseGate => "harmoniq.effects.noise_gate",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MixerEffect {
+    effect_type: EffectType,
+    enabled: bool,
+}
+
+impl MixerEffect {
+    fn new(effect_type: EffectType) -> Self {
+        Self {
+            effect_type,
+            enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TrackMeter {
+    left: f32,
+    right: f32,
+    rms: f32,
+}
+
+impl Default for TrackMeter {
+    fn default() -> Self {
+        Self {
+            left: 0.0,
+            right: 0.0,
+            rms: 0.0,
+        }
+    }
+}
+
+impl TrackMeter {
+    fn update(&mut self, left: f32, right: f32) {
+        self.left = self.left * 0.6 + left * 0.4;
+        self.right = self.right * 0.6 + right * 0.4;
+        let rms = ((left * left + right * right) * 0.5).sqrt();
+        self.rms = self.rms * 0.7 + rms * 0.3;
+    }
+
+    fn level_db(&self) -> f32 {
+        20.0 * self.rms.max(1e-4).log10()
+    }
+
+    fn left_level(&self) -> f32 {
+        self.left
+    }
+
+    fn right_level(&self) -> f32 {
+        self.right
+    }
+
+    fn rms_level(&self) -> f32 {
+        self.rms
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MasterChannel {
+    name: String,
+    volume: f32,
+    meter: TrackMeter,
+    effects: Vec<MixerEffect>,
+}
+
+impl Default for MasterChannel {
+    fn default() -> Self {
+        Self {
+            name: "Master".into(),
+            volume: 1.0,
+            meter: TrackMeter::default(),
+            effects: vec![
+                MixerEffect::new(EffectType::ParametricEq),
+                MixerEffect::new(EffectType::Limiter),
+            ],
+        }
+    }
+}
+
+impl MasterChannel {
+    fn update_from_tracks(&mut self, tracks: &[Track]) {
+        if tracks.is_empty() {
+            self.meter.update(0.0, 0.0);
+            return;
+        }
+        let mut left = 0.0;
+        let mut right = 0.0;
+        for track in tracks {
+            left += track.meter.left;
+            right += track.meter.right;
+        }
+        let count = tracks.len() as f32;
+        let scaled_left = (left / count) * self.volume;
+        let scaled_right = (right / count) * self.volume;
+        self.meter
+            .update(scaled_left.clamp(0.0, 1.0), scaled_right.clamp(0.0, 1.0));
+    }
+}
+
+struct Knob<'a> {
+    value: &'a mut f32,
+    min: f32,
+    max: f32,
+    default: f32,
+    label: &'a str,
+}
+
+impl<'a> Knob<'a> {
+    fn new(value: &'a mut f32, min: f32, max: f32, default: f32, label: &'a str) -> Self {
+        Self {
+            value,
+            min,
+            max,
+            default,
+            label,
+        }
+    }
+}
+
+impl<'a> egui::Widget for Knob<'a> {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let desired_size = egui::vec2(64.0, 80.0);
+        let (rect, mut response) = ui.allocate_exact_size(desired_size, Sense::drag());
+        let mut value = (*self.value).clamp(self.min, self.max);
+
+        if response.dragged() {
+            let delta = ui.ctx().input(|i| i.pointer.delta().y);
+            let sensitivity = (self.max - self.min).abs() / 160.0;
+            value -= delta * sensitivity;
+            value = value.clamp(self.min, self.max);
+            *self.value = value;
+            response.mark_changed();
+            ui.ctx().request_repaint();
+        } else {
+            *self.value = value;
+        }
+
+        if response.double_clicked() {
+            *self.value = self.default.clamp(self.min, self.max);
+            response.mark_changed();
+        }
+
+        let knob_radius = 22.0;
+        let knob_center = egui::pos2(rect.center().x, rect.top() + knob_radius + 6.0);
+        let painter = ui.painter_at(rect);
+        painter.circle_filled(knob_center, knob_radius, Color32::from_rgb(45, 45, 45));
+        painter.circle_stroke(
+            knob_center,
+            knob_radius,
+            Stroke::new(2.0, Color32::from_rgb(90, 90, 90)),
+        );
+
+        let normalized = (value - self.min) / (self.max - self.min).max(1e-6);
+        let angle = (-135.0_f32.to_radians()) + normalized * (270.0_f32.to_radians());
+        let indicator = egui::pos2(
+            knob_center.x + angle.cos() * (knob_radius - 6.0),
+            knob_center.y + angle.sin() * (knob_radius - 6.0),
+        );
+        painter.line_segment(
+            [knob_center, indicator],
+            Stroke::new(3.0, Color32::from_rgb(220, 220, 220)),
+        );
+        painter.circle_filled(knob_center, 3.0, Color32::from_rgb(200, 200, 200));
+
+        let label_pos = egui::pos2(rect.center().x, rect.bottom() - 6.0);
+        painter.text(
+            label_pos,
+            Align2::CENTER_BOTTOM,
+            self.label,
+            FontId::proportional(12.0),
+            Color32::from_rgb(210, 210, 210),
+        );
+
+        response
     }
 }
 
