@@ -1,4 +1,4 @@
-use std::f32::consts::PI;
+use std::f32::consts::{PI, TAU};
 use std::path::Path;
 
 use anyhow::{anyhow, Context};
@@ -1953,5 +1953,338 @@ impl PluginFactory for BassSynthFactory {
 
     fn create(&self) -> Box<dyn NativePlugin> {
         Box::new(BassSynth::default())
+    }
+}
+
+// --- West Coast Lead ----------------------------------------------------------------------
+
+const WESTCOAST_LEVEL: &str = "westcoast.level";
+const WESTCOAST_GLIDE: &str = "westcoast.glide";
+const WESTCOAST_ATTACK: &str = "westcoast.attack";
+const WESTCOAST_DECAY: &str = "westcoast.decay";
+const WESTCOAST_SUSTAIN: &str = "westcoast.sustain";
+const WESTCOAST_RELEASE: &str = "westcoast.release";
+const WESTCOAST_VIBRATO_RATE: &str = "westcoast.vibrato_rate";
+const WESTCOAST_VIBRATO_DEPTH: &str = "westcoast.vibrato_depth";
+const WESTCOAST_WARMTH: &str = "westcoast.warmth";
+
+const PITCH_BEND_RANGE: f32 = 2.0;
+
+#[derive(Debug, Clone)]
+pub struct WestCoastLead {
+    sample_rate: f32,
+    phase: f32,
+    vibrato_phase: f32,
+    current_freq: f32,
+    target_freq: f32,
+    velocity: f32,
+    pitch_bend: f32,
+    glide_time: f32,
+    vibrato_rate: f32,
+    vibrato_depth: f32,
+    warmth: f32,
+    level: f32,
+    extra_vibrato: f32,
+    envelope: AdsrEnvelope,
+    active_notes: Vec<(u8, u8)>,
+    parameters: ParameterSet,
+}
+
+impl Default for WestCoastLead {
+    fn default() -> Self {
+        let parameters = ParameterSet::new(westcoast_layout());
+        let level = parameters
+            .get(&ParameterId::from(WESTCOAST_LEVEL))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.9);
+        let glide_time = parameters
+            .get(&ParameterId::from(WESTCOAST_GLIDE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.12);
+        let vibrato_rate = parameters
+            .get(&ParameterId::from(WESTCOAST_VIBRATO_RATE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(4.8);
+        let vibrato_depth = parameters
+            .get(&ParameterId::from(WESTCOAST_VIBRATO_DEPTH))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.008);
+        let warmth = parameters
+            .get(&ParameterId::from(WESTCOAST_WARMTH))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.3);
+        let mut synth = Self {
+            sample_rate: 44_100.0,
+            phase: 0.0,
+            vibrato_phase: 0.0,
+            current_freq: 440.0,
+            target_freq: 440.0,
+            velocity: 0.0,
+            pitch_bend: 0.0,
+            glide_time,
+            vibrato_rate,
+            vibrato_depth,
+            warmth,
+            level,
+            extra_vibrato: 0.0,
+            envelope: AdsrEnvelope::default(),
+            active_notes: Vec::new(),
+            parameters,
+        };
+        synth.envelope.set_sample_rate(44_100.0);
+        synth.sync_envelope();
+        synth
+    }
+}
+
+impl WestCoastLead {
+    fn sync_envelope(&mut self) {
+        let attack = self
+            .parameters
+            .get(&ParameterId::from(WESTCOAST_ATTACK))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.02);
+        let decay = self
+            .parameters
+            .get(&ParameterId::from(WESTCOAST_DECAY))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.18);
+        let sustain = self
+            .parameters
+            .get(&ParameterId::from(WESTCOAST_SUSTAIN))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.8);
+        let release = self
+            .parameters
+            .get(&ParameterId::from(WESTCOAST_RELEASE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.26);
+        self.envelope
+            .set_params(attack, decay, sustain.clamp(0.0, 1.0), release);
+    }
+
+    fn update_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate.max(1.0);
+        self.envelope.set_sample_rate(self.sample_rate);
+    }
+
+    fn glide_factor(&self) -> f32 {
+        if self.glide_time <= 0.0001 {
+            1.0
+        } else {
+            (1.0 / (self.glide_time * self.sample_rate.max(1.0))).clamp(0.0, 1.0)
+        }
+    }
+
+    fn render_sample(&mut self) -> f32 {
+        let glide = self.glide_factor();
+        self.current_freq += (self.target_freq - self.current_freq) * glide;
+
+        let vibrato_increment = TAU * self.vibrato_rate.max(0.0) / self.sample_rate.max(1.0);
+        self.vibrato_phase = (self.vibrato_phase + vibrato_increment).rem_euclid(TAU);
+        let vibrato_depth = self.vibrato_depth * (1.0 + 0.8 * self.extra_vibrato);
+        let vibrato = self.vibrato_phase.sin() * vibrato_depth;
+
+        let pitch = self.current_freq * 2.0_f32.powf(self.pitch_bend * PITCH_BEND_RANGE / 12.0);
+        let freq = (pitch * (1.0 + vibrato)).clamp(20.0, self.sample_rate * 0.45);
+
+        let increment = TAU * freq / self.sample_rate.max(1.0);
+        self.phase = (self.phase + increment).rem_euclid(TAU);
+        let envelope = self.envelope.next();
+        let raw = self.phase.sin();
+        let shaped = raw * (1.0 - self.warmth) + raw.powi(3) * self.warmth;
+        shaped * envelope * self.velocity * self.level
+    }
+}
+
+impl AudioProcessor for WestCoastLead {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.westcoast", "West Coast Lead", "Harmoniq Labs")
+            .with_description("Portamento sine lead inspired by classic West Coast rap")
+    }
+
+    fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
+        self.update_sample_rate(config.sample_rate);
+        Ok(())
+    }
+
+    fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
+        if !self.envelope.is_active() && self.active_notes.is_empty() {
+            for sample in buffer.iter_mut() {
+                *sample = 0.0;
+            }
+            return Ok(());
+        }
+
+        fill_buffer(buffer, || self.render_sample());
+        Ok(())
+    }
+
+    fn supports_layout(&self, layout: ChannelLayout) -> bool {
+        matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
+    }
+}
+
+impl MidiProcessor for WestCoastLead {
+    fn process_midi(&mut self, events: &[MidiEvent]) -> anyhow::Result<()> {
+        for event in events {
+            match event {
+                MidiEvent::NoteOn { note, velocity, .. } => {
+                    let freq = midi_note_to_freq(*note);
+                    self.target_freq = freq;
+                    if self.active_notes.is_empty() {
+                        self.current_freq = freq;
+                        self.envelope.trigger();
+                    }
+                    self.velocity = (*velocity as f32 / 127.0).clamp(0.0, 1.0);
+                    self.active_notes.push((*note, *velocity));
+                }
+                MidiEvent::NoteOff { note, .. } => {
+                    if let Some(index) = self.active_notes.iter().rposition(|(n, _)| n == note) {
+                        self.active_notes.remove(index);
+                    }
+                    if let Some((note, velocity)) = self.active_notes.last().copied() {
+                        self.target_freq = midi_note_to_freq(note);
+                        self.velocity = (velocity as f32 / 127.0).clamp(0.0, 1.0);
+                    } else {
+                        self.envelope.release();
+                    }
+                }
+                MidiEvent::ControlChange { control, value, .. } if *control == 1 => {
+                    self.extra_vibrato = (*value as f32 / 127.0).clamp(0.0, 1.0);
+                }
+                MidiEvent::PitchBend { lsb, msb, .. } => {
+                    let value = ((*msb as u16) << 7) | (*lsb as u16);
+                    self.pitch_bend = (value as f32 - 8_192.0) / 8_192.0;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+impl NativePlugin for WestCoastLead {
+    fn parameters(&self) -> &ParameterSet {
+        &self.parameters
+    }
+
+    fn parameters_mut(&mut self) -> &mut ParameterSet {
+        &mut self.parameters
+    }
+
+    fn on_parameter_changed(
+        &mut self,
+        id: &ParameterId,
+        value: &ParameterValue,
+    ) -> Result<(), PluginParameterError> {
+        match id.as_str() {
+            WESTCOAST_LEVEL => {
+                if let Some(level) = value.as_continuous() {
+                    self.level = level;
+                }
+            }
+            WESTCOAST_GLIDE => {
+                if let Some(glide) = value.as_continuous() {
+                    self.glide_time = glide;
+                }
+            }
+            WESTCOAST_VIBRATO_RATE => {
+                if let Some(rate) = value.as_continuous() {
+                    self.vibrato_rate = rate;
+                }
+            }
+            WESTCOAST_VIBRATO_DEPTH => {
+                if let Some(depth) = value.as_continuous() {
+                    self.vibrato_depth = depth;
+                }
+            }
+            WESTCOAST_WARMTH => {
+                if let Some(warmth) = value.as_continuous() {
+                    self.warmth = warmth.clamp(0.0, 1.0);
+                }
+            }
+            WESTCOAST_ATTACK | WESTCOAST_DECAY | WESTCOAST_SUSTAIN | WESTCOAST_RELEASE => {
+                self.sync_envelope();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+fn westcoast_layout() -> ParameterLayout {
+    ParameterLayout::new(vec![
+        ParameterDefinition::new(
+            WESTCOAST_LEVEL,
+            "Output Level",
+            ParameterKind::continuous(0.0..=1.2, 0.9),
+        )
+        .with_description("Final amplitude applied to the silky sine lead"),
+        ParameterDefinition::new(
+            WESTCOAST_GLIDE,
+            "Glide",
+            ParameterKind::continuous(0.0..=0.4, 0.12),
+        )
+        .with_unit("s")
+        .with_description("Portamento time between notes for laid-back slides"),
+        ParameterDefinition::new(
+            WESTCOAST_ATTACK,
+            "Attack",
+            ParameterKind::continuous(0.001..=0.3, 0.02),
+        )
+        .with_unit("s"),
+        ParameterDefinition::new(
+            WESTCOAST_DECAY,
+            "Decay",
+            ParameterKind::continuous(0.05..=1.0, 0.18),
+        )
+        .with_unit("s"),
+        ParameterDefinition::new(
+            WESTCOAST_SUSTAIN,
+            "Sustain",
+            ParameterKind::continuous(0.3..=1.0, 0.8),
+        ),
+        ParameterDefinition::new(
+            WESTCOAST_RELEASE,
+            "Release",
+            ParameterKind::continuous(0.05..=1.5, 0.26),
+        )
+        .with_unit("s"),
+        ParameterDefinition::new(
+            WESTCOAST_VIBRATO_RATE,
+            "Vibrato Rate",
+            ParameterKind::continuous(0.1..=8.0, 4.8),
+        )
+        .with_unit("Hz"),
+        ParameterDefinition::new(
+            WESTCOAST_VIBRATO_DEPTH,
+            "Vibrato Depth",
+            ParameterKind::continuous(0.0..=0.02, 0.008),
+        )
+        .with_description("Pitch modulation depth accentuated by the mod wheel"),
+        ParameterDefinition::new(
+            WESTCOAST_WARMTH,
+            "Warmth",
+            ParameterKind::continuous(0.0..=1.0, 0.3),
+        )
+        .with_description("Blend of pure sine and saturated harmonics"),
+    ])
+}
+
+pub struct WestCoastLeadFactory;
+
+impl PluginFactory for WestCoastLeadFactory {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.westcoast", "West Coast Lead", "Harmoniq Labs")
+            .with_description("Portamento sine lead inspired by classic West Coast rap")
+    }
+
+    fn parameter_layout(&self) -> std::sync::Arc<ParameterLayout> {
+        std::sync::Arc::new(westcoast_layout())
+    }
+
+    fn create(&self) -> Box<dyn NativePlugin> {
+        Box::new(WestCoastLead::default())
     }
 }
