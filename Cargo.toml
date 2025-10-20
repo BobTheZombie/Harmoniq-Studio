@@ -4,6 +4,7 @@ members = [
     "crates/harmoniq-app",
     "crates/harmoniq-plugins",
     "crates/harmoniq-plugin-sdk",
+    "crates/harmoniq-plugin-host",
 ]
 resolver = "2"
 

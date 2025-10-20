@@ -14,6 +14,8 @@ professional mixing, and live performance.
 - `crates/harmoniq-app`: Command-line harness that wires the engine and built-in
   plugins together. This is a staging ground for future GUI, mixer, sequencer,
   and piano roll components.
+- `crates/harmoniq-plugin-host`: Host layers for loading third-party binaries
+  such as LinuxVST, VST2/3, AudioUnit, and RTAS modules.
 
 ## Getting started
 
@@ -29,7 +31,7 @@ source, and gain stage, demonstrating the graph scheduler and mixdown pipeline.
 - [ ] Real-time safe command queues for UI ↔ engine communication
 - [ ] Cross-platform native UI (egui/iced) with playlist, mixer, and piano roll
 - [ ] Plugin SDK for Harmoniq-native instruments and effects
-- [ ] Host layers for LinuxVST, VST2/3, AU, and RTAS binaries
+- [x] Host layers for LinuxVST, VST2/3, AU, and RTAS binaries
 - [ ] Offline bouncing, automation lanes, and clip launching
 
 Contributions and ideas are welcome as we grow Harmoniq Studio into a
