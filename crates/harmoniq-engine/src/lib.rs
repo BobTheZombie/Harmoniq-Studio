@@ -11,7 +11,7 @@ pub mod plugin;
 pub mod time;
 
 pub use buffer::{AudioBuffer, BufferConfig, ChannelLayout};
-pub use engine::{EngineCommand, HarmoniqEngine, TransportState};
+pub use engine::{EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
 pub use graph::{GraphBuilder, GraphHandle, NodeHandle};
 pub use plugin::{AudioProcessor, MidiEvent, MidiProcessor, PluginDescriptor, PluginId};
 
@@ -71,5 +71,37 @@ mod tests {
             / (config.block_size * config.layout.channels() as usize) as f32;
 
         assert!(rms > 0.0);
+    }
+
+    #[test]
+    fn queued_commands_are_processed_before_audio() {
+        let config = BufferConfig::new(48_000.0, 128, ChannelLayout::Stereo);
+        let mut engine = HarmoniqEngine::new(config.clone()).expect("engine");
+
+        let noise_id = engine
+            .register_processor(Box::new(NoiseGenerator))
+            .expect("register noise");
+
+        let mut builder = GraphBuilder::new();
+        let noise_node = builder.add_node(noise_id);
+        builder.connect_to_mixer(noise_node, 1.0).unwrap();
+
+        let queue = engine.command_queue();
+        queue
+            .try_send(EngineCommand::ReplaceGraph(builder.build()))
+            .expect("queue should accept replace graph");
+        queue
+            .try_send(EngineCommand::SetTransport(TransportState::Playing))
+            .expect("queue should accept transport command");
+
+        let mut buffer = AudioBuffer::from_config(config.clone());
+        engine.process_block(&mut buffer).expect("process");
+
+        assert_eq!(engine.transport(), TransportState::Playing);
+        assert!(queue.is_empty());
+        assert!(buffer
+            .channels()
+            .flat_map(|channel| channel.iter())
+            .any(|sample| *sample != 0.0));
     }
 }
