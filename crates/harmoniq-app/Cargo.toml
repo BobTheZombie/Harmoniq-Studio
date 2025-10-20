@@ -14,3 +14,4 @@ egui_extras = "0.27"
 parking_lot.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+hound = "3.5"
