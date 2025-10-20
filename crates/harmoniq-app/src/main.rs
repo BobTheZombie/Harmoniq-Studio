@@ -57,7 +57,7 @@ fn run_headless(sample_rate: f32, block_size: usize) -> anyhow::Result<()> {
         .register_processor(Box::new(SineSynth::with_frequency(220.0)))
         .context("register sine")?;
     let noise = engine
-        .register_processor(Box::new(NoisePlugin))
+        .register_processor(Box::new(NoisePlugin::default()))
         .context("register noise")?;
     let gain = engine
         .register_processor(Box::new(GainPlugin::new(0.4)))
@@ -191,7 +191,7 @@ impl HarmoniqStudioApp {
             .register_processor(Box::new(SineSynth::with_frequency(110.0)))
             .context("register sine")?;
         let noise = engine
-            .register_processor(Box::new(NoisePlugin))
+            .register_processor(Box::new(NoisePlugin::default()))
             .context("register noise")?;
         let gain = engine
             .register_processor(Box::new(GainPlugin::new(0.6)))
