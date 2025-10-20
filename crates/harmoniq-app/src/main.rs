@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use clap::Parser;
 use harmoniq_engine::{
     BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine, TransportState,
@@ -29,6 +29,7 @@ fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
     let config = BufferConfig::new(args.sample_rate, args.block_size, ChannelLayout::Stereo);
     let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
+    let command_queue = engine.command_queue();
 
     let sine = engine
         .register_processor(Box::new(SineSynth::with_frequency(220.0)))
@@ -48,8 +49,12 @@ fn main() -> anyhow::Result<()> {
     let gain_node = graph_builder.add_node(gain);
     graph_builder.connect_to_mixer(gain_node, 1.0)?;
 
-    engine.execute_command(EngineCommand::ReplaceGraph(graph_builder.build()))?;
-    engine.set_transport(TransportState::Playing);
+    command_queue
+        .try_send(EngineCommand::ReplaceGraph(graph_builder.build()))
+        .map_err(|_| anyhow!("command queue full while replacing graph"))?;
+    command_queue
+        .try_send(EngineCommand::SetTransport(TransportState::Playing))
+        .map_err(|_| anyhow!("command queue full while updating transport"))?;
 
     let mut buffer = harmoniq_engine::AudioBuffer::from_config(config.clone());
     for _ in 0..10 {
