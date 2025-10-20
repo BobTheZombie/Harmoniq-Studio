@@ -1,12 +1,11 @@
 [package]
-name = "harmoniq-plugins"
+name = "harmoniq-plugin-sdk"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [dependencies]
 harmoniq-engine = { path = "../harmoniq-engine" }
-harmoniq-plugin-sdk = { path = "../harmoniq-plugin-sdk" }
-anyhow.workspace = true
+thiserror.workspace = true
 serde.workspace = true
-rand.workspace = true
+anyhow.workspace = true
