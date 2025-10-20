@@ -5,6 +5,14 @@ members = [
     "crates/harmoniq-plugins",
     "crates/harmoniq-plugin-sdk",
     "crates/harmoniq-plugin-host",
+    "crates/harmoniq-plugin-analog",
+    "crates/harmoniq-plugin-fm",
+    "crates/harmoniq-plugin-wavetable",
+    "crates/harmoniq-plugin-sampler",
+    "crates/harmoniq-plugin-granular",
+    "crates/harmoniq-plugin-additive",
+    "crates/harmoniq-plugin-organ-piano",
+    "crates/harmoniq-plugin-bass",
 ]
 resolver = "2"
 
