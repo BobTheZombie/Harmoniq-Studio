@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -13,6 +14,7 @@ use harmoniq_engine::{
     TransportState,
 };
 use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth};
+use hound::{SampleFormat, WavSpec, WavWriter};
 use parking_lot::Mutex;
 use tracing::error;
 use tracing_subscriber::EnvFilter;
@@ -24,6 +26,14 @@ struct Cli {
     #[arg(long)]
     headless: bool,
 
+    /// Export an offline bounce to the provided WAV file path
+    #[arg(long)]
+    bounce: Option<PathBuf>,
+
+    /// Number of beats rendered when performing an offline bounce
+    #[arg(long, default_value_t = 16.0)]
+    bounce_beats: f32,
+
     /// Sample rate used for the audio engine
     #[arg(long, default_value_t = 48_000.0)]
     sample_rate: f32,
@@ -31,6 +41,121 @@ struct Cli {
     /// Block size used for internal processing
     #[arg(long, default_value_t = 512)]
     block_size: usize,
+
+    /// Initial tempo used for transport and offline bouncing
+    #[arg(long, default_value_t = 120.0)]
+    tempo: f32,
+}
+
+#[derive(Debug, Clone)]
+struct DemoGraphConfig {
+    sine_frequency: f32,
+    sine_mix: f32,
+    noise_mix: f32,
+    gain: f32,
+}
+
+impl DemoGraphConfig {
+    fn headless_default() -> Self {
+        Self {
+            sine_frequency: 220.0,
+            sine_mix: 0.7,
+            noise_mix: 0.1,
+            gain: 0.4,
+        }
+    }
+
+    fn ui_default() -> Self {
+        Self {
+            sine_frequency: 110.0,
+            sine_mix: 0.8,
+            noise_mix: 0.2,
+            gain: 0.6,
+        }
+    }
+}
+
+fn configure_demo_graph(
+    engine: &mut HarmoniqEngine,
+    graph_config: &DemoGraphConfig,
+) -> anyhow::Result<()> {
+    let sine = engine
+        .register_processor(Box::new(SineSynth::with_frequency(
+            graph_config.sine_frequency,
+        )))
+        .context("register sine")?;
+    let noise = engine
+        .register_processor(Box::new(NoisePlugin::default()))
+        .context("register noise")?;
+    let gain = engine
+        .register_processor(Box::new(GainPlugin::new(graph_config.gain)))
+        .context("register gain")?;
+
+    let mut graph_builder = GraphBuilder::new();
+    let sine_node = graph_builder.add_node(sine);
+    graph_builder.connect_to_mixer(sine_node, graph_config.sine_mix)?;
+    let noise_node = graph_builder.add_node(noise);
+    graph_builder.connect_to_mixer(noise_node, graph_config.noise_mix)?;
+    let gain_node = graph_builder.add_node(gain);
+    graph_builder.connect_to_mixer(gain_node, 1.0)?;
+
+    engine.replace_graph(graph_builder.build())?;
+    Ok(())
+}
+
+fn offline_bounce_to_wav(
+    output_path: impl AsRef<Path>,
+    config: BufferConfig,
+    graph_config: &DemoGraphConfig,
+    tempo: f32,
+    beats: f32,
+) -> anyhow::Result<PathBuf> {
+    if beats <= 0.0 {
+        anyhow::bail!("bounce length in beats must be positive");
+    }
+
+    let total_seconds = (60.0 / tempo.max(1.0)) * beats;
+    let total_frames = (total_seconds * config.sample_rate) as usize;
+    let channels = config.layout.channels() as usize;
+    let path = output_path.as_ref().to_path_buf();
+
+    let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
+    configure_demo_graph(&mut engine, graph_config)?;
+    engine.set_transport(TransportState::Playing);
+
+    let spec = WavSpec {
+        channels: channels as u16,
+        sample_rate: config.sample_rate.round() as u32,
+        bits_per_sample: 16,
+        sample_format: SampleFormat::Int,
+    };
+    let mut writer = WavWriter::create(&path, spec).context("failed to create output WAV file")?;
+
+    let mut buffer = AudioBuffer::from_config(config.clone());
+    let mut frames_written = 0usize;
+
+    while frames_written < total_frames {
+        engine.process_block(&mut buffer)?;
+        let block_len = buffer.len();
+        let channel_data = buffer.as_slice();
+
+        for frame in 0..block_len {
+            if frames_written >= total_frames {
+                break;
+            }
+            for channel in 0..channels {
+                let sample = channel_data[channel][frame].clamp(-1.0, 1.0);
+                let quantized = (sample * i16::MAX as f32) as i16;
+                writer
+                    .write_sample(quantized)
+                    .context("failed to write WAV sample")?;
+            }
+            frames_written += 1;
+        }
+    }
+
+    writer.finalize().context("failed to finalise WAV writer")?;
+    Ok(path)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -41,42 +166,32 @@ fn main() -> anyhow::Result<()> {
 
     let args = Cli::parse();
 
+    if let Some(path) = args.bounce.clone() {
+        let config = BufferConfig::new(args.sample_rate, args.block_size, ChannelLayout::Stereo);
+        let bounced_path = offline_bounce_to_wav(
+            path,
+            config,
+            &DemoGraphConfig::headless_default(),
+            args.tempo,
+            args.bounce_beats,
+        )?;
+        println!("Offline bounce written to {}", bounced_path.display());
+        return Ok(());
+    }
+
     if args.headless {
-        run_headless(args.sample_rate, args.block_size)
+        run_headless(args.sample_rate, args.block_size, args.tempo)
     } else {
-        run_ui(args.sample_rate, args.block_size)
+        run_ui(args.sample_rate, args.block_size, args.tempo)
     }
 }
 
-fn run_headless(sample_rate: f32, block_size: usize) -> anyhow::Result<()> {
+fn run_headless(sample_rate: f32, block_size: usize, tempo: f32) -> anyhow::Result<()> {
     let config = BufferConfig::new(sample_rate, block_size, ChannelLayout::Stereo);
     let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
-    let command_queue = engine.command_queue();
-
-    let sine = engine
-        .register_processor(Box::new(SineSynth::with_frequency(220.0)))
-        .context("register sine")?;
-    let noise = engine
-        .register_processor(Box::new(NoisePlugin::default()))
-        .context("register noise")?;
-    let gain = engine
-        .register_processor(Box::new(GainPlugin::new(0.4)))
-        .context("register gain")?;
-
-    let mut graph_builder = GraphBuilder::new();
-    let sine_node = graph_builder.add_node(sine);
-    graph_builder.connect_to_mixer(sine_node, 0.7)?;
-    let noise_node = graph_builder.add_node(noise);
-    graph_builder.connect_to_mixer(noise_node, 0.1)?;
-    let gain_node = graph_builder.add_node(gain);
-    graph_builder.connect_to_mixer(gain_node, 1.0)?;
-
-    command_queue
-        .try_send(EngineCommand::ReplaceGraph(graph_builder.build()))
-        .map_err(|_| anyhow!("command queue full while replacing graph"))?;
-    command_queue
-        .try_send(EngineCommand::SetTransport(TransportState::Playing))
-        .map_err(|_| anyhow!("command queue full while updating transport"))?;
+    configure_demo_graph(&mut engine, &DemoGraphConfig::headless_default())?;
+    engine.set_transport(TransportState::Playing);
+    engine.execute_command(EngineCommand::SetTempo(tempo))?;
 
     let mut buffer = harmoniq_engine::AudioBuffer::from_config(config.clone());
     for _ in 0..10 {
@@ -85,15 +200,16 @@ fn run_headless(sample_rate: f32, block_size: usize) -> anyhow::Result<()> {
     }
 
     println!(
-        "Rendered {} frames across {} channels",
+        "Rendered {} frames across {} channels at {:.1} BPM",
         buffer.len(),
-        config.layout.channels()
+        config.layout.channels(),
+        tempo
     );
 
     Ok(())
 }
 
-fn run_ui(sample_rate: f32, block_size: usize) -> anyhow::Result<()> {
+fn run_ui(sample_rate: f32, block_size: usize, tempo: f32) -> anyhow::Result<()> {
     let native_options = NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
         ..Default::default()
@@ -101,6 +217,7 @@ fn run_ui(sample_rate: f32, block_size: usize) -> anyhow::Result<()> {
 
     let config = BufferConfig::new(sample_rate, block_size, ChannelLayout::Stereo);
     let config_for_app = config.clone();
+    let tempo_for_app = tempo;
 
     eframe::run_native(
         "Harmoniq Studio",
@@ -108,7 +225,7 @@ fn run_ui(sample_rate: f32, block_size: usize) -> anyhow::Result<()> {
         Box::new(move |cc| {
             install_image_loaders(&cc.egui_ctx);
             let config = config_for_app.clone();
-            let app = match HarmoniqStudioApp::new(config, cc) {
+            let app = match HarmoniqStudioApp::new(config, tempo_for_app, cc) {
                 Ok(app) => app,
                 Err(err) => {
                     eprintln!("Failed to initialise Harmoniq Studio UI: {err:?}");
@@ -170,6 +287,8 @@ impl Drop for EngineRunner {
 struct HarmoniqStudioApp {
     _engine_runner: EngineRunner,
     command_queue: harmoniq_engine::EngineCommandQueue,
+    engine_config: BufferConfig,
+    graph_config: DemoGraphConfig,
     tracks: Vec<Track>,
     selected_track: Option<usize>,
     selected_clip: Option<(usize, usize)>,
@@ -180,33 +299,24 @@ struct HarmoniqStudioApp {
     next_color_index: usize,
     piano_roll: PianoRollState,
     last_error: Option<String>,
+    status_message: Option<String>,
+    bounce_path: String,
+    bounce_length_beats: f32,
 }
 
 impl HarmoniqStudioApp {
-    fn new(config: BufferConfig, cc: &CreationContext<'_>) -> anyhow::Result<Self> {
+    fn new(
+        config: BufferConfig,
+        initial_tempo: f32,
+        cc: &CreationContext<'_>,
+    ) -> anyhow::Result<Self> {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
 
         let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
-        let sine = engine
-            .register_processor(Box::new(SineSynth::with_frequency(110.0)))
-            .context("register sine")?;
-        let noise = engine
-            .register_processor(Box::new(NoisePlugin::default()))
-            .context("register noise")?;
-        let gain = engine
-            .register_processor(Box::new(GainPlugin::new(0.6)))
-            .context("register gain")?;
-
-        let mut graph_builder = GraphBuilder::new();
-        let sine_node = graph_builder.add_node(sine);
-        graph_builder.connect_to_mixer(sine_node, 0.8)?;
-        let noise_node = graph_builder.add_node(noise);
-        graph_builder.connect_to_mixer(noise_node, 0.2)?;
-        let gain_node = graph_builder.add_node(gain);
-        graph_builder.connect_to_mixer(gain_node, 1.0)?;
-
-        engine.replace_graph(graph_builder.build())?;
+        let graph_config = DemoGraphConfig::ui_default();
+        configure_demo_graph(&mut engine, &graph_config)?;
         engine.set_transport(TransportState::Stopped);
+        engine.execute_command(EngineCommand::SetTempo(initial_tempo))?;
 
         let command_queue = engine.command_queue();
         let engine = Arc::new(Mutex::new(engine));
@@ -215,16 +325,21 @@ impl HarmoniqStudioApp {
         let mut app = Self {
             _engine_runner: engine_runner,
             command_queue,
+            engine_config: config.clone(),
+            graph_config,
             tracks: vec![Track::new("Lead"), Track::new("Drums"), Track::new("Bass")],
             selected_track: Some(0),
             selected_clip: Some((0, 0)),
-            tempo: 120.0,
+            tempo: initial_tempo,
             transport_state: TransportState::Stopped,
             next_track_index: 3,
             next_clip_index: 1,
             next_color_index: 0,
             piano_roll: PianoRollState::default(),
             last_error: None,
+            status_message: None,
+            bounce_path: "bounce.wav".into(),
+            bounce_length_beats: 16.0,
         };
 
         app.initialise_demo_clips();
@@ -234,6 +349,7 @@ impl HarmoniqStudioApp {
     fn initialise_demo_clips(&mut self) {
         let lead_intro_color = self.next_color();
         let lead_hook_color = self.next_color();
+        let lead_automation_color = self.next_color();
         if let Some(track) = self.tracks.get_mut(0) {
             track.add_clip(Clip::new(
                 "Lead Intro",
@@ -249,9 +365,19 @@ impl HarmoniqStudioApp {
                 lead_hook_color,
                 vec![Note::new(0.0, 0.5, 79), Note::new(1.0, 0.5, 81)],
             ));
+            track.add_automation_lane(AutomationLane::new(
+                "Lead Filter",
+                lead_automation_color,
+                vec![
+                    AutomationPoint::new(0.0, 0.3),
+                    AutomationPoint::new(4.0, 0.8),
+                    AutomationPoint::new(8.0, 0.5),
+                ],
+            ));
         }
 
         let drum_color = self.next_color();
+        let drum_automation_color = self.next_color();
         if let Some(track) = self.tracks.get_mut(1) {
             track.add_clip(Clip::new(
                 "Drum Loop",
@@ -259,6 +385,14 @@ impl HarmoniqStudioApp {
                 16.0,
                 drum_color,
                 vec![Note::new(0.0, 0.5, 36), Note::new(0.5, 0.5, 38)],
+            ));
+            track.add_automation_lane(AutomationLane::new(
+                "Drum Reverb",
+                drum_automation_color,
+                vec![
+                    AutomationPoint::new(0.0, 0.2),
+                    AutomationPoint::new(8.0, 0.6),
+                ],
             ));
         }
 
@@ -294,6 +428,7 @@ impl HarmoniqStudioApp {
     fn send_command(&mut self, command: EngineCommand) {
         if let Err(command) = self.command_queue.try_send(command) {
             self.last_error = Some(format!("Command queue full: {command:?}"));
+            self.status_message = None;
         } else {
             self.last_error = None;
         }
@@ -305,17 +440,104 @@ impl HarmoniqStudioApp {
             _ => TransportState::Playing,
         };
         self.send_command(EngineCommand::SetTransport(self.transport_state));
+        self.status_message = Some(match self.transport_state {
+            TransportState::Playing => "Transport playing".to_string(),
+            TransportState::Stopped => "Transport paused".to_string(),
+            TransportState::Recording => "Transport recording".to_string(),
+        });
+        if self.transport_state == TransportState::Stopped {
+            self.stop_all_clips();
+        }
     }
 
     fn stop_transport(&mut self) {
         self.transport_state = TransportState::Stopped;
         self.send_command(EngineCommand::SetTransport(self.transport_state));
+        self.stop_all_clips();
+        self.status_message = Some("Transport stopped".into());
     }
 
     fn add_track(&mut self) {
         let name = format!("Track {}", self.next_track_index + 1);
         self.next_track_index += 1;
         self.tracks.push(Track::new(name));
+    }
+
+    fn stop_all_clips(&mut self) {
+        for track in &mut self.tracks {
+            track.stop_all_clips();
+        }
+    }
+
+    fn any_clip_playing(&self) -> bool {
+        self.tracks.iter().any(|track| track.has_playing_clips())
+    }
+
+    fn launch_clip(&mut self, track_idx: usize, clip_idx: usize) {
+        let (track_name, clip_name) = match self.tracks.get(track_idx).and_then(|track| {
+            track
+                .clips
+                .get(clip_idx)
+                .map(|clip| (track.name.clone(), clip.name.clone()))
+        }) {
+            Some(names) => names,
+            None => return,
+        };
+
+        if let Some(track) = self.tracks.get_mut(track_idx) {
+            for (idx, clip) in track.clips.iter_mut().enumerate() {
+                clip.launch_state = if idx == clip_idx {
+                    ClipLaunchState::Playing
+                } else {
+                    ClipLaunchState::Stopped
+                };
+            }
+        }
+
+        self.transport_state = TransportState::Playing;
+        self.send_command(EngineCommand::SetTransport(self.transport_state));
+        self.status_message = Some(format!("Launched '{clip_name}' on {track_name}"));
+    }
+
+    fn stop_clip(&mut self, track_idx: usize, clip_idx: usize) {
+        let clip_name = self
+            .tracks
+            .get(track_idx)
+            .and_then(|track| track.clips.get(clip_idx))
+            .map(|clip| clip.name.clone());
+
+        if let Some(track) = self.tracks.get_mut(track_idx) {
+            if let Some(clip) = track.clips.get_mut(clip_idx) {
+                clip.launch_state = ClipLaunchState::Stopped;
+            }
+        }
+
+        if self.any_clip_playing() {
+            if let Some(name) = clip_name {
+                self.status_message = Some(format!("Stopped '{name}'"));
+            }
+        } else {
+            self.stop_transport();
+        }
+    }
+
+    fn bounce_project(&mut self) {
+        match offline_bounce_to_wav(
+            &self.bounce_path,
+            self.engine_config.clone(),
+            &self.graph_config,
+            self.tempo,
+            self.bounce_length_beats,
+        ) {
+            Ok(path) => {
+                self.status_message = Some(format!("Offline bounce written to {}", path.display()));
+                self.last_error = None;
+            }
+            Err(err) => {
+                self.last_error = Some(format!("Offline bounce failed: {err:#}"));
+                self.status_message = None;
+            }
+        }
     }
 
     fn add_clip_to_selected_track(&mut self) {
@@ -334,6 +556,39 @@ impl HarmoniqStudioApp {
             track.add_clip(Clip::new(clip_name, start, 4.0, color, Vec::new()));
             let clip_idx = track.clips.len() - 1;
             self.selected_clip = Some((track_idx, clip_idx));
+        }
+    }
+
+    fn add_automation_lane_to_selected_track(&mut self) {
+        let Some(track_idx) = self.selected_track else {
+            self.last_error = Some("Select a track before adding automation".into());
+            return;
+        };
+
+        let color = self.next_color();
+        let mut status = None;
+
+        if let Some(track) = self.tracks.get_mut(track_idx) {
+            let lane_name = format!("Automation {}", track.automation_lanes.len() + 1);
+            let default_value = track
+                .automation_lanes
+                .last()
+                .and_then(|lane| lane.points.last().map(|point| point.value))
+                .unwrap_or(0.5);
+            let points = vec![
+                AutomationPoint::new(0.0, default_value),
+                AutomationPoint::new(4.0, default_value),
+            ];
+            track.add_automation_lane(AutomationLane::new(lane_name.clone(), color, points));
+            status = Some(format!(
+                "Added automation lane '{lane_name}' on {}",
+                track.name
+            ));
+        }
+
+        if let Some(status) = status {
+            self.status_message = Some(status);
+            self.last_error = None;
         }
     }
 
@@ -366,6 +621,20 @@ impl HarmoniqStudioApp {
             }
 
             ui.separator();
+            ui.label("Bounce to");
+            ui.add(egui::TextEdit::singleline(&mut self.bounce_path).desired_width(160.0));
+            ui.label("Length");
+            ui.add(
+                egui::DragValue::new(&mut self.bounce_length_beats)
+                    .clamp_range(1.0..=256.0)
+                    .speed(1.0)
+                    .suffix(" beats"),
+            );
+            if ui.button("Offline Bounce").clicked() {
+                self.bounce_project();
+            }
+
+            ui.separator();
             ui.label("Time signature 4/4");
         });
     }
@@ -380,9 +649,19 @@ impl HarmoniqStudioApp {
             if ui.button("Add Clip").clicked() {
                 self.add_clip_to_selected_track();
             }
+            if ui.button("Add Automation Lane").clicked() {
+                self.add_automation_lane_to_selected_track();
+            }
         });
 
         ui.separator();
+
+        enum ClipAction {
+            Launch(usize, usize),
+            Stop(usize, usize),
+        }
+
+        let mut pending_clip_action: Option<ClipAction> = None;
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (track_idx, track) in self.tracks.iter_mut().enumerate() {
@@ -394,7 +673,7 @@ impl HarmoniqStudioApp {
 
                 ui.add_space(2.0);
 
-                for (clip_idx, clip) in track.clips.iter_mut().enumerate() {
+                for (clip_idx, clip) in track.clips.iter().enumerate() {
                     let clip_selected = self.selected_clip == Some((track_idx, clip_idx));
                     let label = format!(
                         "{} — start {:.1} • len {:.1}",
@@ -404,24 +683,98 @@ impl HarmoniqStudioApp {
                         "Clip on {}\nStart: {:.1} beats\nLength: {:.1} beats",
                         track.name, clip.start_beat, clip.length_beats
                     );
-                    let response = ui
-                        .add_sized(
-                            [ui.available_width(), 28.0],
-                            egui::SelectableLabel::new(clip_selected, label),
-                        )
-                        .on_hover_text(tooltip);
+                    let fill = if clip_selected {
+                        clip.color.gamma_multiply(0.45)
+                    } else {
+                        clip.color.gamma_multiply(0.25)
+                    };
 
-                    if response.clicked() {
-                        self.selected_clip = Some((track_idx, clip_idx));
-                        self.selected_track = Some(track_idx);
-                    }
+                    let inner = egui::Frame::group(ui.style()).fill(fill).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let launch_label = clip.launch_state.button_label();
+                            let launch_button = ui.button(launch_label);
+                            if launch_button.clicked() {
+                                pending_clip_action = Some(if clip.launch_state.is_playing() {
+                                    ClipAction::Stop(track_idx, clip_idx)
+                                } else {
+                                    ClipAction::Launch(track_idx, clip_idx)
+                                });
+                            }
+
+                            let response = ui.add_sized(
+                                [ui.available_width(), 24.0],
+                                egui::SelectableLabel::new(clip_selected, label.clone()),
+                            );
+                            if response.clicked() {
+                                self.selected_clip = Some((track_idx, clip_idx));
+                                self.selected_track = Some(track_idx);
+                            }
+                            response.on_hover_text(tooltip.clone());
+                        });
+                        ui.label(format!("State: {}", clip.launch_state.status_label()));
+                    });
+                    inner.response.on_hover_text(tooltip);
 
                     ui.add_space(2.0);
                 }
 
                 ui.add_space(6.0);
+
+                for lane in track.automation_lanes.iter_mut() {
+                    let header_text = format!("Automation: {}", lane.parameter());
+                    ui.collapsing(header_text, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.colored_label(lane.color(), lane.parameter());
+                            ui.checkbox(&mut lane.visible, "Visible");
+                            if ui.button("Add Point").clicked() {
+                                let template_point = lane
+                                    .points
+                                    .last()
+                                    .cloned()
+                                    .unwrap_or_else(|| AutomationPoint::new(0.0, 0.5));
+                                lane.add_point(AutomationPoint::new(
+                                    template_point.beat + 1.0,
+                                    template_point.value,
+                                ));
+                            }
+                        });
+
+                        let mut remove_point: Option<usize> = None;
+                        let can_remove_points = lane.points.len() > 1;
+                        for (point_idx, point) in lane.points.iter_mut().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("Point {}", point_idx + 1));
+                                ui.add(
+                                    egui::DragValue::new(&mut point.beat)
+                                        .clamp_range(0.0..=256.0)
+                                        .speed(0.1)
+                                        .suffix(" beat"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut point.value, 0.0..=1.0).text("Value"),
+                                );
+                                if can_remove_points && ui.button("Remove").clicked() {
+                                    remove_point = Some(point_idx);
+                                }
+                            });
+                        }
+
+                        if let Some(point_idx) = remove_point {
+                            lane.points.remove(point_idx);
+                        }
+                    });
+
+                    ui.add_space(6.0);
+                }
             }
         });
+
+        if let Some(action) = pending_clip_action {
+            match action {
+                ClipAction::Launch(track_idx, clip_idx) => self.launch_clip(track_idx, clip_idx),
+                ClipAction::Stop(track_idx, clip_idx) => self.stop_clip(track_idx, clip_idx),
+            }
+        }
     }
 
     fn draw_piano_roll(&mut self, ui: &mut egui::Ui) {
@@ -547,6 +900,22 @@ impl App for HarmoniqStudioApp {
 
         egui::CentralPanel::default().show(ctx, |ui| self.draw_piano_roll(ui));
 
+        if let Some(message) = self.status_message.clone() {
+            let mut clear_message = false;
+            egui::Window::new("Status")
+                .anchor(egui::Align2::LEFT_BOTTOM, [16.0, -16.0])
+                .collapsible(false)
+                .show(ctx, |ui| {
+                    ui.label(message);
+                    if ui.button("Dismiss").clicked() {
+                        clear_message = true;
+                    }
+                });
+            if clear_message {
+                self.status_message = None;
+            }
+        }
+
         if let Some(error) = &self.last_error {
             egui::Window::new("Engine Warnings")
                 .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
@@ -561,6 +930,7 @@ impl App for HarmoniqStudioApp {
 struct Track {
     name: String,
     clips: Vec<Clip>,
+    automation_lanes: Vec<AutomationLane>,
     volume: f32,
     pan: f32,
     muted: bool,
@@ -572,6 +942,7 @@ impl Track {
         Self {
             name: name.into(),
             clips: Vec::new(),
+            automation_lanes: Vec::new(),
             volume: 0.9,
             pan: 0.0,
             muted: false,
@@ -583,11 +954,25 @@ impl Track {
         self.clips.push(clip);
     }
 
+    fn add_automation_lane(&mut self, lane: AutomationLane) {
+        self.automation_lanes.push(lane);
+    }
+
     fn next_clip_start(&self) -> f32 {
         self.clips
             .iter()
             .map(|clip| clip.start_beat + clip.length_beats)
             .fold(0.0, f32::max)
+    }
+
+    fn stop_all_clips(&mut self) {
+        for clip in &mut self.clips {
+            clip.launch_state = ClipLaunchState::Stopped;
+        }
+    }
+
+    fn has_playing_clips(&self) -> bool {
+        self.clips.iter().any(|clip| clip.launch_state.is_playing())
     }
 }
 
@@ -597,6 +982,7 @@ struct Clip {
     length_beats: f32,
     color: Color32,
     notes: Vec<Note>,
+    launch_state: ClipLaunchState,
 }
 
 impl Clip {
@@ -613,7 +999,80 @@ impl Clip {
             length_beats,
             color,
             notes,
+            launch_state: ClipLaunchState::Stopped,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipLaunchState {
+    Stopped,
+    Playing,
+}
+
+impl ClipLaunchState {
+    fn is_playing(self) -> bool {
+        matches!(self, Self::Playing)
+    }
+
+    fn button_label(self) -> &'static str {
+        match self {
+            ClipLaunchState::Stopped => "Launch",
+            ClipLaunchState::Playing => "Stop",
+        }
+    }
+
+    fn status_label(self) -> &'static str {
+        match self {
+            ClipLaunchState::Stopped => "Stopped",
+            ClipLaunchState::Playing => "Playing",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AutomationPoint {
+    beat: f32,
+    value: f32,
+}
+
+impl AutomationPoint {
+    fn new(beat: f32, value: f32) -> Self {
+        Self { beat, value }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AutomationLane {
+    parameter: String,
+    points: Vec<AutomationPoint>,
+    color: Color32,
+    visible: bool,
+}
+
+impl AutomationLane {
+    fn new(parameter: impl Into<String>, color: Color32, mut points: Vec<AutomationPoint>) -> Self {
+        if points.is_empty() {
+            points.push(AutomationPoint::new(0.0, 0.5));
+        }
+        Self {
+            parameter: parameter.into(),
+            points,
+            color,
+            visible: true,
+        }
+    }
+
+    fn parameter(&self) -> &str {
+        &self.parameter
+    }
+
+    fn color(&self) -> Color32 {
+        self.color
+    }
+
+    fn add_point(&mut self, point: AutomationPoint) {
+        self.points.push(point);
     }
 }
 
