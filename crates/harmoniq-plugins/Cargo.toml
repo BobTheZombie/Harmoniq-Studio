@@ -1,0 +1,11 @@
+[package]
+name = "harmoniq-plugins"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+harmoniq-engine = { path = "../harmoniq-engine" }
+anyhow.workspace = true
+serde.workspace = true
+rand.workspace = true
