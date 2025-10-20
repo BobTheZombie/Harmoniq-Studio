@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,7 +16,11 @@ use harmoniq_engine::{
 };
 use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth};
 use hound::{SampleFormat, WavSpec, WavWriter};
+use mp3lame_encoder::{
+    self, Builder as Mp3Builder, FlushNoGap, InterleavedPcm, MonoPcm, Quality as Mp3Quality,
+};
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
@@ -33,7 +38,7 @@ struct Cli {
     #[arg(long)]
     headless: bool,
 
-    /// Export an offline bounce to the provided WAV file path
+    /// Export an offline bounce to the provided audio file path (.wav/.flac/.mp3)
     #[arg(long)]
     bounce: Option<PathBuf>,
 
@@ -74,7 +79,7 @@ struct Cli {
     list_midi_inputs: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct DemoGraphConfig {
     sine_frequency: f32,
     sine_mix: f32,
@@ -130,7 +135,39 @@ fn configure_demo_graph(
     Ok(())
 }
 
-fn offline_bounce_to_wav(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AudioExportFormat {
+    Wav,
+    Flac,
+    Mp3,
+}
+
+impl AudioExportFormat {
+    fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_ascii_lowercase().as_str() {
+            "wav" => Some(Self::Wav),
+            "flac" => Some(Self::Flac),
+            "mp3" => Some(Self::Mp3),
+            _ => None,
+        }
+    }
+
+    fn from_path(path: &Path) -> Option<Self> {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(Self::from_extension)
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Wav => "WAV",
+            Self::Flac => "FLAC",
+            Self::Mp3 => "MP3",
+        }
+    }
+}
+
+fn offline_bounce_to_file(
     output_path: impl AsRef<Path>,
     config: BufferConfig,
     graph_config: &DemoGraphConfig,
@@ -141,25 +178,34 @@ fn offline_bounce_to_wav(
         anyhow::bail!("bounce length in beats must be positive");
     }
 
+    let mut path = output_path.as_ref().to_path_buf();
+    let format = match AudioExportFormat::from_path(&path) {
+        Some(format) => format,
+        None => {
+            if path.extension().is_none() {
+                path.set_extension("wav");
+                AudioExportFormat::Wav
+            } else {
+                let ext = path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .unwrap_or_default();
+                anyhow::bail!("unsupported export format: '{ext}'");
+            }
+        }
+    };
+
     let total_seconds = (60.0 / tempo.max(1.0)) * beats;
     let total_frames = (total_seconds * config.sample_rate) as usize;
     let channels = config.layout.channels() as usize;
-    let path = output_path.as_ref().to_path_buf();
 
     let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
     configure_demo_graph(&mut engine, graph_config)?;
     engine.set_transport(TransportState::Playing);
 
-    let spec = WavSpec {
-        channels: channels as u16,
-        sample_rate: config.sample_rate.round() as u32,
-        bits_per_sample: 16,
-        sample_format: SampleFormat::Int,
-    };
-    let mut writer = WavWriter::create(&path, spec).context("failed to create output WAV file")?;
-
     let mut buffer = AudioBuffer::from_config(config.clone());
     let mut frames_written = 0usize;
+    let mut samples: Vec<i16> = Vec::with_capacity(total_frames * channels);
 
     while frames_written < total_frames {
         engine.process_block(&mut buffer)?;
@@ -173,16 +219,121 @@ fn offline_bounce_to_wav(
             for channel in 0..channels {
                 let sample = channel_data[channel][frame].clamp(-1.0, 1.0);
                 let quantized = (sample * i16::MAX as f32) as i16;
-                writer
-                    .write_sample(quantized)
-                    .context("failed to write WAV sample")?;
+                samples.push(quantized);
             }
             frames_written += 1;
         }
     }
 
-    writer.finalize().context("failed to finalise WAV writer")?;
+    match format {
+        AudioExportFormat::Wav => write_wav_file(&path, channels, config.sample_rate, &samples)?,
+        AudioExportFormat::Flac => write_flac_file(&path, channels, config.sample_rate, &samples)?,
+        AudioExportFormat::Mp3 => write_mp3_file(&path, channels, config.sample_rate, &samples)?,
+    }
+
     Ok(path)
+}
+
+fn write_wav_file(
+    path: &Path,
+    channels: usize,
+    sample_rate: f32,
+    samples: &[i16],
+) -> anyhow::Result<()> {
+    let spec = WavSpec {
+        channels: channels as u16,
+        sample_rate: sample_rate.round() as u32,
+        bits_per_sample: 16,
+        sample_format: SampleFormat::Int,
+    };
+    let mut writer = WavWriter::create(path, spec).context("failed to create output WAV file")?;
+    for sample in samples {
+        writer
+            .write_sample(*sample)
+            .context("failed to write WAV sample")?;
+    }
+    writer.finalize().context("failed to finalise WAV writer")?;
+    Ok(())
+}
+
+fn write_flac_file(
+    path: &Path,
+    channels: usize,
+    sample_rate: f32,
+    samples: &[i16],
+) -> anyhow::Result<()> {
+    let pcm: Vec<i32> = samples.iter().map(|value| i32::from(*value)).collect();
+    let mut encoder_config = flacenc::config::Encoder::default()
+        .into_verified()
+        .context("invalid FLAC encoder configuration")?;
+    // Ensure the encoder uses a reasonable block size for the project configuration.
+    if encoder_config.block_size == 0 {
+        encoder_config.block_size = 4096;
+    }
+    let source =
+        flacenc::source::MemSource::from_samples(&pcm, channels, 16, sample_rate.round() as usize);
+    let stream =
+        flacenc::encode_with_fixed_block_size(&encoder_config, source, encoder_config.block_size)
+            .context("failed to encode FLAC stream")?;
+    let mut sink = flacenc::bitsink::ByteSink::new();
+    stream.write(&mut sink);
+    fs::write(path, sink.as_slice()).context("failed to write FLAC file")?;
+    Ok(())
+}
+
+fn write_mp3_file(
+    path: &Path,
+    channels: usize,
+    sample_rate: f32,
+    samples: &[i16],
+) -> anyhow::Result<()> {
+    if !(1..=2).contains(&channels) {
+        anyhow::bail!("MP3 export only supports mono or stereo audio");
+    }
+
+    let mut builder =
+        Mp3Builder::new().ok_or_else(|| anyhow!("failed to initialise MP3 encoder"))?;
+    builder
+        .set_sample_rate(sample_rate.round() as u32)
+        .map_err(|err| anyhow!("failed to configure MP3 sample rate: {err}"))?;
+    builder
+        .set_num_channels(channels as u8)
+        .map_err(|err| anyhow!("failed to configure MP3 channels: {err}"))?;
+    builder
+        .set_quality(Mp3Quality::High)
+        .map_err(|err| anyhow!("failed to configure MP3 quality: {err}"))?;
+    let mut encoder = builder
+        .build()
+        .map_err(|err| anyhow!("failed to start MP3 encoder: {err}"))?;
+
+    let samples_per_channel = samples.len() / channels.max(1);
+    let mut output = Vec::new();
+    output.reserve(mp3lame_encoder::max_required_buffer_size(
+        samples_per_channel,
+    ));
+
+    let encoded = match channels {
+        1 => encoder
+            .encode(MonoPcm(samples), output.spare_capacity_mut())
+            .map_err(|err| anyhow!("failed to encode MP3 audio: {err:?}"))?,
+        2 => encoder
+            .encode(InterleavedPcm(samples), output.spare_capacity_mut())
+            .map_err(|err| anyhow!("failed to encode MP3 audio: {err:?}"))?,
+        _ => unreachable!(),
+    };
+    unsafe {
+        output.set_len(output.len() + encoded);
+    }
+
+    let flushed = encoder
+        .flush::<FlushNoGap>(output.spare_capacity_mut())
+        .map_err(|err| anyhow!("failed to finalise MP3 audio: {err:?}"))?;
+    unsafe {
+        output.set_len(output.len() + flushed);
+    }
+
+    fs::write(path, &output).context("failed to write MP3 file")?;
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -227,7 +378,7 @@ fn main() -> anyhow::Result<()> {
 
     if let Some(path) = args.bounce.clone() {
         let config = BufferConfig::new(args.sample_rate, args.block_size, ChannelLayout::Stereo);
-        let bounced_path = offline_bounce_to_wav(
+        let bounced_path = offline_bounce_to_file(
             path,
             config,
             &DemoGraphConfig::headless_default(),
@@ -406,6 +557,7 @@ struct HarmoniqStudioApp {
     piano_roll: PianoRollState,
     last_error: Option<String>,
     status_message: Option<String>,
+    project_path: String,
     bounce_path: String,
     bounce_length_beats: f32,
 }
@@ -455,6 +607,7 @@ impl HarmoniqStudioApp {
             piano_roll: PianoRollState::default(),
             last_error: None,
             status_message: None,
+            project_path: "project.hst".into(),
             bounce_path: "bounce.wav".into(),
             bounce_length_beats: 16.0,
         };
@@ -648,7 +801,7 @@ impl HarmoniqStudioApp {
     }
 
     fn bounce_project(&mut self) {
-        match offline_bounce_to_wav(
+        match offline_bounce_to_file(
             &self.bounce_path,
             self.engine_config.clone(),
             &self.graph_config,
@@ -656,7 +809,13 @@ impl HarmoniqStudioApp {
             self.bounce_length_beats,
         ) {
             Ok(path) => {
-                self.status_message = Some(format!("Offline bounce written to {}", path.display()));
+                let format_label = AudioExportFormat::from_path(&path)
+                    .map(AudioExportFormat::display_name)
+                    .unwrap_or("audio");
+                self.status_message = Some(format!(
+                    "Offline {format_label} bounce written to {}",
+                    path.display()
+                ));
                 self.last_error = None;
             }
             Err(err) => {
@@ -664,6 +823,121 @@ impl HarmoniqStudioApp {
                 self.status_message = None;
             }
         }
+    }
+
+    fn save_project(&mut self) {
+        let result = project_path_from_input(&self.project_path)
+            .and_then(|path| self.write_project_to_path(&path));
+
+        match result {
+            Ok(path) => {
+                self.project_path = path.to_string_lossy().to_string();
+                self.status_message = Some(format!("Project saved to {}", path.display()));
+                self.last_error = None;
+            }
+            Err(err) => {
+                self.last_error = Some(format!("Failed to save project: {err:#}"));
+                self.status_message = None;
+            }
+        }
+    }
+
+    fn open_project(&mut self) {
+        let result = project_path_from_input(&self.project_path)
+            .and_then(|path| self.read_project_from_path(&path));
+
+        match result {
+            Ok(path) => {
+                self.project_path = path.to_string_lossy().to_string();
+                self.status_message = Some(format!("Opened project {}", path.display()));
+                self.last_error = None;
+            }
+            Err(err) => {
+                self.last_error = Some(format!("Failed to open project: {err:#}"));
+                self.status_message = None;
+            }
+        }
+    }
+
+    fn write_project_to_path(&self, path: &Path) -> anyhow::Result<PathBuf> {
+        let normalized = ensure_hst_extension(path.to_path_buf());
+        if let Some(parent) = normalized.parent() {
+            if !parent.as_os_str().is_empty() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("failed to create project directory {}", parent.display())
+                })?;
+            }
+        }
+
+        let document = self.export_project_document();
+        let data = serde_json::to_vec_pretty(&document).context("failed to serialise project")?;
+        fs::write(&normalized, data)
+            .with_context(|| format!("failed to write project file {}", normalized.display()))?;
+        Ok(normalized)
+    }
+
+    fn read_project_from_path(&mut self, path: &Path) -> anyhow::Result<PathBuf> {
+        let normalized = ensure_hst_extension(path.to_path_buf());
+        let data = fs::read(&normalized)
+            .with_context(|| format!("failed to read project file {}", normalized.display()))?;
+        let document: ProjectDocument =
+            serde_json::from_slice(&data).context("failed to parse project file")?;
+        if document.version > PROJECT_FILE_VERSION {
+            anyhow::bail!(
+                "project file version {} is newer than supported {}",
+                document.version,
+                PROJECT_FILE_VERSION
+            );
+        }
+        self.apply_project_document(document)?;
+        Ok(normalized)
+    }
+
+    fn export_project_document(&self) -> ProjectDocument {
+        ProjectDocument {
+            version: PROJECT_FILE_VERSION,
+            tempo: self.tempo,
+            graph_config: self.graph_config.clone(),
+            tracks: self.tracks.iter().map(ProjectTrack::from_track).collect(),
+            master: ProjectMaster::from_master(&self.master_track),
+            next_track_index: self.next_track_index,
+            next_clip_index: self.next_clip_index,
+            next_color_index: self.next_color_index,
+            bounce_path: self.bounce_path.clone(),
+            bounce_length_beats: self.bounce_length_beats,
+        }
+    }
+
+    fn apply_project_document(&mut self, document: ProjectDocument) -> anyhow::Result<()> {
+        self.graph_config = document.graph_config;
+        self.tracks = document
+            .tracks
+            .into_iter()
+            .map(ProjectTrack::into_track)
+            .collect();
+        if let Some(first_track) = self.tracks.get(0) {
+            self.selected_track = Some(0);
+            self.selected_clip = if first_track.clips.is_empty() {
+                None
+            } else {
+                Some((0, 0))
+            };
+        } else {
+            self.selected_track = None;
+            self.selected_clip = None;
+        }
+        self.master_track = document.master.into_master();
+        self.next_track_index = document.next_track_index.max(self.tracks.len());
+        self.next_clip_index = document.next_clip_index;
+        self.next_color_index = document.next_color_index;
+        self.bounce_path = document.bounce_path;
+        self.bounce_length_beats = document.bounce_length_beats;
+        self.tempo = document.tempo;
+        self.transport_state = TransportState::Stopped;
+        self.stop_all_clips();
+        self.send_command(EngineCommand::SetTransport(self.transport_state));
+        self.send_command(EngineCommand::SetTempo(self.tempo));
+        Ok(())
     }
 
     fn add_clip_to_selected_track(&mut self) {
@@ -744,6 +1018,20 @@ impl HarmoniqStudioApp {
             );
             if tempo_response.changed() {
                 self.send_command(EngineCommand::SetTempo(self.tempo));
+            }
+
+            ui.separator();
+            ui.label("Project");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.project_path)
+                    .desired_width(160.0)
+                    .hint_text("my_project.hst"),
+            );
+            if ui.button("Open").clicked() {
+                self.open_project();
+            }
+            if ui.button("Save").clicked() {
+                self.save_project();
             }
 
             ui.separator();
@@ -1296,7 +1584,7 @@ impl Track {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum EffectType {
     ParametricEq,
     Compressor,
@@ -1365,7 +1653,7 @@ impl EffectType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct MixerEffect {
     effect_type: EffectType,
     enabled: bool,
@@ -1461,6 +1749,195 @@ impl MasterChannel {
         let scaled_right = (right / count) * self.volume;
         self.meter
             .update(scaled_left.clamp(0.0, 1.0), scaled_right.clamp(0.0, 1.0));
+    }
+}
+
+const PROJECT_FILE_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectDocument {
+    version: u32,
+    tempo: f32,
+    graph_config: DemoGraphConfig,
+    tracks: Vec<ProjectTrack>,
+    master: ProjectMaster,
+    next_track_index: usize,
+    next_clip_index: usize,
+    next_color_index: usize,
+    bounce_path: String,
+    bounce_length_beats: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectTrack {
+    name: String,
+    volume: f32,
+    pan: f32,
+    muted: bool,
+    solo: bool,
+    effects: Vec<MixerEffect>,
+    clips: Vec<ProjectClip>,
+    automation_lanes: Vec<ProjectAutomationLane>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectClip {
+    name: String,
+    start_beat: f32,
+    length_beats: f32,
+    color: RgbaColor,
+    notes: Vec<Note>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectAutomationLane {
+    parameter: String,
+    color: RgbaColor,
+    visible: bool,
+    points: Vec<AutomationPoint>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectMaster {
+    name: String,
+    volume: f32,
+    effects: Vec<MixerEffect>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct RgbaColor {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+impl From<Color32> for RgbaColor {
+    fn from(color: Color32) -> Self {
+        let [r, g, b, a] = color.to_array();
+        Self { r, g, b, a }
+    }
+}
+
+impl From<RgbaColor> for Color32 {
+    fn from(color: RgbaColor) -> Self {
+        Color32::from_rgba_unmultiplied(color.r, color.g, color.b, color.a)
+    }
+}
+
+fn is_hst_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("hst"))
+        .unwrap_or(false)
+}
+
+fn ensure_hst_extension(mut path: PathBuf) -> PathBuf {
+    if !is_hst_extension(&path) {
+        path.set_extension("hst");
+    }
+    path
+}
+
+fn project_path_from_input(input: &str) -> anyhow::Result<PathBuf> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("project path cannot be empty");
+    }
+    Ok(ensure_hst_extension(PathBuf::from(trimmed)))
+}
+
+impl ProjectTrack {
+    fn from_track(track: &Track) -> Self {
+        Self {
+            name: track.name.clone(),
+            volume: track.volume,
+            pan: track.pan,
+            muted: track.muted,
+            solo: track.solo,
+            effects: track.effects.clone(),
+            clips: track.clips.iter().map(ProjectClip::from_clip).collect(),
+            automation_lanes: track
+                .automation_lanes
+                .iter()
+                .map(ProjectAutomationLane::from_lane)
+                .collect(),
+        }
+    }
+
+    fn into_track(self) -> Track {
+        let mut track = Track::new(self.name);
+        track.volume = self.volume;
+        track.pan = self.pan;
+        track.muted = self.muted;
+        track.solo = self.solo;
+        track.effects = self.effects;
+        track.clips = self.clips.into_iter().map(ProjectClip::into_clip).collect();
+        track.automation_lanes = self
+            .automation_lanes
+            .into_iter()
+            .map(ProjectAutomationLane::into_lane)
+            .collect();
+        track
+    }
+}
+
+impl ProjectClip {
+    fn from_clip(clip: &Clip) -> Self {
+        Self {
+            name: clip.name.clone(),
+            start_beat: clip.start_beat,
+            length_beats: clip.length_beats,
+            color: clip.color.into(),
+            notes: clip.notes.clone(),
+        }
+    }
+
+    fn into_clip(self) -> Clip {
+        Clip {
+            name: self.name,
+            start_beat: self.start_beat,
+            length_beats: self.length_beats,
+            color: self.color.into(),
+            notes: self.notes,
+            launch_state: ClipLaunchState::Stopped,
+        }
+    }
+}
+
+impl ProjectAutomationLane {
+    fn from_lane(lane: &AutomationLane) -> Self {
+        Self {
+            parameter: lane.parameter.clone(),
+            color: lane.color.into(),
+            visible: lane.visible,
+            points: lane.points.clone(),
+        }
+    }
+
+    fn into_lane(self) -> AutomationLane {
+        let mut lane = AutomationLane::new(self.parameter, self.color.into(), self.points);
+        lane.visible = self.visible;
+        lane
+    }
+}
+
+impl ProjectMaster {
+    fn from_master(master: &MasterChannel) -> Self {
+        Self {
+            name: master.name.clone(),
+            volume: master.volume,
+            effects: master.effects.clone(),
+        }
+    }
+
+    fn into_master(self) -> MasterChannel {
+        MasterChannel {
+            name: self.name,
+            volume: self.volume,
+            meter: TrackMeter::default(),
+            effects: self.effects,
+        }
     }
 }
 
@@ -1596,7 +2073,7 @@ impl ClipLaunchState {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct AutomationPoint {
     beat: f32,
     value: f32,
@@ -1642,6 +2119,7 @@ impl AutomationLane {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct Note {
     start_beats: f32,
     length_beats: f32,
