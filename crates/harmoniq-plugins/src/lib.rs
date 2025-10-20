@@ -3,10 +3,18 @@
 use harmoniq_plugin_sdk::PluginModule;
 
 pub mod dynamics;
+pub mod effects;
 pub mod generators;
 pub mod instruments;
 
 pub use dynamics::{GainPlugin, GainPluginFactory};
+pub use effects::{
+    AutoFilterFactory, AutoFilterPlugin, ChorusFactory, ChorusPlugin, CompressorFactory,
+    CompressorPlugin, DelayFactory, DelayPlugin, DistortionFactory, DistortionPlugin,
+    FlangerFactory, FlangerPlugin, LimiterFactory, LimiterPlugin, NoiseGateFactory,
+    NoiseGatePlugin, ParametricEqFactory, ParametricEqPlugin, PhaserFactory, PhaserPlugin,
+    ReverbFactory, ReverbPlugin, StereoEnhancerFactory, StereoEnhancerPlugin,
+};
 pub use generators::{NoisePlugin, NoisePluginFactory, SineSynth, SineSynthFactory};
 pub use instruments::{
     AdditiveSynth, AdditiveSynthFactory, AnalogSynth, AnalogSynthFactory, BassSynth,
@@ -29,6 +37,18 @@ pub fn builtin_module() -> PluginModule {
         .register_factory(Box::new(GranularSynthFactory))
         .register_factory(Box::new(AdditiveSynthFactory))
         .register_factory(Box::new(OrganPianoFactory))
-        .register_factory(Box::new(BassSynthFactory));
+        .register_factory(Box::new(BassSynthFactory))
+        .register_factory(Box::new(ParametricEqFactory))
+        .register_factory(Box::new(CompressorFactory))
+        .register_factory(Box::new(LimiterFactory))
+        .register_factory(Box::new(ReverbFactory))
+        .register_factory(Box::new(DelayFactory))
+        .register_factory(Box::new(ChorusFactory))
+        .register_factory(Box::new(FlangerFactory))
+        .register_factory(Box::new(PhaserFactory))
+        .register_factory(Box::new(DistortionFactory))
+        .register_factory(Box::new(AutoFilterFactory))
+        .register_factory(Box::new(StereoEnhancerFactory))
+        .register_factory(Box::new(NoiseGateFactory));
     module
 }
