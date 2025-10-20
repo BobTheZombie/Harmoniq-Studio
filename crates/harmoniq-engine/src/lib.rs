@@ -9,6 +9,7 @@ pub mod engine;
 pub mod graph;
 pub mod plugin;
 pub mod time;
+mod tone;
 
 pub use buffer::{AudioBuffer, BufferConfig, ChannelLayout};
 pub use engine::{EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};

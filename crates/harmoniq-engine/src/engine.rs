@@ -8,6 +8,7 @@ use parking_lot::{Mutex, RwLock};
 use crate::{
     graph::{self, GraphHandle},
     plugin::{MidiEvent, PluginId},
+    tone::ToneShaper,
     AudioBuffer, AudioProcessor, BufferConfig,
 };
 
@@ -67,6 +68,7 @@ pub struct HarmoniqEngine {
     processors: RwLock<HashMap<PluginId, Box<dyn AudioProcessor>>>,
     graph: RwLock<Option<GraphHandle>>,
     master_buffer: Mutex<AudioBuffer>,
+    tone_shaper: ToneShaper,
     next_plugin_id: AtomicU64,
     transport: RwLock<TransportState>,
     command_queue: Arc<ArrayQueue<EngineCommand>>,
@@ -76,6 +78,8 @@ pub struct HarmoniqEngine {
 impl HarmoniqEngine {
     pub fn new(config: BufferConfig) -> anyhow::Result<Self> {
         let command_queue = Arc::new(ArrayQueue::new(COMMAND_QUEUE_CAPACITY));
+        let tone_shaper = ToneShaper::new(&config);
+
         Ok(Self {
             master_buffer: Mutex::new(AudioBuffer::from_config(config.clone())),
             processors: RwLock::new(HashMap::new()),
@@ -85,6 +89,7 @@ impl HarmoniqEngine {
             command_queue,
             pending_midi: Mutex::new(Vec::new()),
             config,
+            tone_shaper,
         })
     }
 
@@ -187,6 +192,7 @@ impl HarmoniqEngine {
         {
             let mut master = self.master_buffer.lock();
             graph::mixdown(&mut master, &scratch_buffers, &graph.mixer_gains);
+            self.tone_shaper.process(&mut master);
             for (target_channel, source_channel) in output.channels_mut().zip(master.channels()) {
                 target_channel.copy_from_slice(source_channel);
             }
