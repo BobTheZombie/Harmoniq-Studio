@@ -1,0 +1,1747 @@
+use std::f32::consts::PI;
+use std::path::Path;
+
+use anyhow::{anyhow, Context};
+use harmoniq_engine::{
+    AudioBuffer, AudioProcessor, BufferConfig, ChannelLayout, MidiEvent, MidiProcessor,
+    PluginDescriptor,
+};
+use harmoniq_plugin_sdk::{
+    NativePlugin, ParameterDefinition, ParameterId, ParameterKind, ParameterLayout, ParameterSet,
+    ParameterValue, PluginFactory, PluginParameterError,
+};
+use rand::{Rng, SeedableRng};
+use symphonia::core::audio::{SampleBuffer as SymphoniaSampleBuffer, SignalSpec};
+use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::errors::Error as SymphoniaError;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
+
+const MAX_CHANNELS: usize = 2;
+
+/// Simplified ADSR envelope shared by several built-in instruments.
+#[derive(Debug, Clone)]
+struct AdsrEnvelope {
+    attack: f32,
+    decay: f32,
+    sustain: f32,
+    release: f32,
+    sample_rate: f32,
+    state: EnvelopeState,
+    value: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EnvelopeState {
+    Idle,
+    Attack,
+    Decay,
+    Sustain,
+    Release,
+}
+
+impl Default for AdsrEnvelope {
+    fn default() -> Self {
+        Self {
+            attack: 0.01,
+            decay: 0.2,
+            sustain: 0.7,
+            release: 0.3,
+            sample_rate: 44_100.0,
+            state: EnvelopeState::Idle,
+            value: 0.0,
+        }
+    }
+}
+
+impl AdsrEnvelope {
+    fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate.max(1.0);
+    }
+
+    fn set_params(&mut self, attack: f32, decay: f32, sustain: f32, release: f32) {
+        self.attack = attack.max(0.0001);
+        self.decay = decay.max(0.0001);
+        self.sustain = sustain.clamp(0.0, 1.0);
+        self.release = release.max(0.0001);
+    }
+
+    fn trigger(&mut self) {
+        self.state = EnvelopeState::Attack;
+        self.value = 0.0;
+    }
+
+    fn release(&mut self) {
+        if self.state != EnvelopeState::Idle {
+            self.state = EnvelopeState::Release;
+        }
+    }
+
+    fn next(&mut self) -> f32 {
+        match self.state {
+            EnvelopeState::Idle => {
+                self.value = 0.0;
+            }
+            EnvelopeState::Attack => {
+                let increment = 1.0 / (self.attack * self.sample_rate);
+                self.value += increment;
+                if self.value >= 1.0 {
+                    self.value = 1.0;
+                    self.state = EnvelopeState::Decay;
+                }
+            }
+            EnvelopeState::Decay => {
+                let decrement = (1.0 - self.sustain) / (self.decay * self.sample_rate);
+                self.value -= decrement;
+                if self.value <= self.sustain {
+                    self.value = self.sustain;
+                    self.state = EnvelopeState::Sustain;
+                }
+            }
+            EnvelopeState::Sustain => {
+                self.value = self.sustain;
+            }
+            EnvelopeState::Release => {
+                let decrement = 1.0 / (self.release * self.sample_rate);
+                self.value -= decrement;
+                if self.value <= 0.0 {
+                    self.value = 0.0;
+                    self.state = EnvelopeState::Idle;
+                }
+            }
+        }
+        self.value.clamp(0.0, 1.0)
+    }
+
+    fn is_active(&self) -> bool {
+        self.state != EnvelopeState::Idle || self.value > 0.0
+    }
+}
+
+fn midi_note_to_freq(note: u8) -> f32 {
+    440.0 * 2.0_f32.powf((note as f32 - 69.0) / 12.0)
+}
+
+fn fill_buffer(buffer: &mut AudioBuffer, mut render: impl FnMut() -> f32) {
+    let samples = buffer.len();
+    let mut values = Vec::with_capacity(samples);
+    for _ in 0..samples {
+        values.push(render());
+    }
+    for channel in buffer.channels_mut() {
+        for (sample, value) in channel.iter_mut().zip(values.iter()) {
+            *sample = *value;
+        }
+    }
+}
+
+// --- Analog Synth -------------------------------------------------------------------------
+
+const ANALOG_LEVEL: &str = "analog.level";
+const ANALOG_ATTACK: &str = "analog.attack";
+const ANALOG_DECAY: &str = "analog.decay";
+const ANALOG_SUSTAIN: &str = "analog.sustain";
+const ANALOG_RELEASE: &str = "analog.release";
+const ANALOG_SAW_MIX: &str = "analog.saw_mix";
+const ANALOG_SQUARE_MIX: &str = "analog.square_mix";
+const ANALOG_CUTOFF: &str = "analog.cutoff";
+
+#[derive(Debug, Clone)]
+pub struct AnalogSynth {
+    sample_rate: f32,
+    phase: f32,
+    frequency: f32,
+    velocity: f32,
+    filter_state: f32,
+    envelope: AdsrEnvelope,
+    parameters: ParameterSet,
+}
+
+impl Default for AnalogSynth {
+    fn default() -> Self {
+        let parameters = ParameterSet::new(analog_layout());
+        let mut synth = Self {
+            sample_rate: 44_100.0,
+            phase: 0.0,
+            frequency: 220.0,
+            velocity: 0.0,
+            filter_state: 0.0,
+            envelope: AdsrEnvelope::default(),
+            parameters,
+        };
+        synth.sync_envelope();
+        synth
+    }
+}
+
+impl AnalogSynth {
+    fn sync_envelope(&mut self) {
+        let attack = self
+            .parameters
+            .get(&ParameterId::from(ANALOG_ATTACK))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.01);
+        let decay = self
+            .parameters
+            .get(&ParameterId::from(ANALOG_DECAY))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.2);
+        let sustain = self
+            .parameters
+            .get(&ParameterId::from(ANALOG_SUSTAIN))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.7);
+        let release = self
+            .parameters
+            .get(&ParameterId::from(ANALOG_RELEASE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.3);
+        self.envelope.set_params(attack, decay, sustain, release);
+    }
+
+    fn render_sample(&mut self) -> f32 {
+        let level = self
+            .parameters
+            .get(&ParameterId::from(ANALOG_LEVEL))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.7);
+        let saw_mix = self
+            .parameters
+            .get(&ParameterId::from(ANALOG_SAW_MIX))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.7);
+        let square_mix = self
+            .parameters
+            .get(&ParameterId::from(ANALOG_SQUARE_MIX))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.3);
+        let cutoff = self
+            .parameters
+            .get(&ParameterId::from(ANALOG_CUTOFF))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(2_000.0);
+
+        let increment = 2.0 * PI * self.frequency / self.sample_rate;
+        self.phase = (self.phase + increment).rem_euclid(2.0 * PI);
+        let saw = 1.0 - (self.phase / PI);
+        let square = if self.phase < PI { 1.0 } else { -1.0 };
+        let mix = saw * saw_mix + square * square_mix;
+
+        let cutoff_norm = (2.0 * PI * cutoff / self.sample_rate).clamp(0.0, 0.99);
+        self.filter_state += cutoff_norm * (mix - self.filter_state);
+        let env = self.envelope.next();
+        if !self.envelope.is_active() {
+            self.velocity = 0.0;
+        }
+        self.filter_state * env * self.velocity * level
+    }
+}
+
+impl AudioProcessor for AnalogSynth {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.analog", "Analog Synth", "Harmoniq Labs").with_description(
+            "Basic subtractive synthesizer with ADSR envelope and single pole filter",
+        )
+    }
+
+    fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
+        self.sample_rate = config.sample_rate;
+        self.envelope.set_sample_rate(config.sample_rate);
+        Ok(())
+    }
+
+    fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
+        if self.velocity == 0.0 {
+            buffer.clear();
+            return Ok(());
+        }
+        fill_buffer(buffer, || self.render_sample());
+        Ok(())
+    }
+
+    fn supports_layout(&self, layout: ChannelLayout) -> bool {
+        matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
+    }
+}
+
+impl MidiProcessor for AnalogSynth {
+    fn process_midi(&mut self, events: &[MidiEvent]) -> anyhow::Result<()> {
+        for event in events {
+            match event {
+                MidiEvent::NoteOn { note, velocity, .. } => {
+                    self.frequency = midi_note_to_freq(*note);
+                    self.velocity = *velocity as f32 / 127.0;
+                    self.envelope.trigger();
+                }
+                MidiEvent::NoteOff { .. } => {
+                    self.envelope.release();
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+impl NativePlugin for AnalogSynth {
+    fn parameters(&self) -> &ParameterSet {
+        &self.parameters
+    }
+
+    fn parameters_mut(&mut self) -> &mut ParameterSet {
+        &mut self.parameters
+    }
+
+    fn on_parameter_changed(
+        &mut self,
+        id: &ParameterId,
+        value: &ParameterValue,
+    ) -> Result<(), PluginParameterError> {
+        match id.as_str() {
+            ANALOG_ATTACK | ANALOG_DECAY | ANALOG_SUSTAIN | ANALOG_RELEASE => {
+                self.sync_envelope();
+            }
+            ANALOG_LEVEL | ANALOG_SAW_MIX | ANALOG_SQUARE_MIX | ANALOG_CUTOFF => {
+                let _ = value;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+fn analog_layout() -> ParameterLayout {
+    ParameterLayout::new(vec![
+        ParameterDefinition::new(
+            ANALOG_LEVEL,
+            "Level",
+            ParameterKind::continuous(0.0..=1.0, 0.7),
+        ),
+        ParameterDefinition::new(
+            ANALOG_ATTACK,
+            "Attack",
+            ParameterKind::continuous(0.001..=2.0, 0.01),
+        ),
+        ParameterDefinition::new(
+            ANALOG_DECAY,
+            "Decay",
+            ParameterKind::continuous(0.01..=3.0, 0.2),
+        ),
+        ParameterDefinition::new(
+            ANALOG_SUSTAIN,
+            "Sustain",
+            ParameterKind::continuous(0.0..=1.0, 0.7),
+        ),
+        ParameterDefinition::new(
+            ANALOG_RELEASE,
+            "Release",
+            ParameterKind::continuous(0.01..=4.0, 0.3),
+        ),
+        ParameterDefinition::new(
+            ANALOG_SAW_MIX,
+            "Saw Mix",
+            ParameterKind::continuous(0.0..=1.0, 0.7),
+        ),
+        ParameterDefinition::new(
+            ANALOG_SQUARE_MIX,
+            "Square Mix",
+            ParameterKind::continuous(0.0..=1.0, 0.3),
+        ),
+        ParameterDefinition::new(
+            ANALOG_CUTOFF,
+            "Cutoff",
+            ParameterKind::continuous(80.0..=6_000.0, 2_000.0),
+        )
+        .with_unit("Hz"),
+    ])
+}
+
+pub struct AnalogSynthFactory;
+
+impl PluginFactory for AnalogSynthFactory {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.analog", "Analog Synth", "Harmoniq Labs")
+            .with_description("Basic subtractive synthesizer")
+    }
+
+    fn parameter_layout(&self) -> std::sync::Arc<ParameterLayout> {
+        std::sync::Arc::new(analog_layout())
+    }
+
+    fn create(&self) -> Box<dyn NativePlugin> {
+        Box::new(AnalogSynth::default())
+    }
+}
+
+// --- FM Synth ----------------------------------------------------------------------------
+
+const FM_LEVEL: &str = "fm.level";
+const FM_ATTACK: &str = "fm.attack";
+const FM_DECAY: &str = "fm.decay";
+const FM_SUSTAIN: &str = "fm.sustain";
+const FM_RELEASE: &str = "fm.release";
+const FM_MOD_RATIO: &str = "fm.mod_ratio";
+const FM_MOD_INDEX: &str = "fm.mod_index";
+
+#[derive(Debug, Clone)]
+pub struct FmSynth {
+    sample_rate: f32,
+    carrier_phase: f32,
+    modulator_phase: f32,
+    frequency: f32,
+    velocity: f32,
+    envelope: AdsrEnvelope,
+    parameters: ParameterSet,
+}
+
+impl Default for FmSynth {
+    fn default() -> Self {
+        let parameters = ParameterSet::new(fm_layout());
+        let mut synth = Self {
+            sample_rate: 44_100.0,
+            carrier_phase: 0.0,
+            modulator_phase: 0.0,
+            frequency: 220.0,
+            velocity: 0.0,
+            envelope: AdsrEnvelope::default(),
+            parameters,
+        };
+        synth.sync_envelope();
+        synth
+    }
+}
+
+impl FmSynth {
+    fn sync_envelope(&mut self) {
+        let attack = self
+            .parameters
+            .get(&ParameterId::from(FM_ATTACK))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.02);
+        let decay = self
+            .parameters
+            .get(&ParameterId::from(FM_DECAY))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.2);
+        let sustain = self
+            .parameters
+            .get(&ParameterId::from(FM_SUSTAIN))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.6);
+        let release = self
+            .parameters
+            .get(&ParameterId::from(FM_RELEASE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.3);
+        self.envelope.set_params(attack, decay, sustain, release);
+    }
+
+    fn render_sample(&mut self) -> f32 {
+        let level = self
+            .parameters
+            .get(&ParameterId::from(FM_LEVEL))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.8);
+        let ratio = self
+            .parameters
+            .get(&ParameterId::from(FM_MOD_RATIO))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(2.0);
+        let index = self
+            .parameters
+            .get(&ParameterId::from(FM_MOD_INDEX))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(1.5);
+
+        let mod_increment = 2.0 * PI * self.frequency * ratio / self.sample_rate;
+        self.modulator_phase = (self.modulator_phase + mod_increment).rem_euclid(2.0 * PI);
+        let modulator = (self.modulator_phase).sin();
+
+        let carrier_increment = 2.0 * PI * self.frequency / self.sample_rate;
+        let instantaneous_phase = self.carrier_phase + modulator * index;
+        let sample = instantaneous_phase.sin();
+        self.carrier_phase = (self.carrier_phase + carrier_increment).rem_euclid(2.0 * PI);
+        let env = self.envelope.next();
+        if !self.envelope.is_active() {
+            self.velocity = 0.0;
+        }
+        sample * env * self.velocity * level
+    }
+}
+
+impl AudioProcessor for FmSynth {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.fm", "FM Synth", "Harmoniq Labs")
+            .with_description("Two-operator FM synthesizer")
+    }
+
+    fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
+        self.sample_rate = config.sample_rate;
+        self.envelope.set_sample_rate(config.sample_rate);
+        Ok(())
+    }
+
+    fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
+        if self.velocity == 0.0 {
+            buffer.clear();
+            return Ok(());
+        }
+        fill_buffer(buffer, || self.render_sample());
+        Ok(())
+    }
+
+    fn supports_layout(&self, layout: ChannelLayout) -> bool {
+        matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
+    }
+}
+
+impl MidiProcessor for FmSynth {
+    fn process_midi(&mut self, events: &[MidiEvent]) -> anyhow::Result<()> {
+        for event in events {
+            match event {
+                MidiEvent::NoteOn { note, velocity, .. } => {
+                    self.frequency = midi_note_to_freq(*note);
+                    self.velocity = *velocity as f32 / 127.0;
+                    self.envelope.trigger();
+                }
+                MidiEvent::NoteOff { .. } => {
+                    self.envelope.release();
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+impl NativePlugin for FmSynth {
+    fn parameters(&self) -> &ParameterSet {
+        &self.parameters
+    }
+
+    fn parameters_mut(&mut self) -> &mut ParameterSet {
+        &mut self.parameters
+    }
+
+    fn on_parameter_changed(
+        &mut self,
+        id: &ParameterId,
+        _value: &ParameterValue,
+    ) -> Result<(), PluginParameterError> {
+        if matches!(id.as_str(), FM_ATTACK | FM_DECAY | FM_SUSTAIN | FM_RELEASE) {
+            self.sync_envelope();
+        }
+        Ok(())
+    }
+}
+
+fn fm_layout() -> ParameterLayout {
+    ParameterLayout::new(vec![
+        ParameterDefinition::new(FM_LEVEL, "Level", ParameterKind::continuous(0.0..=1.0, 0.8)),
+        ParameterDefinition::new(
+            FM_ATTACK,
+            "Attack",
+            ParameterKind::continuous(0.001..=2.0, 0.02),
+        ),
+        ParameterDefinition::new(
+            FM_DECAY,
+            "Decay",
+            ParameterKind::continuous(0.01..=3.0, 0.2),
+        ),
+        ParameterDefinition::new(
+            FM_SUSTAIN,
+            "Sustain",
+            ParameterKind::continuous(0.0..=1.0, 0.6),
+        ),
+        ParameterDefinition::new(
+            FM_RELEASE,
+            "Release",
+            ParameterKind::continuous(0.01..=4.0, 0.3),
+        ),
+        ParameterDefinition::new(
+            FM_MOD_RATIO,
+            "Mod Ratio",
+            ParameterKind::continuous(0.25..=8.0, 2.0),
+        ),
+        ParameterDefinition::new(
+            FM_MOD_INDEX,
+            "Mod Index",
+            ParameterKind::continuous(0.0..=10.0, 1.5),
+        ),
+    ])
+}
+
+pub struct FmSynthFactory;
+
+impl PluginFactory for FmSynthFactory {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.fm", "FM Synth", "Harmoniq Labs")
+            .with_description("Two-operator FM synthesizer")
+    }
+
+    fn parameter_layout(&self) -> std::sync::Arc<ParameterLayout> {
+        std::sync::Arc::new(fm_layout())
+    }
+
+    fn create(&self) -> Box<dyn NativePlugin> {
+        Box::new(FmSynth::default())
+    }
+}
+
+// --- Wavetable Synth ---------------------------------------------------------------------
+
+const WT_LEVEL: &str = "wt.level";
+const WT_ATTACK: &str = "wt.attack";
+const WT_RELEASE: &str = "wt.release";
+const WT_TABLE: &str = "wt.table";
+
+#[derive(Debug, Clone)]
+struct Wavetable {
+    _name: &'static str,
+    data: Vec<f32>,
+}
+
+fn create_wavetable(name: &'static str, size: usize, generator: impl Fn(f32) -> f32) -> Wavetable {
+    let mut data = Vec::with_capacity(size);
+    for i in 0..size {
+        let phase = i as f32 / size as f32;
+        data.push(generator(phase));
+    }
+    Wavetable { _name: name, data }
+}
+
+#[derive(Debug, Clone)]
+pub struct WavetableSynth {
+    sample_rate: f32,
+    phase: f32,
+    frequency: f32,
+    velocity: f32,
+    envelope: AdsrEnvelope,
+    tables: Vec<Wavetable>,
+    parameters: ParameterSet,
+}
+
+impl Default for WavetableSynth {
+    fn default() -> Self {
+        let parameters = ParameterSet::new(wavetable_layout());
+        let tables = vec![
+            create_wavetable("Sine", 2048, |p| (2.0 * PI * p).sin()),
+            create_wavetable("Saw", 2048, |p| 2.0 * p - 1.0),
+            create_wavetable("Square", 2048, |p| if p < 0.5 { 1.0 } else { -1.0 }),
+            create_wavetable("Triangle", 2048, |p| {
+                2.0 * (2.0 * (p - (0.5 + p).floor())).abs() - 1.0
+            }),
+        ];
+        let mut synth = Self {
+            sample_rate: 44_100.0,
+            phase: 0.0,
+            frequency: 220.0,
+            velocity: 0.0,
+            envelope: AdsrEnvelope::default(),
+            tables,
+            parameters,
+        };
+        synth.sync_envelope();
+        synth
+    }
+}
+
+impl WavetableSynth {
+    fn sync_envelope(&mut self) {
+        let attack = self
+            .parameters
+            .get(&ParameterId::from(WT_ATTACK))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.01);
+        let release = self
+            .parameters
+            .get(&ParameterId::from(WT_RELEASE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.5);
+        self.envelope.set_params(attack, 0.01, 1.0, release);
+    }
+
+    fn render_sample(&mut self) -> f32 {
+        let level = self
+            .parameters
+            .get(&ParameterId::from(WT_LEVEL))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.8);
+        let table_index = self
+            .parameters
+            .get(&ParameterId::from(WT_TABLE))
+            .and_then(ParameterValue::as_choice)
+            .unwrap_or(0)
+            .min(self.tables.len().saturating_sub(1));
+        let table = &self.tables[table_index];
+        let phase_inc = self.frequency / self.sample_rate;
+        self.phase = (self.phase + phase_inc).fract();
+        let position = self.phase * table.data.len() as f32;
+        let idx = position.floor() as usize;
+        let frac = position - idx as f32;
+        let next_idx = (idx + 1) % table.data.len();
+        let sample = table.data[idx] * (1.0 - frac) + table.data[next_idx] * frac;
+        let env = self.envelope.next();
+        if !self.envelope.is_active() {
+            self.velocity = 0.0;
+        }
+        sample * env * self.velocity * level
+    }
+}
+
+impl AudioProcessor for WavetableSynth {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.wavetable", "Wavetable Synth", "Harmoniq Labs")
+            .with_description("Table driven synthesizer with morphing")
+    }
+
+    fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
+        self.sample_rate = config.sample_rate;
+        self.envelope.set_sample_rate(config.sample_rate);
+        Ok(())
+    }
+
+    fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
+        if self.velocity == 0.0 {
+            buffer.clear();
+            return Ok(());
+        }
+        fill_buffer(buffer, || self.render_sample());
+        Ok(())
+    }
+
+    fn supports_layout(&self, layout: ChannelLayout) -> bool {
+        matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
+    }
+}
+
+impl MidiProcessor for WavetableSynth {
+    fn process_midi(&mut self, events: &[MidiEvent]) -> anyhow::Result<()> {
+        for event in events {
+            match event {
+                MidiEvent::NoteOn { note, velocity, .. } => {
+                    self.frequency = midi_note_to_freq(*note);
+                    self.velocity = *velocity as f32 / 127.0;
+                    self.envelope.trigger();
+                }
+                MidiEvent::NoteOff { .. } => {
+                    self.envelope.release();
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+impl NativePlugin for WavetableSynth {
+    fn parameters(&self) -> &ParameterSet {
+        &self.parameters
+    }
+
+    fn parameters_mut(&mut self) -> &mut ParameterSet {
+        &mut self.parameters
+    }
+
+    fn on_parameter_changed(
+        &mut self,
+        id: &ParameterId,
+        _value: &ParameterValue,
+    ) -> Result<(), PluginParameterError> {
+        if matches!(id.as_str(), WT_ATTACK | WT_RELEASE) {
+            self.sync_envelope();
+        }
+        Ok(())
+    }
+}
+
+fn wavetable_layout() -> ParameterLayout {
+    let options = vec![
+        "Sine".to_string(),
+        "Saw".to_string(),
+        "Square".to_string(),
+        "Triangle".to_string(),
+    ];
+    ParameterLayout::new(vec![
+        ParameterDefinition::new(WT_LEVEL, "Level", ParameterKind::continuous(0.0..=1.0, 0.8)),
+        ParameterDefinition::new(
+            WT_ATTACK,
+            "Attack",
+            ParameterKind::continuous(0.001..=2.0, 0.01),
+        ),
+        ParameterDefinition::new(
+            WT_RELEASE,
+            "Release",
+            ParameterKind::continuous(0.01..=4.0, 0.5),
+        ),
+        ParameterDefinition::new(
+            WT_TABLE,
+            "Table",
+            ParameterKind::Choice {
+                options,
+                default: 0,
+            },
+        ),
+    ])
+}
+
+pub struct WavetableSynthFactory;
+
+impl PluginFactory for WavetableSynthFactory {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.wavetable", "Wavetable Synth", "Harmoniq Labs")
+    }
+
+    fn parameter_layout(&self) -> std::sync::Arc<ParameterLayout> {
+        std::sync::Arc::new(wavetable_layout())
+    }
+
+    fn create(&self) -> Box<dyn NativePlugin> {
+        Box::new(WavetableSynth::default())
+    }
+}
+
+// --- Sample Loading ----------------------------------------------------------------------
+
+#[derive(Debug, Clone, Default)]
+pub struct SampleBuffer {
+    sample_rate: u32,
+    channels: Vec<Vec<f32>>,
+}
+
+impl SampleBuffer {
+    pub fn new(sample_rate: u32, channel_count: usize) -> Self {
+        Self {
+            sample_rate,
+            channels: vec![Vec::new(); channel_count],
+        }
+    }
+
+    pub fn channel_count(&self) -> usize {
+        self.channels.len()
+    }
+
+    pub fn len(&self) -> usize {
+        self.channels.iter().map(|c| c.len()).max().unwrap_or(0)
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.channels.iter().all(|c| c.is_empty())
+    }
+
+    pub fn mixed_sample(&self, index: usize) -> f32 {
+        let mut total = 0.0;
+        let mut count = 0;
+        for channel in &self.channels {
+            if let Some(sample) = channel.get(index) {
+                total += *sample;
+                count += 1;
+            }
+        }
+        if count == 0 {
+            0.0
+        } else {
+            (total / count as f32).clamp(-1.0, 1.0)
+        }
+    }
+
+    fn append_interleaved(&mut self, data: &[f32], source_channels: usize) {
+        if source_channels == 0 {
+            return;
+        }
+        let channels = source_channels.min(MAX_CHANNELS);
+        self.ensure_channels_by_count(channels);
+        for frame in data.chunks(source_channels) {
+            for ch in 0..channels {
+                if let Some(sample) = frame.get(ch) {
+                    self.channels[ch].push(sample.clamp(-1.0, 1.0));
+                }
+            }
+        }
+    }
+
+    fn ensure_channels(&mut self, spec: SignalSpec) {
+        let count = spec.channels.count().min(MAX_CHANNELS);
+        self.ensure_channels_by_count(count);
+    }
+
+    fn ensure_channels_by_count(&mut self, count: usize) {
+        if self.channels.len() < count {
+            self.channels.resize(count, Vec::new());
+        }
+    }
+}
+
+pub fn load_sample_from_file(path: impl AsRef<Path>) -> anyhow::Result<SampleBuffer> {
+    use std::fs::File;
+
+    let path_ref = path.as_ref();
+    let file = File::open(path_ref).with_context(|| format!("failed to open {:?}", path_ref))?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path_ref.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|err| anyhow!("failed to probe {:?}: {}", path_ref, err))?;
+
+    let mut format = probed.format;
+    let track = format
+        .default_track()
+        .ok_or_else(|| anyhow!("no default track for {:?}", path_ref))?;
+
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .map_err(|err| anyhow!("failed to create decoder: {}", err))?;
+
+    let mut sample_buffer = SampleBuffer::new(
+        track
+            .codec_params
+            .sample_rate
+            .ok_or_else(|| anyhow!("missing sample rate"))?,
+        track
+            .codec_params
+            .channels
+            .map(|c| c.count())
+            .unwrap_or(1)
+            .min(MAX_CHANNELS),
+    );
+    let mut scratch: Option<SymphoniaSampleBuffer<f32>> = None;
+
+    loop {
+        match format.next_packet() {
+            Ok(packet) => match decoder.decode(&packet) {
+                Ok(decoded) => {
+                    let spec = *decoded.spec();
+                    let channels = spec.channels.count();
+                    if scratch.is_none() {
+                        scratch = Some(SymphoniaSampleBuffer::<f32>::new(
+                            decoded.capacity() as u64,
+                            spec,
+                        ));
+                    }
+                    if let Some(buf) = scratch.as_mut() {
+                        buf.copy_interleaved_ref(decoded);
+                        sample_buffer.ensure_channels(spec);
+                        sample_buffer.append_interleaved(buf.samples(), channels);
+                    }
+                }
+                Err(SymphoniaError::IoError(err))
+                    if err.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    break;
+                }
+                Err(SymphoniaError::DecodeError(_)) => {
+                    decoder.reset();
+                }
+                Err(err) => return Err(anyhow!("decode error: {}", err)),
+            },
+            Err(SymphoniaError::IoError(err))
+                if err.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break;
+            }
+            Err(SymphoniaError::ResetRequired) => {
+                decoder.reset();
+            }
+            Err(err) => return Err(anyhow!("format error: {}", err)),
+        }
+    }
+
+    Ok(sample_buffer)
+}
+
+// --- Sampler / Drum Machine --------------------------------------------------------------
+
+const SAMPLER_LEVEL: &str = "sampler.level";
+const SAMPLER_START: &str = "sampler.start";
+
+#[derive(Debug, Clone)]
+pub struct Sampler {
+    sample_rate: f32,
+    position: usize,
+    active: bool,
+    sample: SampleBuffer,
+    parameters: ParameterSet,
+}
+
+impl Default for Sampler {
+    fn default() -> Self {
+        Self {
+            sample_rate: 44_100.0,
+            position: 0,
+            active: false,
+            sample: SampleBuffer::default(),
+            parameters: ParameterSet::new(sampler_layout()),
+        }
+    }
+}
+
+impl Sampler {
+    pub fn load_sample(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+        self.sample = load_sample_from_file(path)?;
+        Ok(())
+    }
+
+    fn render_sample(&mut self) -> f32 {
+        if !self.active || self.sample.is_empty() {
+            return 0.0;
+        }
+        let start_offset = self
+            .parameters
+            .get(&ParameterId::from(SAMPLER_START))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.0)
+            * self.sample.len() as f32;
+        let start = start_offset as usize;
+        if self.position + start >= self.sample.len() {
+            self.active = false;
+            self.position = 0;
+            return 0.0;
+        }
+        let level = self
+            .parameters
+            .get(&ParameterId::from(SAMPLER_LEVEL))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(1.0);
+        let value = self.sample.mixed_sample(self.position + start);
+        self.position += 1;
+        value * level
+    }
+}
+
+impl AudioProcessor for Sampler {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.sampler", "Sampler", "Harmoniq Labs")
+            .with_description("Single shot sample player with WAV/MP3/FLAC support")
+    }
+
+    fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
+        self.sample_rate = config.sample_rate;
+        Ok(())
+    }
+
+    fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
+        fill_buffer(buffer, || self.render_sample());
+        Ok(())
+    }
+
+    fn supports_layout(&self, layout: ChannelLayout) -> bool {
+        matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
+    }
+}
+
+impl MidiProcessor for Sampler {
+    fn process_midi(&mut self, events: &[MidiEvent]) -> anyhow::Result<()> {
+        for event in events {
+            if let MidiEvent::NoteOn { velocity, .. } = event {
+                if *velocity > 0 {
+                    self.position = 0;
+                    self.active = true;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl NativePlugin for Sampler {
+    fn parameters(&self) -> &ParameterSet {
+        &self.parameters
+    }
+
+    fn parameters_mut(&mut self) -> &mut ParameterSet {
+        &mut self.parameters
+    }
+}
+
+fn sampler_layout() -> ParameterLayout {
+    ParameterLayout::new(vec![
+        ParameterDefinition::new(
+            SAMPLER_LEVEL,
+            "Level",
+            ParameterKind::continuous(0.0..=2.0, 1.0),
+        ),
+        ParameterDefinition::new(
+            SAMPLER_START,
+            "Start Offset",
+            ParameterKind::continuous(0.0..=0.9, 0.0),
+        ),
+    ])
+}
+
+pub struct SamplerFactory;
+
+impl PluginFactory for SamplerFactory {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.sampler", "Sampler", "Harmoniq Labs")
+    }
+
+    fn parameter_layout(&self) -> std::sync::Arc<ParameterLayout> {
+        std::sync::Arc::new(sampler_layout())
+    }
+
+    fn create(&self) -> Box<dyn NativePlugin> {
+        Box::new(Sampler::default())
+    }
+}
+
+// --- Granular Synth ----------------------------------------------------------------------
+
+const GRANULAR_LEVEL: &str = "granular.level";
+const GRANULAR_GRAIN: &str = "granular.grain";
+const GRANULAR_DENSITY: &str = "granular.density";
+
+#[derive(Debug, Clone)]
+pub struct GranularSynth {
+    sample_rate: f32,
+    sample: SampleBuffer,
+    active_grains: Vec<Grain>,
+    parameters: ParameterSet,
+    rng: rand::rngs::StdRng,
+}
+
+#[derive(Debug, Clone)]
+struct Grain {
+    start: usize,
+    elapsed: usize,
+    duration: usize,
+    gain: f32,
+}
+
+impl Default for GranularSynth {
+    fn default() -> Self {
+        Self {
+            sample_rate: 44_100.0,
+            sample: SampleBuffer::default(),
+            active_grains: Vec::new(),
+            parameters: ParameterSet::new(granular_layout()),
+            rng: rand::rngs::StdRng::from_entropy(),
+        }
+    }
+}
+
+impl GranularSynth {
+    pub fn load_sample(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+        self.sample = load_sample_from_file(path)?;
+        Ok(())
+    }
+
+    fn spawn_grain(&mut self) {
+        if self.sample.is_empty() {
+            return;
+        }
+        let grain_size = self
+            .parameters
+            .get(&ParameterId::from(GRANULAR_GRAIN))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.1);
+        let sr = self.sample.sample_rate().max(1) as f32;
+        let length = (grain_size * sr) as usize;
+        if length == 0 {
+            return;
+        }
+        let max_start = self.sample.len().saturating_sub(length).max(1);
+        let start = self.rng.gen_range(0..max_start);
+        self.active_grains.push(Grain {
+            start,
+            elapsed: 0,
+            duration: length,
+            gain: 1.0,
+        });
+    }
+
+    fn process_sample(&mut self) -> f32 {
+        if self.sample.is_empty() {
+            return 0.0;
+        }
+        let mut value = 0.0;
+        let mut i = 0;
+        while i < self.active_grains.len() {
+            let grain = &mut self.active_grains[i];
+            if grain.elapsed >= grain.duration {
+                self.active_grains.swap_remove(i);
+                continue;
+            }
+            let position = grain.start + grain.elapsed;
+            if position >= self.sample.len() {
+                self.active_grains.swap_remove(i);
+                continue;
+            }
+            let sample = self.sample.mixed_sample(position);
+            let progress = grain.elapsed as f32 / grain.duration as f32;
+            let env = 0.5 - 0.5 * (2.0 * PI * progress).cos();
+            value += sample * env * grain.gain;
+            grain.elapsed += 1;
+            i += 1;
+        }
+        value
+    }
+}
+
+impl AudioProcessor for GranularSynth {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.granular", "Granular Synth", "Harmoniq Labs")
+            .with_description("Randomized grain based texture generator")
+    }
+
+    fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
+        self.sample_rate = config.sample_rate;
+        Ok(())
+    }
+
+    fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
+        let density = self
+            .parameters
+            .get(&ParameterId::from(GRANULAR_DENSITY))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.4);
+        let level = self
+            .parameters
+            .get(&ParameterId::from(GRANULAR_LEVEL))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.8);
+        let samples = buffer.len();
+        for frame in 0..samples {
+            if self.rng.gen::<f32>() < density {
+                self.spawn_grain();
+            }
+            let sample = self.process_sample() * level;
+            for channel in buffer.channels_mut() {
+                if let Some(slot) = channel.get_mut(frame) {
+                    *slot = sample;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_layout(&self, layout: ChannelLayout) -> bool {
+        matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
+    }
+}
+
+impl NativePlugin for GranularSynth {
+    fn parameters(&self) -> &ParameterSet {
+        &self.parameters
+    }
+
+    fn parameters_mut(&mut self) -> &mut ParameterSet {
+        &mut self.parameters
+    }
+}
+
+fn granular_layout() -> ParameterLayout {
+    ParameterLayout::new(vec![
+        ParameterDefinition::new(
+            GRANULAR_LEVEL,
+            "Level",
+            ParameterKind::continuous(0.0..=2.0, 0.8),
+        ),
+        ParameterDefinition::new(
+            GRANULAR_GRAIN,
+            "Grain Size",
+            ParameterKind::continuous(0.01..=0.5, 0.1),
+        )
+        .with_unit("s"),
+        ParameterDefinition::new(
+            GRANULAR_DENSITY,
+            "Density",
+            ParameterKind::continuous(0.0..=1.0, 0.4),
+        ),
+    ])
+}
+
+pub struct GranularSynthFactory;
+
+impl PluginFactory for GranularSynthFactory {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.granular", "Granular Synth", "Harmoniq Labs")
+    }
+
+    fn parameter_layout(&self) -> std::sync::Arc<ParameterLayout> {
+        std::sync::Arc::new(granular_layout())
+    }
+
+    fn create(&self) -> Box<dyn NativePlugin> {
+        Box::new(GranularSynth::default())
+    }
+}
+
+// --- Additive Synth ----------------------------------------------------------------------
+
+const ADDITIVE_LEVEL: &str = "additive.level";
+const ADDITIVE_PARTIAL_BASE: &str = "additive.partial";
+
+#[derive(Debug, Clone)]
+pub struct AdditiveSynth {
+    sample_rate: f32,
+    phase: f32,
+    frequency: f32,
+    velocity: f32,
+    parameters: ParameterSet,
+}
+
+impl Default for AdditiveSynth {
+    fn default() -> Self {
+        Self {
+            sample_rate: 44_100.0,
+            phase: 0.0,
+            frequency: 110.0,
+            velocity: 0.0,
+            parameters: ParameterSet::new(additive_layout()),
+        }
+    }
+}
+
+impl AdditiveSynth {
+    fn render_sample(&mut self) -> f32 {
+        let level = self
+            .parameters
+            .get(&ParameterId::from(ADDITIVE_LEVEL))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.8);
+        let mut sample = 0.0;
+        for partial in 1..=8 {
+            let id = ParameterId::new(format!("{ADDITIVE_PARTIAL_BASE}{partial}"));
+            let gain = self
+                .parameters
+                .get(&id)
+                .and_then(ParameterValue::as_continuous)
+                .unwrap_or(0.0);
+            let phase = self.phase * partial as f32;
+            sample += (2.0 * PI * phase).sin() * gain;
+        }
+        self.phase = (self.phase + self.frequency / self.sample_rate).fract();
+        sample * level * self.velocity
+    }
+}
+
+impl AudioProcessor for AdditiveSynth {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.additive", "Additive Synth", "Harmoniq Labs")
+            .with_description("8 partial harmonic resynthesis engine")
+    }
+
+    fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
+        self.sample_rate = config.sample_rate;
+        Ok(())
+    }
+
+    fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
+        if self.velocity == 0.0 {
+            buffer.clear();
+            return Ok(());
+        }
+        fill_buffer(buffer, || self.render_sample());
+        Ok(())
+    }
+
+    fn supports_layout(&self, layout: ChannelLayout) -> bool {
+        matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
+    }
+}
+
+impl MidiProcessor for AdditiveSynth {
+    fn process_midi(&mut self, events: &[MidiEvent]) -> anyhow::Result<()> {
+        for event in events {
+            match event {
+                MidiEvent::NoteOn { note, velocity, .. } => {
+                    self.frequency = midi_note_to_freq(*note);
+                    self.velocity = *velocity as f32 / 127.0;
+                }
+                MidiEvent::NoteOff { .. } => {
+                    self.velocity = 0.0;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+impl NativePlugin for AdditiveSynth {
+    fn parameters(&self) -> &ParameterSet {
+        &self.parameters
+    }
+
+    fn parameters_mut(&mut self) -> &mut ParameterSet {
+        &mut self.parameters
+    }
+}
+
+fn additive_layout() -> ParameterLayout {
+    let mut params = vec![ParameterDefinition::new(
+        ADDITIVE_LEVEL,
+        "Level",
+        ParameterKind::continuous(0.0..=1.5, 0.8),
+    )];
+    for partial in 1..=8 {
+        params.push(ParameterDefinition::new(
+            ParameterId::new(format!("{ADDITIVE_PARTIAL_BASE}{partial}")),
+            format!("Partial {partial}"),
+            ParameterKind::continuous(0.0..=1.0, if partial == 1 { 1.0 } else { 0.0 }),
+        ));
+    }
+    ParameterLayout::new(params)
+}
+
+pub struct AdditiveSynthFactory;
+
+impl PluginFactory for AdditiveSynthFactory {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.additive", "Additive Synth", "Harmoniq Labs")
+    }
+
+    fn parameter_layout(&self) -> std::sync::Arc<ParameterLayout> {
+        std::sync::Arc::new(additive_layout())
+    }
+
+    fn create(&self) -> Box<dyn NativePlugin> {
+        Box::new(AdditiveSynth::default())
+    }
+}
+
+// --- Organ / Piano Engine ----------------------------------------------------------------
+
+const OP_LEVEL: &str = "op.level";
+const OP_MODE: &str = "op.mode";
+const OP_ATTACK: &str = "op.attack";
+const OP_RELEASE: &str = "op.release";
+
+#[derive(Debug, Clone)]
+pub struct OrganPianoEngine {
+    sample_rate: f32,
+    phase: f32,
+    frequency: f32,
+    velocity: f32,
+    envelope: AdsrEnvelope,
+    parameters: ParameterSet,
+}
+
+impl Default for OrganPianoEngine {
+    fn default() -> Self {
+        let mut envelope = AdsrEnvelope::default();
+        envelope.set_params(0.01, 0.1, 0.8, 0.3);
+        Self {
+            sample_rate: 44_100.0,
+            phase: 0.0,
+            frequency: 110.0,
+            velocity: 0.0,
+            envelope,
+            parameters: ParameterSet::new(organ_piano_layout()),
+        }
+    }
+}
+
+impl OrganPianoEngine {
+    fn render_sample(&mut self) -> f32 {
+        let level = self
+            .parameters
+            .get(&ParameterId::from(OP_LEVEL))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.8);
+        let mode = self
+            .parameters
+            .get(&ParameterId::from(OP_MODE))
+            .and_then(ParameterValue::as_choice)
+            .unwrap_or(0);
+        let mut sample = 0.0;
+        if mode == 0 {
+            // Organ drawbar style.
+            for harmonic in [1.0, 2.0, 3.0, 4.0, 5.0, 6.0].iter() {
+                sample += (2.0 * PI * self.phase * harmonic).sin() / harmonic;
+            }
+        } else {
+            // Simple piano like tone using damped sine with slight inharmonicity.
+            let mut sum = 0.0;
+            for n in 1..=4 {
+                let freq = self.frequency * (n as f32 * 1.01);
+                sum += (2.0 * PI * self.phase * freq / self.frequency).sin() / n as f32;
+            }
+            sample = sum;
+        }
+        self.phase = (self.phase + self.frequency / self.sample_rate).fract();
+        let env = self.envelope.next();
+        if !self.envelope.is_active() {
+            self.velocity = 0.0;
+        }
+        sample * env * self.velocity * level
+    }
+}
+
+impl AudioProcessor for OrganPianoEngine {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.organ_piano", "Organ/Piano", "Harmoniq Labs")
+            .with_description("Hybrid organ and piano engine")
+    }
+
+    fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
+        self.sample_rate = config.sample_rate;
+        self.envelope.set_sample_rate(config.sample_rate);
+        Ok(())
+    }
+
+    fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
+        if self.velocity == 0.0 {
+            buffer.clear();
+            return Ok(());
+        }
+        fill_buffer(buffer, || self.render_sample());
+        Ok(())
+    }
+
+    fn supports_layout(&self, layout: ChannelLayout) -> bool {
+        matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
+    }
+}
+
+impl MidiProcessor for OrganPianoEngine {
+    fn process_midi(&mut self, events: &[MidiEvent]) -> anyhow::Result<()> {
+        for event in events {
+            match event {
+                MidiEvent::NoteOn { note, velocity, .. } => {
+                    self.frequency = midi_note_to_freq(*note);
+                    self.velocity = *velocity as f32 / 127.0;
+                    self.envelope.trigger();
+                }
+                MidiEvent::NoteOff { .. } => {
+                    self.envelope.release();
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+impl NativePlugin for OrganPianoEngine {
+    fn parameters(&self) -> &ParameterSet {
+        &self.parameters
+    }
+
+    fn parameters_mut(&mut self) -> &mut ParameterSet {
+        &mut self.parameters
+    }
+
+    fn on_parameter_changed(
+        &mut self,
+        id: &ParameterId,
+        _value: &ParameterValue,
+    ) -> Result<(), PluginParameterError> {
+        if matches!(id.as_str(), OP_ATTACK | OP_RELEASE) {
+            let attack = self
+                .parameters
+                .get(&ParameterId::from(OP_ATTACK))
+                .and_then(ParameterValue::as_continuous)
+                .unwrap_or(0.01);
+            let release = self
+                .parameters
+                .get(&ParameterId::from(OP_RELEASE))
+                .and_then(ParameterValue::as_continuous)
+                .unwrap_or(0.3);
+            self.envelope.set_params(attack, 0.1, 0.8, release);
+        }
+        Ok(())
+    }
+}
+
+fn organ_piano_layout() -> ParameterLayout {
+    ParameterLayout::new(vec![
+        ParameterDefinition::new(OP_LEVEL, "Level", ParameterKind::continuous(0.0..=1.5, 0.8)),
+        ParameterDefinition::new(
+            OP_MODE,
+            "Mode",
+            ParameterKind::Choice {
+                options: vec!["Organ".into(), "Piano".into()],
+                default: 0,
+            },
+        ),
+        ParameterDefinition::new(
+            OP_ATTACK,
+            "Attack",
+            ParameterKind::continuous(0.001..=0.5, 0.01),
+        ),
+        ParameterDefinition::new(
+            OP_RELEASE,
+            "Release",
+            ParameterKind::continuous(0.05..=2.0, 0.4),
+        ),
+    ])
+}
+
+pub struct OrganPianoFactory;
+
+impl PluginFactory for OrganPianoFactory {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.organ_piano", "Organ/Piano", "Harmoniq Labs")
+    }
+
+    fn parameter_layout(&self) -> std::sync::Arc<ParameterLayout> {
+        std::sync::Arc::new(organ_piano_layout())
+    }
+
+    fn create(&self) -> Box<dyn NativePlugin> {
+        Box::new(OrganPianoEngine::default())
+    }
+}
+
+// --- Bass Synth --------------------------------------------------------------------------
+
+const BASS_LEVEL: &str = "bass.level";
+const BASS_DRIVE: &str = "bass.drive";
+const BASS_FILTER: &str = "bass.filter";
+
+#[derive(Debug, Clone)]
+pub struct BassSynth {
+    sample_rate: f32,
+    phase: f32,
+    frequency: f32,
+    velocity: f32,
+    filter_state: f32,
+    parameters: ParameterSet,
+}
+
+impl Default for BassSynth {
+    fn default() -> Self {
+        Self {
+            sample_rate: 44_100.0,
+            phase: 0.0,
+            frequency: 55.0,
+            velocity: 0.0,
+            filter_state: 0.0,
+            parameters: ParameterSet::new(bass_layout()),
+        }
+    }
+}
+
+impl BassSynth {
+    fn render_sample(&mut self) -> f32 {
+        let level = self
+            .parameters
+            .get(&ParameterId::from(BASS_LEVEL))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.8);
+        let drive = self
+            .parameters
+            .get(&ParameterId::from(BASS_DRIVE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(1.2);
+        let cutoff = self
+            .parameters
+            .get(&ParameterId::from(BASS_FILTER))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(200.0);
+
+        let increment = 2.0 * PI * self.frequency / self.sample_rate;
+        self.phase = (self.phase + increment).rem_euclid(2.0 * PI);
+        let saw = 1.0 - (self.phase / PI);
+        let driven = (saw * drive).tanh();
+        let rc = (2.0 * PI * cutoff / self.sample_rate).clamp(0.0, 0.5);
+        self.filter_state += rc * (driven - self.filter_state);
+        self.filter_state * level * self.velocity
+    }
+}
+
+impl AudioProcessor for BassSynth {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.bass", "Bass Synth", "Harmoniq Labs")
+            .with_description("Monophonic bass synthesizer")
+    }
+
+    fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
+        self.sample_rate = config.sample_rate;
+        Ok(())
+    }
+
+    fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
+        if self.velocity == 0.0 {
+            buffer.clear();
+            return Ok(());
+        }
+        fill_buffer(buffer, || self.render_sample());
+        Ok(())
+    }
+
+    fn supports_layout(&self, layout: ChannelLayout) -> bool {
+        matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
+    }
+}
+
+impl MidiProcessor for BassSynth {
+    fn process_midi(&mut self, events: &[MidiEvent]) -> anyhow::Result<()> {
+        for event in events {
+            match event {
+                MidiEvent::NoteOn { note, velocity, .. } => {
+                    self.frequency = midi_note_to_freq(*note);
+                    self.velocity = *velocity as f32 / 127.0;
+                }
+                MidiEvent::NoteOff { .. } => {
+                    self.velocity = 0.0;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+impl NativePlugin for BassSynth {
+    fn parameters(&self) -> &ParameterSet {
+        &self.parameters
+    }
+
+    fn parameters_mut(&mut self) -> &mut ParameterSet {
+        &mut self.parameters
+    }
+}
+
+fn bass_layout() -> ParameterLayout {
+    ParameterLayout::new(vec![
+        ParameterDefinition::new(
+            BASS_LEVEL,
+            "Level",
+            ParameterKind::continuous(0.0..=1.5, 0.8),
+        ),
+        ParameterDefinition::new(
+            BASS_DRIVE,
+            "Drive",
+            ParameterKind::continuous(0.5..=4.0, 1.2),
+        ),
+        ParameterDefinition::new(
+            BASS_FILTER,
+            "Filter",
+            ParameterKind::continuous(40.0..=1_000.0, 200.0),
+        )
+        .with_unit("Hz"),
+    ])
+}
+
+pub struct BassSynthFactory;
+
+impl PluginFactory for BassSynthFactory {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.bass", "Bass Synth", "Harmoniq Labs")
+    }
+
+    fn parameter_layout(&self) -> std::sync::Arc<ParameterLayout> {
+        std::sync::Arc::new(bass_layout())
+    }
+
+    fn create(&self) -> Box<dyn NativePlugin> {
+        Box::new(BassSynth::default())
+    }
+}

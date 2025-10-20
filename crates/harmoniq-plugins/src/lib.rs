@@ -4,9 +4,16 @@ use harmoniq_plugin_sdk::PluginModule;
 
 pub mod dynamics;
 pub mod generators;
+pub mod instruments;
 
 pub use dynamics::{GainPlugin, GainPluginFactory};
 pub use generators::{NoisePlugin, NoisePluginFactory, SineSynth, SineSynthFactory};
+pub use instruments::{
+    AdditiveSynth, AdditiveSynthFactory, AnalogSynth, AnalogSynthFactory, BassSynth,
+    BassSynthFactory, FmSynth, FmSynthFactory, GranularSynth, GranularSynthFactory,
+    OrganPianoEngine, OrganPianoFactory, Sampler, SamplerFactory, WavetableSynth,
+    WavetableSynthFactory,
+};
 
 /// Returns a [`PluginModule`] containing all built-in Harmoniq processors.
 pub fn builtin_module() -> PluginModule {
@@ -14,6 +21,14 @@ pub fn builtin_module() -> PluginModule {
     module
         .register_factory(Box::new(GainPluginFactory))
         .register_factory(Box::new(SineSynthFactory))
-        .register_factory(Box::new(NoisePluginFactory));
+        .register_factory(Box::new(NoisePluginFactory))
+        .register_factory(Box::new(AnalogSynthFactory))
+        .register_factory(Box::new(FmSynthFactory))
+        .register_factory(Box::new(WavetableSynthFactory))
+        .register_factory(Box::new(SamplerFactory))
+        .register_factory(Box::new(GranularSynthFactory))
+        .register_factory(Box::new(AdditiveSynthFactory))
+        .register_factory(Box::new(OrganPianoFactory))
+        .register_factory(Box::new(BassSynthFactory));
     module
 }

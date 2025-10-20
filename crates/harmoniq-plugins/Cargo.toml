@@ -10,3 +10,4 @@ harmoniq-plugin-sdk = { path = "../harmoniq-plugin-sdk" }
 anyhow.workspace = true
 serde.workspace = true
 rand.workspace = true
+symphonia = { version = "0.5", features = ["wav", "flac", "mp3"] }
