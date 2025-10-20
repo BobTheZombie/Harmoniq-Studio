@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4834d4" />
+      <stop offset="100%" stop-color="#8c7ae6" />
+    </linearGradient>
+    <linearGradient id="wave" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#f5f6fa" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#00a8ff" stop-opacity="0.9" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)" />
+  <g transform="translate(64, 128)" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M0 160 C64 48, 128 48, 192 160 S320 272, 384 160" fill="none" stroke="url(#wave)" stroke-width="32" />
+    <path d="M32 96 L32 224" stroke="#f5f6fa" stroke-width="20" />
+    <path d="M144 32 L144 288" stroke="#f5f6fa" stroke-width="20" />
+    <path d="M256 96 L256 224" stroke="#f5f6fa" stroke-width="20" />
+    <path d="M368 64 L368 256" stroke="#f5f6fa" stroke-width="20" />
+  </g>
+  <text x="256" y="432" text-anchor="middle" font-family="'Montserrat', 'Segoe UI', sans-serif" font-size="72" fill="#f5f6fa" font-weight="600">H</text>
+</svg>

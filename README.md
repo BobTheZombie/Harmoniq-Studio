@@ -42,6 +42,42 @@ compatibility layer so it also works with PipeWire setups. Headless mode
 defaults to realtime streaming but can be disabled with `--disable-audio` for
 offline graph validation.
 
+### Desktop integration (Linux)
+
+Harmoniq Studio ships with a freedesktop-compatible launcher entry and icon in
+`resources/desktop` and `resources/icons`. The launcher starts the application
+in the native UI mode.
+
+1. Build the release binary:
+
+   ```bash
+   cargo build --release -p harmoniq-app
+   ```
+
+2. Install the binary somewhere in your `PATH` (for example `/usr/local/bin`):
+
+   ```bash
+   sudo install -Dm755 target/release/harmoniq-app /usr/local/bin/harmoniq-studio
+   ```
+
+3. Copy the desktop entry and icon to your local data directory:
+
+   ```bash
+   install -Dm644 resources/desktop/harmoniq-studio.desktop \
+     ~/.local/share/applications/harmoniq-studio.desktop
+   install -Dm644 resources/icons/harmoniq-studio.svg \
+     ~/.local/share/icons/hicolor/scalable/apps/harmoniq-studio.svg
+   ```
+
+4. Update the desktop database (optional but recommended):
+
+   ```bash
+   update-desktop-database ~/.local/share/applications
+   ```
+
+You can verify the launcher with `desktop-file-validate` or by searching for
+"Harmoniq Studio" in your desktop environment's application overview.
+
 ## Roadmap highlights
 
 - [ ] Real-time safe command queues for UI ↔ engine communication
