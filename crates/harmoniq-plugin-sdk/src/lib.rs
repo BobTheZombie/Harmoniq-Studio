@@ -36,8 +36,8 @@ pub mod prelude {
 ///
 /// # Example
 ///
-/// ```
-/// use harmoniq_plugin_sdk::{declare_harmoniq_plugins, PluginModule};
+/// ```ignore
+/// use harmoniq_plugin_sdk::{declare_harmoniq_plugins, PluginFactory, PluginModule};
 ///
 /// struct MyFactory;
 ///

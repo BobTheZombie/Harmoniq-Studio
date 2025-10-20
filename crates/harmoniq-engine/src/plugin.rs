@@ -70,6 +70,13 @@ pub trait AudioProcessor: Send + Sync {
     fn supports_layout(&self, layout: ChannelLayout) -> bool {
         matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
     }
+
+    /// Allows processors to consume queued MIDI events. The default
+    /// implementation ignores incoming data which keeps existing
+    /// processors backwards compatible without any additional changes.
+    fn process_midi(&mut self, _events: &[MidiEvent]) -> anyhow::Result<()> {
+        Ok(())
+    }
 }
 
 /// Trait for plugins capable of consuming MIDI events.
