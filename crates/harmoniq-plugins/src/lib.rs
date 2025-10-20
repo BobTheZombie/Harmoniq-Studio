@@ -20,7 +20,7 @@ pub use instruments::{
     AdditiveSynth, AdditiveSynthFactory, AnalogSynth, AnalogSynthFactory, BassSynth,
     BassSynthFactory, FmSynth, FmSynthFactory, GranularSynth, GranularSynthFactory,
     OrganPianoEngine, OrganPianoFactory, Sampler, SamplerFactory, WavetableSynth,
-    WavetableSynthFactory,
+    WavetableSynthFactory, WestCoastLead, WestCoastLeadFactory,
 };
 
 /// Returns a [`PluginModule`] containing all built-in Harmoniq processors.
@@ -38,6 +38,7 @@ pub fn builtin_module() -> PluginModule {
         .register_factory(Box::new(AdditiveSynthFactory))
         .register_factory(Box::new(OrganPianoFactory))
         .register_factory(Box::new(BassSynthFactory))
+        .register_factory(Box::new(WestCoastLeadFactory))
         .register_factory(Box::new(ParametricEqFactory))
         .register_factory(Box::new(CompressorFactory))
         .register_factory(Box::new(LimiterFactory))
