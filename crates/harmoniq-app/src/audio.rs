@@ -1047,7 +1047,10 @@ fn enumerate_linux_devices(
             if let Ok(name) = device.name() {
                 let id = device_identifier_for_backend(backend, host_id, &name);
                 let id_ref = id.as_str();
-                if !devices.iter().any(|info| info.id.as_str() == id_ref) {
+                if !devices
+                    .iter()
+                    .any(|info: &OutputDeviceInfo| info.id.as_str() == id_ref)
+                {
                     devices.push(OutputDeviceInfo { id, label: name });
                 }
             }
@@ -1058,7 +1061,10 @@ fn enumerate_linux_devices(
             if let Ok(name) = default.name() {
                 let id = device_identifier_for_backend(backend, host_id, &name);
                 let id_ref = id.as_str();
-                if !devices.iter().any(|info| info.id.as_str() == id_ref) {
+                if !devices
+                    .iter()
+                    .any(|info: &OutputDeviceInfo| info.id.as_str() == id_ref)
+                {
                     devices.push(OutputDeviceInfo { id, label: name });
                 }
             }
