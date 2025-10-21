@@ -2006,15 +2006,54 @@ const WESTCOAST_SUSTAIN: &str = "westcoast.sustain";
 const WESTCOAST_RELEASE: &str = "westcoast.release";
 const WESTCOAST_VIBRATO_RATE: &str = "westcoast.vibrato_rate";
 const WESTCOAST_VIBRATO_DEPTH: &str = "westcoast.vibrato_depth";
-const WESTCOAST_WARMTH: &str = "westcoast.warmth";
+const WESTCOAST_TIMBRE: &str = "westcoast.timbre";
+const WESTCOAST_TONE: &str = "westcoast.tone";
+const WESTCOAST_TONE_MOD: &str = "westcoast.tone_mod";
+const WESTCOAST_SUB_MIX: &str = "westcoast.sub_mix";
+const WESTCOAST_NOISE_MIX: &str = "westcoast.noise_mix";
+const WESTCOAST_MOD_RATE: &str = "westcoast.mod_rate";
+const WESTCOAST_MOD_DEPTH: &str = "westcoast.mod_depth";
 
 const PITCH_BEND_RANGE: f32 = 2.0;
+
+fn parameter_continuous(parameters: &ParameterSet, id: &str, fallback: f32) -> f32 {
+    parameters
+        .get(&ParameterId::from(id))
+        .and_then(ParameterValue::as_continuous)
+        .unwrap_or(fallback)
+}
+
+fn wavefold(input: f32, amount: f32) -> f32 {
+    if amount <= 0.0001 {
+        return input;
+    }
+
+    let drive = 1.0 + amount * 5.0;
+    let mut sample = input * drive;
+    for _ in 0..4 {
+        if sample > 1.0 {
+            sample = 2.0 - sample;
+        } else if sample < -1.0 {
+            sample = -2.0 - sample;
+        } else {
+            break;
+        }
+    }
+    sample.clamp(-1.0, 1.0)
+}
+
+fn lcg_noise(state: u32) -> f32 {
+    let normalised = state as f32 / u32::MAX as f32;
+    normalised * 2.0 - 1.0
+}
 
 #[derive(Debug, Clone)]
 pub struct WestCoastLead {
     sample_rate: f32,
     phase: f32,
+    sub_phase: f32,
     vibrato_phase: f32,
+    mod_phase: f32,
     current_freq: f32,
     target_freq: f32,
     velocity: f32,
@@ -2022,10 +2061,18 @@ pub struct WestCoastLead {
     glide_time: f32,
     vibrato_rate: f32,
     vibrato_depth: f32,
-    warmth: f32,
+    timbre: f32,
+    tone: f32,
+    tone_mod: f32,
+    sub_mix: f32,
+    noise_mix: f32,
+    mod_rate: f32,
+    mod_depth: f32,
     level: f32,
     extra_vibrato: f32,
     envelope: AdsrEnvelope,
+    filter_state: f32,
+    noise_state: u32,
     active_notes: Vec<(u8, u8)>,
     parameters: ParameterSet,
 }
@@ -2033,30 +2080,23 @@ pub struct WestCoastLead {
 impl Default for WestCoastLead {
     fn default() -> Self {
         let parameters = ParameterSet::new(westcoast_layout());
-        let level = parameters
-            .get(&ParameterId::from(WESTCOAST_LEVEL))
-            .and_then(ParameterValue::as_continuous)
-            .unwrap_or(0.9);
-        let glide_time = parameters
-            .get(&ParameterId::from(WESTCOAST_GLIDE))
-            .and_then(ParameterValue::as_continuous)
-            .unwrap_or(0.12);
-        let vibrato_rate = parameters
-            .get(&ParameterId::from(WESTCOAST_VIBRATO_RATE))
-            .and_then(ParameterValue::as_continuous)
-            .unwrap_or(4.8);
-        let vibrato_depth = parameters
-            .get(&ParameterId::from(WESTCOAST_VIBRATO_DEPTH))
-            .and_then(ParameterValue::as_continuous)
-            .unwrap_or(0.008);
-        let warmth = parameters
-            .get(&ParameterId::from(WESTCOAST_WARMTH))
-            .and_then(ParameterValue::as_continuous)
-            .unwrap_or(0.3);
+        let level = parameter_continuous(&parameters, WESTCOAST_LEVEL, 0.9);
+        let glide_time = parameter_continuous(&parameters, WESTCOAST_GLIDE, 0.12);
+        let vibrato_rate = parameter_continuous(&parameters, WESTCOAST_VIBRATO_RATE, 4.8);
+        let vibrato_depth = parameter_continuous(&parameters, WESTCOAST_VIBRATO_DEPTH, 0.008);
+        let timbre = parameter_continuous(&parameters, WESTCOAST_TIMBRE, 0.45);
+        let tone = parameter_continuous(&parameters, WESTCOAST_TONE, 0.6);
+        let tone_mod = parameter_continuous(&parameters, WESTCOAST_TONE_MOD, 0.5);
+        let sub_mix = parameter_continuous(&parameters, WESTCOAST_SUB_MIX, 0.25);
+        let noise_mix = parameter_continuous(&parameters, WESTCOAST_NOISE_MIX, 0.08);
+        let mod_rate = parameter_continuous(&parameters, WESTCOAST_MOD_RATE, 2.5);
+        let mod_depth = parameter_continuous(&parameters, WESTCOAST_MOD_DEPTH, 0.45);
         let mut synth = Self {
             sample_rate: 44_100.0,
             phase: 0.0,
+            sub_phase: 0.0,
             vibrato_phase: 0.0,
+            mod_phase: 0.0,
             current_freq: 440.0,
             target_freq: 440.0,
             velocity: 0.0,
@@ -2064,10 +2104,18 @@ impl Default for WestCoastLead {
             glide_time,
             vibrato_rate,
             vibrato_depth,
-            warmth,
+            timbre,
+            tone,
+            tone_mod,
+            sub_mix,
+            noise_mix,
+            mod_rate,
+            mod_depth,
             level,
             extra_vibrato: 0.0,
             envelope: AdsrEnvelope::default(),
+            filter_state: 0.0,
+            noise_state: 0x6d_6f_6a_6f,
             active_notes: Vec::new(),
             parameters,
         };
@@ -2078,6 +2126,53 @@ impl Default for WestCoastLead {
 }
 
 impl WestCoastLead {
+    pub fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.update_sample_rate(sample_rate);
+    }
+
+    pub fn parameter_value(&self, id: &str) -> Option<f32> {
+        let id = ParameterId::from(id);
+        self.parameters
+            .get(&id)
+            .and_then(ParameterValue::as_continuous)
+    }
+
+    pub fn parameter_default(&self, id: &str) -> Option<f32> {
+        let id = ParameterId::from(id);
+        self.parameters
+            .layout()
+            .find(&id)
+            .and_then(|definition| match &definition.kind {
+                ParameterKind::Continuous(opts) => Some(opts.default),
+                _ => None,
+            })
+    }
+
+    pub fn set_parameter_from_ui(&mut self, id: &str, value: f32) -> Result<(), String> {
+        let id = ParameterId::from(id);
+        self.set_parameter(&id, ParameterValue::Continuous(value))
+            .map_err(|err| err.to_string())
+    }
+
+    pub fn reset_to_defaults(&mut self) {
+        let defaults: Vec<(ParameterId, ParameterValue)> = self
+            .parameters
+            .layout()
+            .parameters()
+            .iter()
+            .filter_map(|definition| match &definition.kind {
+                ParameterKind::Continuous(opts) => Some((
+                    definition.id.clone(),
+                    ParameterValue::Continuous(opts.default),
+                )),
+                _ => None,
+            })
+            .collect();
+        for (id, value) in defaults {
+            let _ = self.set_parameter(&id, value);
+        }
+    }
+
     fn sync_envelope(&mut self) {
         let attack = self
             .parameters
@@ -2125,26 +2220,59 @@ impl WestCoastLead {
         let vibrato_depth = self.vibrato_depth * (1.0 + 0.8 * self.extra_vibrato);
         let vibrato = self.vibrato_phase.sin() * vibrato_depth;
 
+        let mod_increment = TAU * self.mod_rate.max(0.0) / self.sample_rate.max(1.0);
+        self.mod_phase = (self.mod_phase + mod_increment).rem_euclid(TAU);
+        let timbre_mod = self.mod_phase.sin() * self.mod_depth;
+
         let pitch = self.current_freq * 2.0_f32.powf(self.pitch_bend * PITCH_BEND_RANGE / 12.0);
         let freq = (pitch * (1.0 + vibrato)).clamp(20.0, self.sample_rate * 0.45);
 
         let increment = TAU * freq / self.sample_rate.max(1.0);
         self.phase = (self.phase + increment).rem_euclid(TAU);
+        self.sub_phase = (self.sub_phase + increment * 0.5).rem_euclid(TAU);
+
         let envelope = self.envelope.next();
-        let raw = self.phase.sin();
-        let shaped = raw * (1.0 - self.warmth) + raw.powi(3) * self.warmth;
-        shaped * envelope * self.velocity * self.level
+        let timbre = (self.timbre + timbre_mod).clamp(0.0, 1.0);
+        let sine = self.phase.sin();
+        let folded = wavefold(sine, timbre);
+        let mut signal = sine * (1.0 - timbre) + folded * timbre;
+
+        let sub = self.sub_phase.sin();
+        signal += sub * self.sub_mix;
+
+        self.noise_state = self
+            .noise_state
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223);
+        let noise = lcg_noise(self.noise_state);
+        signal += noise * self.noise_mix;
+
+        let normaliser = (1.0 + self.sub_mix + self.noise_mix).max(1.0);
+        signal /= normaliser;
+
+        let brightness = (self.tone + envelope * self.tone_mod).clamp(0.0, 1.0);
+        let min_cutoff = 180.0;
+        let max_cutoff = (self.sample_rate * 0.45).max(min_cutoff + 20.0);
+        let cutoff = min_cutoff + (max_cutoff - min_cutoff) * brightness.powf(1.35);
+        let alpha = 1.0 - (-TAU * cutoff / self.sample_rate.max(1.0)).exp();
+        self.filter_state += alpha * (signal - self.filter_state);
+        let filtered = self.filter_state.tanh();
+
+        filtered * envelope * self.velocity * self.level
     }
 }
 
 impl AudioProcessor for WestCoastLead {
     fn descriptor(&self) -> PluginDescriptor {
         PluginDescriptor::new("harmoniq.westcoast", "West Coast Lead", "Harmoniq Labs")
-            .with_description("Portamento sine lead inspired by classic West Coast rap")
+            .with_description(
+                "Wavefolded sine lead with lowpass gate and classic West Coast modulation",
+            )
     }
 
     fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
         self.update_sample_rate(config.sample_rate);
+        self.filter_state = 0.0;
         Ok(())
     }
 
@@ -2153,6 +2281,7 @@ impl AudioProcessor for WestCoastLead {
             for sample in buffer.iter_mut() {
                 *sample = 0.0;
             }
+            self.filter_state = 0.0;
             return Ok(());
         }
 
@@ -2239,9 +2368,39 @@ impl NativePlugin for WestCoastLead {
                     self.vibrato_depth = depth;
                 }
             }
-            WESTCOAST_WARMTH => {
-                if let Some(warmth) = value.as_continuous() {
-                    self.warmth = warmth.clamp(0.0, 1.0);
+            WESTCOAST_TIMBRE => {
+                if let Some(timbre) = value.as_continuous() {
+                    self.timbre = timbre.clamp(0.0, 1.0);
+                }
+            }
+            WESTCOAST_TONE => {
+                if let Some(tone) = value.as_continuous() {
+                    self.tone = tone.clamp(0.0, 1.0);
+                }
+            }
+            WESTCOAST_TONE_MOD => {
+                if let Some(mod_amount) = value.as_continuous() {
+                    self.tone_mod = mod_amount.clamp(0.0, 1.0);
+                }
+            }
+            WESTCOAST_SUB_MIX => {
+                if let Some(sub) = value.as_continuous() {
+                    self.sub_mix = sub.clamp(0.0, 1.0);
+                }
+            }
+            WESTCOAST_NOISE_MIX => {
+                if let Some(noise) = value.as_continuous() {
+                    self.noise_mix = noise.clamp(0.0, 1.0);
+                }
+            }
+            WESTCOAST_MOD_RATE => {
+                if let Some(rate) = value.as_continuous() {
+                    self.mod_rate = rate.max(0.0);
+                }
+            }
+            WESTCOAST_MOD_DEPTH => {
+                if let Some(depth) = value.as_continuous() {
+                    self.mod_depth = depth.clamp(0.0, 1.0);
                 }
             }
             WESTCOAST_ATTACK | WESTCOAST_DECAY | WESTCOAST_SUSTAIN | WESTCOAST_RELEASE => {
@@ -2304,11 +2463,48 @@ fn westcoast_layout() -> ParameterLayout {
         )
         .with_description("Pitch modulation depth accentuated by the mod wheel"),
         ParameterDefinition::new(
-            WESTCOAST_WARMTH,
-            "Warmth",
-            ParameterKind::continuous(0.0..=1.0, 0.3),
+            WESTCOAST_TIMBRE,
+            "Timbre Fold",
+            ParameterKind::continuous(0.0..=1.0, 0.45),
         )
-        .with_description("Blend of pure sine and saturated harmonics"),
+        .with_description("Crossfade between pure sine and animated wavefolded harmonics"),
+        ParameterDefinition::new(
+            WESTCOAST_TONE,
+            "Tone",
+            ParameterKind::continuous(0.0..=1.0, 0.6),
+        )
+        .with_description("Base cutoff for the mellow low-pass gate"),
+        ParameterDefinition::new(
+            WESTCOAST_TONE_MOD,
+            "Tone Mod",
+            ParameterKind::continuous(0.0..=1.0, 0.5),
+        )
+        .with_description("How much the amplitude envelope opens the gate brightness"),
+        ParameterDefinition::new(
+            WESTCOAST_SUB_MIX,
+            "Sub Mix",
+            ParameterKind::continuous(0.0..=0.8, 0.25),
+        )
+        .with_description("Level of the supportive sub-octave sine"),
+        ParameterDefinition::new(
+            WESTCOAST_NOISE_MIX,
+            "Noise",
+            ParameterKind::continuous(0.0..=0.4, 0.08),
+        )
+        .with_description("Vinyl-style hiss blended into the signal"),
+        ParameterDefinition::new(
+            WESTCOAST_MOD_RATE,
+            "Timbre Rate",
+            ParameterKind::continuous(0.05..=12.0, 2.5),
+        )
+        .with_unit("Hz")
+        .with_description("LFO rate animating the wavefolder"),
+        ParameterDefinition::new(
+            WESTCOAST_MOD_DEPTH,
+            "Timbre Depth",
+            ParameterKind::continuous(0.0..=1.0, 0.45),
+        )
+        .with_description("Amount of LFO applied to the timbre fold"),
     ])
 }
 
@@ -2317,7 +2513,9 @@ pub struct WestCoastLeadFactory;
 impl PluginFactory for WestCoastLeadFactory {
     fn descriptor(&self) -> PluginDescriptor {
         PluginDescriptor::new("harmoniq.westcoast", "West Coast Lead", "Harmoniq Labs")
-            .with_description("Portamento sine lead inspired by classic West Coast rap")
+            .with_description(
+                "Wavefolded sine lead with lowpass gate and classic West Coast modulation",
+            )
     }
 
     fn parameter_layout(&self) -> std::sync::Arc<ParameterLayout> {

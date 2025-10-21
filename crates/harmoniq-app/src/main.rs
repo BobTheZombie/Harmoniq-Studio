@@ -20,7 +20,7 @@ use harmoniq_engine::{
     AudioBuffer, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine,
     TransportState,
 };
-use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth};
+use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth, WestCoastLead};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use mp3lame_encoder::{
     self, Builder as Mp3Builder, FlushNoGap, InterleavedPcm, MonoPcm, Quality as Mp3Quality,
@@ -973,6 +973,314 @@ impl AudioSettingsState {
     }
 }
 
+struct WestCoastEditorState {
+    plugin: WestCoastLead,
+    show: bool,
+    last_error: Option<String>,
+}
+
+impl WestCoastEditorState {
+    fn new(sample_rate: f32) -> Self {
+        let mut plugin = WestCoastLead::default();
+        plugin.set_sample_rate(sample_rate);
+        Self {
+            plugin,
+            show: true,
+            last_error: None,
+        }
+    }
+
+    fn open(&mut self) {
+        self.show = true;
+    }
+
+    fn knob(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &HarmoniqPalette,
+        id: &str,
+        min: f32,
+        max: f32,
+        fallback_default: f32,
+        label: &str,
+        description: &str,
+    ) {
+        let default = self
+            .plugin
+            .parameter_default(id)
+            .unwrap_or(fallback_default);
+        let mut value = self.plugin.parameter_value(id).unwrap_or(default);
+        let response = ui
+            .add(Knob::new(&mut value, min, max, default, label, palette))
+            .on_hover_text(format!("{description}\nCurrent: {value:.3}"));
+        if response.changed() {
+            match self.plugin.set_parameter_from_ui(id, value) {
+                Ok(()) => self.last_error = None,
+                Err(err) => self.last_error = Some(err),
+            }
+        }
+    }
+
+    fn draw(&mut self, ctx: &egui::Context, palette: &HarmoniqPalette) {
+        if !self.show {
+            return;
+        }
+        let mut open = self.show;
+        egui::Window::new("West Coast Lead")
+            .open(&mut open)
+            .resizable(false)
+            .default_width(540.0)
+            .show(ctx, |ui| self.draw_contents(ui, palette));
+        self.show = open;
+    }
+
+    fn draw_contents(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette) {
+        ui.heading(RichText::new("West Coast Lead").color(palette.text_primary));
+        ui.label(
+            RichText::new(
+                "Wavefolded sine lead with tone, low-pass gate, and modulation controls.",
+            )
+            .color(palette.text_muted),
+        );
+        ui.add_space(12.0);
+
+        ui.label(
+            RichText::new("Performance")
+                .color(palette.text_primary)
+                .small()
+                .strong(),
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            self.knob(
+                ui,
+                palette,
+                "westcoast.level",
+                0.0,
+                1.2,
+                0.9,
+                "Level",
+                "Output level after the low-pass gate",
+            );
+            self.knob(
+                ui,
+                palette,
+                "westcoast.glide",
+                0.0,
+                0.4,
+                0.12,
+                "Glide",
+                "Portamento time between incoming notes",
+            );
+            self.knob(
+                ui,
+                palette,
+                "westcoast.sub_mix",
+                0.0,
+                0.8,
+                0.25,
+                "Sub Mix",
+                "Blend in the supportive sub-octave sine",
+            );
+            self.knob(
+                ui,
+                palette,
+                "westcoast.noise_mix",
+                0.0,
+                0.4,
+                0.08,
+                "Noise",
+                "Add airy vinyl hiss to the tone",
+            );
+        });
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(10.0);
+
+        ui.label(
+            RichText::new("Amplitude Envelope")
+                .color(palette.text_primary)
+                .small()
+                .strong(),
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            self.knob(
+                ui,
+                palette,
+                "westcoast.attack",
+                0.001,
+                0.3,
+                0.02,
+                "Attack",
+                "Rise time of the low-pass gate",
+            );
+            self.knob(
+                ui,
+                palette,
+                "westcoast.decay",
+                0.05,
+                1.0,
+                0.18,
+                "Decay",
+                "Time to fall to sustain",
+            );
+            self.knob(
+                ui,
+                palette,
+                "westcoast.sustain",
+                0.3,
+                1.0,
+                0.8,
+                "Sustain",
+                "Steady level while the note is held",
+            );
+            self.knob(
+                ui,
+                palette,
+                "westcoast.release",
+                0.05,
+                1.5,
+                0.26,
+                "Release",
+                "Gate fall time after key release",
+            );
+        });
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(10.0);
+
+        ui.label(
+            RichText::new("Pitch & Vibrato")
+                .color(palette.text_primary)
+                .small()
+                .strong(),
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            self.knob(
+                ui,
+                palette,
+                "westcoast.vibrato_rate",
+                0.1,
+                8.0,
+                4.8,
+                "Vibrato Hz",
+                "Sine vibrato rate (mod wheel increases depth)",
+            );
+            self.knob(
+                ui,
+                palette,
+                "westcoast.vibrato_depth",
+                0.0,
+                0.02,
+                0.008,
+                "Vibrato Amt",
+                "Vibrato depth before modulation wheel",
+            );
+        });
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(10.0);
+
+        ui.label(
+            RichText::new("Timbre & Tone")
+                .color(palette.text_primary)
+                .small()
+                .strong(),
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            self.knob(
+                ui,
+                palette,
+                "westcoast.timbre",
+                0.0,
+                1.0,
+                0.45,
+                "Timbre",
+                "Crossfade between pure sine and wavefolded harmonics",
+            );
+            self.knob(
+                ui,
+                palette,
+                "westcoast.tone",
+                0.0,
+                1.0,
+                0.6,
+                "Tone",
+                "Base cutoff of the low-pass gate",
+            );
+            self.knob(
+                ui,
+                palette,
+                "westcoast.tone_mod",
+                0.0,
+                1.0,
+                0.5,
+                "Tone Mod",
+                "Envelope amount opening the gate brightness",
+            );
+        });
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(10.0);
+
+        ui.label(
+            RichText::new("West Coast Modulation")
+                .color(palette.text_primary)
+                .small()
+                .strong(),
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            self.knob(
+                ui,
+                palette,
+                "westcoast.mod_rate",
+                0.05,
+                12.0,
+                2.5,
+                "Fold Rate",
+                "Timbre LFO rate for animated wavefolds",
+            );
+            self.knob(
+                ui,
+                palette,
+                "westcoast.mod_depth",
+                0.0,
+                1.0,
+                0.45,
+                "Fold Amt",
+                "Depth of the timbre LFO",
+            );
+        });
+
+        ui.add_space(12.0);
+        ui.label(
+            RichText::new("Tip: double-click any knob to restore its default value.")
+                .color(palette.text_muted)
+                .small(),
+        );
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Reset to defaults").clicked() {
+                self.plugin.reset_to_defaults();
+                self.last_error = None;
+            }
+            if let Some(error) = &self.last_error {
+                ui.add_space(12.0);
+                ui.label(RichText::new(error).color(palette.warning));
+            }
+        });
+    }
+}
+
 struct HarmoniqStudioApp {
     theme: HarmoniqTheme,
     icons: AppIcons,
@@ -994,6 +1302,7 @@ struct HarmoniqStudioApp {
     last_error: Option<String>,
     status_message: Option<String>,
     audio_settings: AudioSettingsState,
+    westcoast_editor: WestCoastEditorState,
     project_path: String,
     bounce_path: String,
     bounce_length_beats: f32,
@@ -1054,6 +1363,7 @@ impl HarmoniqStudioApp {
             last_error: None,
             status_message: None,
             audio_settings,
+            westcoast_editor: WestCoastEditorState::new(config.sample_rate),
             project_path: "project.hst".into(),
             bounce_path: "bounce.wav".into(),
             bounce_length_beats: 16.0,
@@ -1720,6 +2030,30 @@ impl HarmoniqStudioApp {
                         {
                             self.bounce_project();
                         }
+                    });
+
+                    ui.separator();
+
+                    ui.vertical(|ui| {
+                        self.section_label(ui, &self.icons.track, "West Coast Lead");
+                        if self
+                            .gradient_icon_button(
+                                ui,
+                                &self.icons.track,
+                                "Open Editor",
+                                (palette.accent_alt, palette.accent_soft),
+                                self.westcoast_editor.show,
+                                Vec2::new(186.0, 44.0),
+                            )
+                            .clicked()
+                        {
+                            self.westcoast_editor.open();
+                        }
+                        ui.label(
+                            RichText::new("Shape the sine lead's timbre and modulation")
+                                .color(palette.text_muted)
+                                .small(),
+                        );
                     });
 
                     ui.add_space(16.0);
@@ -2767,6 +3101,8 @@ impl App for HarmoniqStudioApp {
                     .rounding(Rounding::same(20.0)),
             )
             .show(ctx, |ui| self.draw_piano_roll(ui));
+
+        self.westcoast_editor.draw(ctx, &palette);
 
         if let Some(message) = self.status_message.clone() {
             let mut clear_message = false;
