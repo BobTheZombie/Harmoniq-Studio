@@ -26,6 +26,18 @@ cargo run -p harmoniq-app -- --sample-rate 48000 --block-size 512
 The CLI renders a few blocks of audio using the built-in sine synthesizer, noise
 source, and gain stage, demonstrating the graph scheduler and mixdown pipeline.
 
+### Native UI mode
+
+Launch the egui-powered desktop prototype with the default settings:
+
+```bash
+cargo run -p harmoniq-app
+```
+
+Add CLI flags (such as `--sample-rate` or `--midi-input`) to adjust the realtime
+engine configuration. To temporarily disable the windowed interface, append
+`--headless` to switch back to the minimal CLI renderer.
+
 ### Realtime audio and MIDI
 
 Harmoniq Studio now streams audio using native backends such as ALSA, JACK, and
