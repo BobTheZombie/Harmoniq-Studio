@@ -7,14 +7,15 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use clap::Parser;
-use eframe::egui::epaint::Mesh;
-use eframe::egui::style::Margin;
+use eframe::egui::Margin;
 use eframe::egui::{
-    self, Align2, Color32, FontId, PointerButton, Pos2, Rect, RichText, Rounding, Sense, Stroke,
+    self, Align2, Color32, FontId, PointerButton, Rect, Rgba, RichText, Rounding, Sense, Stroke,
     TextStyle, Vec2,
 };
 use eframe::{App, CreationContext, NativeOptions};
 use egui_extras::{install_image_loaders, RetainedImage};
+use flacenc::component::BitRepr;
+use flacenc::error::Verify;
 use harmoniq_engine::{
     AudioBuffer, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine,
     TransportState,
@@ -499,20 +500,22 @@ fn write_flac_file(
     samples: &[i16],
 ) -> anyhow::Result<()> {
     let pcm: Vec<i32> = samples.iter().map(|value| i32::from(*value)).collect();
-    let mut encoder_config = flacenc::config::Encoder::default()
-        .into_verified()
-        .context("invalid FLAC encoder configuration")?;
-    // Ensure the encoder uses a reasonable block size for the project configuration.
+    let mut encoder_config = flacenc::config::Encoder::default();
     if encoder_config.block_size == 0 {
         encoder_config.block_size = 4096;
     }
+    let encoder_config = encoder_config
+        .into_verified()
+        .map_err(|(_, err)| anyhow!("invalid FLAC encoder configuration: {err:?}"))?;
+    let block_size = encoder_config.block_size;
     let source =
         flacenc::source::MemSource::from_samples(&pcm, channels, 16, sample_rate.round() as usize);
-    let stream =
-        flacenc::encode_with_fixed_block_size(&encoder_config, source, encoder_config.block_size)
-            .context("failed to encode FLAC stream")?;
+    let stream = flacenc::encode_with_fixed_block_size(&encoder_config, source, block_size)
+        .map_err(|err| anyhow!("failed to encode FLAC stream: {err:?}"))?;
     let mut sink = flacenc::bitsink::ByteSink::new();
-    stream.write(&mut sink);
+    stream
+        .write(&mut sink)
+        .map_err(|err| anyhow!("failed to write FLAC stream: {err:?}"))?;
     fs::write(path, sink.as_slice()).context("failed to write FLAC file")?;
     Ok(())
 }
@@ -536,7 +539,7 @@ fn write_mp3_file(
         .set_num_channels(channels as u8)
         .map_err(|err| anyhow!("failed to configure MP3 channels: {err}"))?;
     builder
-        .set_quality(Mp3Quality::High)
+        .set_quality(Mp3Quality::Best)
         .map_err(|err| anyhow!("failed to configure MP3 quality: {err}"))?;
     let mut encoder = builder
         .build()
@@ -963,7 +966,7 @@ impl HarmoniqStudioApp {
     ) -> egui::Response {
         let desired_size = Vec2::new(size.x.max(96.0), size.y.max(36.0));
         let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
-        let palette = self.palette();
+        let palette = self.palette().clone();
         let mut start = gradient.0;
         let mut end = gradient.1;
 
@@ -981,11 +984,45 @@ impl HarmoniqStudioApp {
         }
 
         let rounding = Rounding::same((desired_size.y * 0.48).clamp(8.0, 24.0));
-        let mut mesh = Mesh::default();
-        mesh.add_colored_rect(rect, rounding, [start, start, end, end]);
-        ui.painter().add(mesh);
-        ui.painter()
-            .rect_stroke(rect, rounding, Stroke::new(1.0, palette.toolbar_outline));
+        let painter = ui.painter();
+        let start_rgba = Rgba::from(start);
+        let end_rgba = Rgba::from(end);
+        const STEPS: usize = 24;
+        for i in 0..STEPS {
+            let t0 = i as f32 / STEPS as f32;
+            let t1 = (i + 1) as f32 / STEPS as f32;
+            let left = egui::lerp(rect.left()..=rect.right(), t0);
+            let right = if i == STEPS - 1 {
+                rect.right()
+            } else {
+                egui::lerp(rect.left()..=rect.right(), t1)
+            };
+            let segment_rect = Rect::from_min_max(
+                egui::pos2(left, rect.top()),
+                egui::pos2(right, rect.bottom()),
+            );
+            let t_mid = (t0 + t1) * 0.5;
+            let color = Color32::from(start_rgba * (1.0 - t_mid) + end_rgba * t_mid);
+            let segment_rounding = if i == 0 {
+                Rounding {
+                    nw: rounding.nw,
+                    ne: 0.0,
+                    sw: rounding.sw,
+                    se: 0.0,
+                }
+            } else if i == STEPS - 1 {
+                Rounding {
+                    nw: 0.0,
+                    ne: rounding.ne,
+                    sw: 0.0,
+                    se: rounding.se,
+                }
+            } else {
+                Rounding::ZERO
+            };
+            painter.rect_filled(segment_rect, segment_rounding, color);
+        }
+        painter.rect_stroke(rect, rounding, Stroke::new(1.0, palette.toolbar_outline));
 
         let content_rect = rect.shrink2(egui::vec2(16.0, 10.0));
         let icon_side = (content_rect.height().min(28.0)).max(18.0);
@@ -1016,10 +1053,10 @@ impl HarmoniqStudioApp {
     }
 
     fn section_label(&self, ui: &mut egui::Ui, icon: &RetainedImage, label: &str) {
-        let palette = self.palette();
+        let palette = self.palette().clone();
         ui.horizontal(|ui| {
             let tint = palette.accent_alt;
-            ui.add(egui::Image::new(icon.texture_id(ui.ctx()), [18.0, 18.0]).tint(tint));
+            ui.add(egui::Image::new((icon.texture_id(ui.ctx()), Vec2::splat(18.0))).tint(tint));
             ui.label(
                 RichText::new(label)
                     .color(palette.text_muted)
@@ -1029,11 +1066,10 @@ impl HarmoniqStudioApp {
         });
     }
 
-    fn tinted_frame<F>(&self, ui: &mut egui::Ui, fill: Color32, add_contents: F)
+    fn tinted_frame<F>(palette: &HarmoniqPalette, ui: &mut egui::Ui, fill: Color32, add_contents: F)
     where
         F: FnOnce(&mut egui::Ui),
     {
-        let palette = self.palette();
         egui::Frame::none()
             .fill(fill)
             .stroke(Stroke::new(1.0, palette.toolbar_outline))
@@ -1330,7 +1366,7 @@ impl HarmoniqStudioApp {
     }
 
     fn draw_transport_toolbar(&mut self, ui: &mut egui::Ui) {
-        let palette = self.palette();
+        let palette = self.palette().clone();
         egui::Frame::none()
             .fill(palette.toolbar)
             .stroke(Stroke::new(1.0, palette.toolbar_outline))
@@ -1396,7 +1432,7 @@ impl HarmoniqStudioApp {
 
                     ui.vertical(|ui| {
                         self.section_label(ui, &self.icons.open, "Project");
-                        self.tinted_frame(ui, palette.panel_alt, |ui| {
+                        Self::tinted_frame(&palette, ui, palette.panel_alt, |ui| {
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.project_path)
                                     .desired_width(220.0)
@@ -1437,7 +1473,7 @@ impl HarmoniqStudioApp {
 
                     ui.vertical(|ui| {
                         self.section_label(ui, &self.icons.bounce, "Offline Bounce");
-                        self.tinted_frame(ui, palette.panel_alt, |ui| {
+                        Self::tinted_frame(&palette, ui, palette.panel_alt, |ui| {
                             ui.vertical(|ui| {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.bounce_path)
@@ -1488,7 +1524,7 @@ impl HarmoniqStudioApp {
     }
 
     fn draw_playlist(&mut self, ui: &mut egui::Ui) {
-        let palette = self.palette();
+        let palette = self.palette().clone();
         ui.heading(RichText::new("Playlist").color(palette.text_primary));
         ui.add_space(6.0);
         ui.horizontal(|ui| {
@@ -1596,7 +1632,7 @@ impl HarmoniqStudioApp {
                 );
                 let timeline_rect = egui::Rect::from_min_max(
                     egui::pos2(header_column_rect.right(), ruler_rect.bottom()),
-                    rect.max(),
+                    rect.max,
                 );
 
                 painter.rect_filled(rect, 10.0, palette.timeline_bg);
@@ -1752,7 +1788,7 @@ impl HarmoniqStudioApp {
                         }
                     }
 
-                    let mut clip_y = track_lane_rect.top() + 6.0;
+                    let clip_y = track_lane_rect.top() + 6.0;
                     let clip_height = track_lane_rect.height() - 12.0;
                     for (clip_idx, clip) in track.clips.iter_mut().enumerate() {
                         let clip_start = track_lane_rect.left() + clip.start_beat * pixels_per_beat;
@@ -2032,7 +2068,7 @@ impl HarmoniqStudioApp {
     }
 
     fn draw_piano_roll(&mut self, ui: &mut egui::Ui) {
-        let palette = self.palette();
+        let palette = self.palette().clone();
         ui.heading(RichText::new("Piano Roll").color(palette.text_primary));
         ui.add_space(6.0);
 
@@ -2302,7 +2338,7 @@ impl HarmoniqStudioApp {
 
     fn draw_mixer(&mut self, ui: &mut egui::Ui) {
         self.update_mixer_visuals(ui.ctx());
-        let palette = self.palette();
+        let palette = self.palette().clone();
         ui.heading(RichText::new("Mixer").color(palette.text_primary));
         ui.add_space(6.0);
         let mut new_selection = None;
@@ -2314,12 +2350,12 @@ impl HarmoniqStudioApp {
                         index,
                         track,
                         self.selected_track == Some(index),
-                        palette,
+                        &palette,
                     ) {
                         new_selection = Some(index);
                     }
                 }
-                Self::draw_master_strip(ui, &mut self.master_track, palette);
+                Self::draw_master_strip(ui, &mut self.master_track, &palette);
             });
         });
         if let Some(selection) = new_selection {
@@ -2330,7 +2366,7 @@ impl HarmoniqStudioApp {
 
 impl App for HarmoniqStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let palette = self.palette();
+        let palette = self.palette().clone();
 
         egui::TopBottomPanel::top("transport")
             .frame(

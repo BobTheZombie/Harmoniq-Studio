@@ -591,7 +591,8 @@ mod linux_asio {
             }
         }
         let host = cpal::default_host();
-        Ok((host, host.id().name().to_string()))
+        let host_name = host.id().name().to_string();
+        Ok((host, host_name))
     }
 
     fn pick_stream_config(
