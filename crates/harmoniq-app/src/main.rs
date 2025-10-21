@@ -3636,7 +3636,7 @@ impl HarmoniqStudioApp {
         ui.menu_button(
             RichText::new("+ ADD INSERT")
                 .strong()
-                .letter_spacing(3.0)
+                .extra_letter_spacing(3.0)
                 .color(palette.accent),
             |ui| {
                 for effect_type in EffectType::all() {
@@ -3730,7 +3730,7 @@ impl HarmoniqStudioApp {
             ui.label(
                 RichText::new("INSERTS")
                     .small()
-                    .letter_spacing(4.0)
+                    .extra_letter_spacing(4.0)
                     .color(palette.text_muted),
             );
             ui.add_space(6.0);
@@ -3781,7 +3781,7 @@ impl HarmoniqStudioApp {
             ui.label(
                 RichText::new("MASTER INSERTS")
                     .small()
-                    .letter_spacing(4.0)
+                    .extra_letter_spacing(4.0)
                     .color(palette.text_muted),
             );
             ui.add_space(6.0);
@@ -3795,7 +3795,7 @@ impl HarmoniqStudioApp {
         ui.label(
             RichText::new("MIXER")
                 .size(17.0)
-                .letter_spacing(6.0)
+                .extra_letter_spacing(6.0)
                 .color(palette.text_muted)
                 .strong(),
         );
