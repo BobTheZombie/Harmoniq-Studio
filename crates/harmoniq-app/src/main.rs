@@ -10,10 +10,10 @@ use clap::Parser;
 use eframe::egui::Margin;
 use eframe::egui::{
     self, Align2, Color32, FontId, PointerButton, Rect, Rgba, RichText, Rounding, Sense, Stroke,
-    TextStyle, Vec2,
+    TextStyle, TextureOptions, Vec2,
 };
 use eframe::{App, CreationContext, NativeOptions};
-use egui_extras::{install_image_loaders, RetainedImage};
+use egui_extras::{image::load_svg_bytes, install_image_loaders};
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 use harmoniq_engine::{
@@ -341,68 +341,84 @@ impl HarmoniqTheme {
 }
 
 struct AppIcons {
-    play: RetainedImage,
-    pause: RetainedImage,
-    stop: RetainedImage,
-    save: RetainedImage,
-    open: RetainedImage,
-    bounce: RetainedImage,
-    track: RetainedImage,
-    clip: RetainedImage,
-    automation: RetainedImage,
-    tempo: RetainedImage,
-    settings: RetainedImage,
+    play: egui::TextureHandle,
+    pause: egui::TextureHandle,
+    stop: egui::TextureHandle,
+    save: egui::TextureHandle,
+    open: egui::TextureHandle,
+    bounce: egui::TextureHandle,
+    track: egui::TextureHandle,
+    clip: egui::TextureHandle,
+    automation: egui::TextureHandle,
+    tempo: egui::TextureHandle,
+    settings: egui::TextureHandle,
 }
 
 impl AppIcons {
-    fn load() -> anyhow::Result<Self> {
-        fn load_svg(name: &str, bytes: &[u8]) -> anyhow::Result<RetainedImage> {
-            RetainedImage::from_svg_bytes(name, bytes)
-                .map_err(|err| anyhow!("failed to load icon {name}: {err}"))
+    fn load(ctx: &egui::Context) -> anyhow::Result<Self> {
+        fn load_svg(
+            ctx: &egui::Context,
+            name: &str,
+            bytes: &[u8],
+        ) -> anyhow::Result<egui::TextureHandle> {
+            let image = load_svg_bytes(bytes)
+                .map_err(|err| anyhow!("failed to load icon {name}: {err}"))?;
+            Ok(ctx.load_texture(name, image, egui::TextureOptions::LINEAR))
         }
 
         Ok(Self {
             play: load_svg(
+                ctx,
                 "icon_play",
                 include_bytes!("../../../resources/icons/play.svg"),
             )?,
             pause: load_svg(
+                ctx,
                 "icon_pause",
                 include_bytes!("../../../resources/icons/pause.svg"),
             )?,
             stop: load_svg(
+                ctx,
                 "icon_stop",
                 include_bytes!("../../../resources/icons/stop.svg"),
             )?,
             save: load_svg(
+                ctx,
                 "icon_save",
                 include_bytes!("../../../resources/icons/save.svg"),
             )?,
             open: load_svg(
+                ctx,
                 "icon_open",
                 include_bytes!("../../../resources/icons/folder.svg"),
             )?,
             bounce: load_svg(
+                ctx,
                 "icon_bounce",
                 include_bytes!("../../../resources/icons/bounce.svg"),
             )?,
             track: load_svg(
+                ctx,
                 "icon_track",
                 include_bytes!("../../../resources/icons/track.svg"),
             )?,
             clip: load_svg(
+                ctx,
                 "icon_clip",
                 include_bytes!("../../../resources/icons/clip.svg"),
             )?,
             automation: load_svg(
+                ctx,
                 "icon_automation",
                 include_bytes!("../../../resources/icons/automation.svg"),
             )?,
             tempo: load_svg(
+                ctx,
                 "icon_tempo",
                 include_bytes!("../../../resources/icons/tempo.svg"),
             )?,
             settings: load_svg(
+                ctx,
                 "icon_settings",
                 include_bytes!("../../../resources/icons/harmoniq-studio.svg"),
             )?,
@@ -991,7 +1007,7 @@ impl HarmoniqStudioApp {
         cc: &CreationContext<'_>,
     ) -> anyhow::Result<Self> {
         let theme = HarmoniqTheme::init(&cc.egui_ctx);
-        let icons = AppIcons::load()?;
+        let icons = AppIcons::load(&cc.egui_ctx)?;
 
         let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
         let graph_config = DemoGraphConfig::ui_default();
@@ -1143,7 +1159,7 @@ impl HarmoniqStudioApp {
     fn gradient_icon_button(
         &self,
         ui: &mut egui::Ui,
-        icon: &RetainedImage,
+        icon: &egui::TextureHandle,
         label: &str,
         gradient: (Color32, Color32),
         active: bool,
@@ -1219,7 +1235,7 @@ impl HarmoniqStudioApp {
             Vec2::splat(icon_side),
         );
         ui.painter().image(
-            icon.texture_id(ui.ctx()),
+            icon.id(),
             icon_rect,
             Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             Color32::WHITE,
@@ -1237,11 +1253,15 @@ impl HarmoniqStudioApp {
         response
     }
 
-    fn section_label(&self, ui: &mut egui::Ui, icon: &RetainedImage, label: &str) {
+    fn section_label(&self, ui: &mut egui::Ui, icon: &egui::TextureHandle, label: &str) {
         let palette = self.palette().clone();
         ui.horizontal(|ui| {
             let tint = palette.accent_alt;
-            ui.add(egui::Image::new((icon.texture_id(ui.ctx()), Vec2::splat(18.0))).tint(tint));
+            ui.add(
+                egui::Image::from_texture(icon.clone())
+                    .fit_to_exact_size(Vec2::splat(18.0))
+                    .tint(tint),
+            );
             ui.label(
                 RichText::new(label)
                     .color(palette.text_muted)
