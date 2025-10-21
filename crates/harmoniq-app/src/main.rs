@@ -27,7 +27,7 @@ use mp3lame_encoder::{
 };
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tracing::error;
+use tracing::{error, warn};
 use tracing_subscriber::EnvFilter;
 
 mod audio;
@@ -664,46 +664,77 @@ fn run_headless(args: &Cli, runtime: AudioRuntimeOptions) -> anyhow::Result<()> 
     engine.set_transport(TransportState::Playing);
     engine.execute_command(EngineCommand::SetTempo(args.tempo))?;
 
+    let command_queue = engine.command_queue();
+    let engine = Arc::new(Mutex::new(engine));
+
     if runtime.is_enabled() {
-        let command_queue = engine.command_queue();
-        let engine = Arc::new(Mutex::new(engine));
-        let stream =
-            RealtimeAudio::start(Arc::clone(&engine), command_queue, config.clone(), runtime)?;
+        match RealtimeAudio::start(
+            Arc::clone(&engine),
+            command_queue,
+            config.clone(),
+            runtime.clone(),
+        ) {
+            Ok(stream) => {
+                let backend_label = stream
+                    .host_label()
+                    .map(|label| label.to_string())
+                    .unwrap_or_else(|| stream.backend().to_string());
+                println!(
+                    "Streaming realtime audio via {} on '{}' ({} layout) – press Ctrl+C to stop.",
+                    backend_label,
+                    stream.device_name(),
+                    describe_layout(config.layout)
+                );
 
-        let backend_label = stream
-            .host_label()
-            .map(|label| label.to_string())
-            .unwrap_or_else(|| stream.backend().to_string());
-        println!(
-            "Streaming realtime audio via {} on '{}' ({} layout) – press Ctrl+C to stop.",
-            backend_label,
-            stream.device_name(),
-            describe_layout(config.layout)
-        );
+                let running = Arc::new(AtomicBool::new(true));
+                let running_clone = Arc::clone(&running);
+                ctrlc::set_handler(move || {
+                    running_clone.store(false, Ordering::SeqCst);
+                })?;
 
-        let running = Arc::new(AtomicBool::new(true));
-        let running_clone = Arc::clone(&running);
-        ctrlc::set_handler(move || {
-            running_clone.store(false, Ordering::SeqCst);
-        })?;
-
-        while running.load(Ordering::SeqCst) {
-            std::thread::sleep(Duration::from_millis(50));
+                while running.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+            Err(err) => {
+                warn!(
+                    error = %err,
+                    "failed to start realtime audio output; running offline instead"
+                );
+                println!(
+                    "Realtime audio unavailable: {:#}. Running an offline preview instead.",
+                    err
+                );
+                run_headless_offline_preview(&engine, &config, args.tempo)?;
+            }
         }
     } else {
-        let mut buffer = harmoniq_engine::AudioBuffer::from_config(config.clone());
-        for _ in 0..10 {
-            engine.process_block(&mut buffer)?;
-            std::thread::sleep(Duration::from_millis(10));
-        }
-
-        println!(
-            "Rendered {} frames across {} channels at {:.1} BPM",
-            buffer.len(),
-            config.layout.channels(),
-            args.tempo
-        );
+        run_headless_offline_preview(&engine, &config, args.tempo)?;
     }
+
+    Ok(())
+}
+
+fn run_headless_offline_preview(
+    engine: &Arc<Mutex<HarmoniqEngine>>,
+    config: &BufferConfig,
+    tempo: f32,
+) -> anyhow::Result<()> {
+    let mut buffer = AudioBuffer::from_config(config.clone());
+    for _ in 0..10 {
+        {
+            let mut engine = engine.lock();
+            engine.process_block(&mut buffer)?;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    println!(
+        "Rendered {} frames across {} channels at {:.1} BPM",
+        buffer.len(),
+        config.layout.channels(),
+        tempo
+    );
 
     Ok(())
 }
@@ -746,6 +777,7 @@ struct EngineRunner {
     runtime: AudioRuntimeOptions,
     realtime: Option<RealtimeAudio>,
     offline_loop: Option<OfflineLoop>,
+    last_runtime_error: Option<String>,
 }
 
 impl EngineRunner {
@@ -762,8 +794,14 @@ impl EngineRunner {
             runtime,
             realtime: None,
             offline_loop: None,
+            last_runtime_error: None,
         };
-        runner.refresh_runtime()?;
+        if let Err(err) = runner.refresh_runtime() {
+            warn!(
+                error = %err,
+                "failed to start realtime audio; engine will run offline instead"
+            );
+        }
         Ok(runner)
     }
 
@@ -772,27 +810,40 @@ impl EngineRunner {
             loop_state.stop();
         }
         self.realtime = None;
+        self.last_runtime_error = None;
 
         if self.runtime.is_enabled() {
             let options = self.runtime.clone();
-            let realtime = RealtimeAudio::start(
+            match RealtimeAudio::start(
                 Arc::clone(&self.engine),
                 self.command_queue.clone(),
                 self.config.clone(),
                 options,
-            )?;
-            if let Some(id) = realtime.device_id() {
-                self.runtime.output_device = Some(id.to_string());
+            ) {
+                Ok(realtime) => {
+                    if let Some(id) = realtime.device_id() {
+                        self.runtime.output_device = Some(id.to_string());
+                    }
+                    self.realtime = Some(realtime);
+                    Ok(())
+                }
+                Err(err) => {
+                    self.last_runtime_error = Some(format!("{err:#}"));
+                    self.runtime.enable_audio = false;
+                    self.offline_loop = Some(OfflineLoop::start(
+                        Arc::clone(&self.engine),
+                        self.config.clone(),
+                    ));
+                    Err(err)
+                }
             }
-            self.realtime = Some(realtime);
         } else {
             self.offline_loop = Some(OfflineLoop::start(
                 Arc::clone(&self.engine),
                 self.config.clone(),
             ));
+            Ok(())
         }
-
-        Ok(())
     }
 
     fn reconfigure_audio(&mut self, runtime: AudioRuntimeOptions) -> anyhow::Result<()> {
@@ -817,6 +868,10 @@ impl EngineRunner {
 
     fn realtime(&self) -> Option<&RealtimeAudio> {
         self.realtime.as_ref()
+    }
+
+    fn last_runtime_error(&self) -> Option<&str> {
+        self.last_runtime_error.as_deref()
     }
 }
 
@@ -1338,6 +1393,10 @@ impl HarmoniqStudioApp {
             engine_runner.realtime(),
         );
 
+        let startup_status = engine_runner.last_runtime_error().map(|err| {
+            format!("Realtime audio failed to start: {err}. Engine is running offline.")
+        });
+
         let tracks: Vec<Track> = (0..48).map(|index| Track::with_index(index + 1)).collect();
         let track_count = tracks.len();
         let master_track = MasterChannel::default();
@@ -1361,7 +1420,7 @@ impl HarmoniqStudioApp {
             playlist: PlaylistViewState::default(),
             piano_roll: PianoRollState::default(),
             last_error: None,
-            status_message: None,
+            status_message: startup_status,
             audio_settings,
             westcoast_editor: WestCoastEditorState::new(config.sample_rate),
             project_path: "project.hst".into(),
