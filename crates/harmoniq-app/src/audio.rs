@@ -7,7 +7,7 @@ use std::env;
 use std::path::Path;
 
 use anyhow::{anyhow, Context};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, HostTrait};
 use cpal::{BufferSize, FromSample, SampleFormat, SizedSample, StreamConfig};
 use harmoniq_engine::{
     AudioBuffer, BufferConfig, ChannelLayout, EngineCommandQueue, HarmoniqEngine,
@@ -184,6 +184,7 @@ fn is_pulseaudio_active() -> bool {
 
 #[cfg(target_os = "linux")]
 fn linux_host_prefix(host: cpal::HostId) -> String {
+    #[allow(unreachable_patterns)]
     match host {
         cpal::HostId::Jack => "jack".to_string(),
         cpal::HostId::Alsa => "alsa".to_string(),
@@ -361,6 +362,13 @@ struct StreamCreation {
 }
 
 impl RealtimeAudio {
+    #[cfg(target_os = "linux")]
+    fn push_unique_backend(candidates: &mut Vec<AudioBackend>, backend: AudioBackend) {
+        if !candidates.contains(&backend) {
+            candidates.push(backend);
+        }
+    }
+
     pub fn start(
         engine: Arc<Mutex<HarmoniqEngine>>,
         command_queue: EngineCommandQueue,
@@ -420,60 +428,58 @@ impl RealtimeAudio {
             #[cfg(target_os = "linux")]
             {
                 let mut candidates: Vec<AudioBackend> = Vec::new();
-                {
-                    let mut push_unique = |backend: AudioBackend| {
-                        if !candidates.contains(&backend) {
-                            candidates.push(backend);
+                let selection_host = options
+                    .output_device
+                    .as_deref()
+                    .and_then(|sel| parse_linux_device_selector(sel).map(|(host, _)| host));
+
+                if let Some(host) = selection_host {
+                    #[allow(unreachable_patterns)]
+                    match host {
+                        cpal::HostId::Jack => {
+                            Self::push_unique_backend(&mut candidates, AudioBackend::Jack);
                         }
-                    };
-
-                    let selection_host = options
-                        .output_device
-                        .as_deref()
-                        .and_then(|sel| parse_linux_device_selector(sel).map(|(host, _)| host));
-
-                    if let Some(host) = selection_host {
-                        match host {
-                            cpal::HostId::Jack => push_unique(AudioBackend::Jack),
-                            cpal::HostId::Alsa => {
-                                if is_pipewire_active() {
-                                    push_unique(AudioBackend::PipeWire);
-                                }
-                                if is_pulseaudio_active() {
-                                    push_unique(AudioBackend::PulseAudio);
-                                }
-                                push_unique(AudioBackend::Alsa);
+                        cpal::HostId::Alsa => {
+                            if is_pipewire_active() {
+                                Self::push_unique_backend(&mut candidates, AudioBackend::PipeWire);
                             }
-                            _ => {}
+                            if is_pulseaudio_active() {
+                                Self::push_unique_backend(
+                                    &mut candidates,
+                                    AudioBackend::PulseAudio,
+                                );
+                            }
+                            Self::push_unique_backend(&mut candidates, AudioBackend::Alsa);
                         }
+                        _ => {}
                     }
+                }
 
-                    let available = cpal::available_hosts();
-                    let has_alsa = available.contains(&cpal::HostId::Alsa);
-                    let has_jack = available.contains(&cpal::HostId::Jack);
+                let available = cpal::available_hosts();
+                let has_alsa = available.contains(&cpal::HostId::Alsa);
+                let has_jack = available.contains(&cpal::HostId::Jack);
 
-                    if has_alsa && is_pulseaudio_active() {
-                        push_unique(AudioBackend::PulseAudio);
-                    }
-                    if has_alsa && is_pipewire_active() {
-                        push_unique(AudioBackend::PipeWire);
-                    }
-                    if has_jack {
-                        push_unique(AudioBackend::Jack);
-                    }
-                    if has_alsa {
-                        push_unique(AudioBackend::Alsa);
-                    }
-                    if select_default_linux_asio_host().is_some() {
-                        push_unique(AudioBackend::Asio);
-                    }
-                    if has_alsa {
-                        push_unique(AudioBackend::PulseAudio);
-                        push_unique(AudioBackend::PipeWire);
-                    }
-                    if candidates.is_empty() {
-                        push_unique(AudioBackend::Auto);
-                    }
+                if has_alsa && is_pulseaudio_active() {
+                    Self::push_unique_backend(&mut candidates, AudioBackend::PulseAudio);
+                }
+                if has_alsa && is_pipewire_active() {
+                    Self::push_unique_backend(&mut candidates, AudioBackend::PipeWire);
+                }
+                if has_jack {
+                    Self::push_unique_backend(&mut candidates, AudioBackend::Jack);
+                }
+                if has_alsa {
+                    Self::push_unique_backend(&mut candidates, AudioBackend::Alsa);
+                }
+                if select_default_linux_asio_host().is_some() {
+                    Self::push_unique_backend(&mut candidates, AudioBackend::Asio);
+                }
+                if has_alsa {
+                    Self::push_unique_backend(&mut candidates, AudioBackend::PulseAudio);
+                    Self::push_unique_backend(&mut candidates, AudioBackend::PipeWire);
+                }
+                if candidates.is_empty() {
+                    Self::push_unique_backend(&mut candidates, AudioBackend::Auto);
                 }
 
                 let mut last_err: Option<anyhow::Error> = None;
@@ -706,7 +712,7 @@ impl RealtimeAudio {
             #[cfg(not(target_os = "linux"))]
             let target = selector;
 
-            if let Ok(mut devices) = host.output_devices() {
+            if let Ok(devices) = host.output_devices() {
                 for device in devices {
                     if device.name().map(|name| name == target).unwrap_or(false) {
                         return Ok(device);
@@ -1036,11 +1042,12 @@ fn enumerate_linux_devices(
     host_id: cpal::HostId,
 ) -> Vec<OutputDeviceInfo> {
     let mut devices = Vec::new();
-    if let Ok(mut outputs) = host.output_devices() {
+    if let Ok(outputs) = host.output_devices() {
         for device in outputs {
             if let Ok(name) = device.name() {
                 let id = device_identifier_for_backend(backend, host_id, &name);
-                if !devices.iter().any(|info| info.id == id) {
+                let id_ref = id.as_str();
+                if !devices.iter().any(|info| info.id.as_str() == id_ref) {
                     devices.push(OutputDeviceInfo { id, label: name });
                 }
             }
@@ -1050,7 +1057,8 @@ fn enumerate_linux_devices(
         if let Some(default) = host.default_output_device() {
             if let Ok(name) = default.name() {
                 let id = device_identifier_for_backend(backend, host_id, &name);
-                if !devices.iter().any(|info| info.id == id) {
+                let id_ref = id.as_str();
+                if !devices.iter().any(|info| info.id.as_str() == id_ref) {
                     devices.push(OutputDeviceInfo { id, label: name });
                 }
             }
@@ -1244,7 +1252,7 @@ mod linux_asio {
             let target = super::parse_linux_device_selector(selector)
                 .map(|(_, name)| name)
                 .unwrap_or(selector);
-            if let Ok(mut devices) = host.output_devices() {
+            if let Ok(devices) = host.output_devices() {
                 for device in devices {
                     if device.name().map(|name| name == target).unwrap_or(false) {
                         return Some(device);
