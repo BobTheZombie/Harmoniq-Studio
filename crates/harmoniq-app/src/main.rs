@@ -32,12 +32,14 @@ use tracing_subscriber::EnvFilter;
 
 mod audio;
 mod midi;
+mod typing_keyboard;
 
 use audio::{
     available_backends, available_output_devices, describe_layout, AudioBackend,
     AudioRuntimeOptions, OutputDeviceInfo, RealtimeAudio,
 };
 use midi::list_midi_inputs;
+use typing_keyboard::TypingKeyboard;
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Harmoniq Studio prototype")]
 struct Cli {
@@ -1341,6 +1343,7 @@ struct HarmoniqStudioApp {
     icons: AppIcons,
     engine_runner: EngineRunner,
     command_queue: harmoniq_engine::EngineCommandQueue,
+    typing_keyboard: TypingKeyboard,
     engine_config: BufferConfig,
     graph_config: DemoGraphConfig,
     tracks: Vec<Track>,
@@ -1406,6 +1409,7 @@ impl HarmoniqStudioApp {
             icons,
             engine_runner,
             command_queue,
+            typing_keyboard: TypingKeyboard::default(),
             engine_config: config.clone(),
             graph_config,
             tracks,
@@ -3116,6 +3120,11 @@ impl HarmoniqStudioApp {
 impl App for HarmoniqStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let palette = self.palette().clone();
+
+        let keyboard_events = self.typing_keyboard.collect_midi_events(ctx);
+        if !keyboard_events.is_empty() {
+            self.send_command(EngineCommand::SubmitMidi(keyboard_events));
+        }
 
         egui::TopBottomPanel::top("transport")
             .frame(
