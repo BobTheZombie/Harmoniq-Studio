@@ -10,7 +10,7 @@ harmoniq-plugins = { path = "../harmoniq-plugins" }
 anyhow.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 eframe = { version = "0.27", features = ["wgpu"] }
-egui_extras = "0.27"
+egui_extras = { version = "0.27", features = ["image", "svg"] }
 parking_lot.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
