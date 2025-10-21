@@ -11,3 +11,4 @@ anyhow.workspace = true
 serde.workspace = true
 rand.workspace = true
 symphonia = { version = "0.5", features = ["wav", "flac", "mp3"] }
+async-fs = "1.6"
