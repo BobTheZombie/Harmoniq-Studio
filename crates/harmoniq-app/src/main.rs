@@ -363,7 +363,7 @@ impl AppIcons {
         ) -> anyhow::Result<egui::TextureHandle> {
             let image = load_svg_bytes(bytes)
                 .map_err(|err| anyhow!("failed to load icon {name}: {err}"))?;
-            Ok(ctx.load_texture(name, image, egui::TextureOptions::LINEAR))
+            Ok(ctx.load_texture(name, image, TextureOptions::LINEAR))
         }
 
         Ok(Self {
@@ -1258,7 +1258,7 @@ impl HarmoniqStudioApp {
         ui.horizontal(|ui| {
             let tint = palette.accent_alt;
             ui.add(
-                egui::Image::from_texture(icon.clone())
+                egui::Image::from_texture(icon)
                     .fit_to_exact_size(Vec2::splat(18.0))
                     .tint(tint),
             );
