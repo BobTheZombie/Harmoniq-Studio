@@ -34,7 +34,8 @@ mod audio;
 mod midi;
 
 use audio::{
-    available_backends, describe_layout, AudioBackend, AudioRuntimeOptions, RealtimeAudio,
+    available_backends, available_output_devices, describe_layout, AudioBackend,
+    AudioRuntimeOptions, OutputDeviceInfo, RealtimeAudio,
 };
 use midi::list_midi_inputs;
 #[derive(Debug, Parser)]
@@ -350,6 +351,7 @@ struct AppIcons {
     clip: RetainedImage,
     automation: RetainedImage,
     tempo: RetainedImage,
+    settings: RetainedImage,
 }
 
 impl AppIcons {
@@ -399,6 +401,10 @@ impl AppIcons {
             tempo: load_svg(
                 "icon_tempo",
                 include_bytes!("../../../resources/icons/tempo.svg"),
+            )?,
+            settings: load_svg(
+                "icon_settings",
+                include_bytes!("../../../resources/icons/harmoniq-studio.svg"),
             )?,
         })
     }
@@ -648,9 +654,13 @@ fn run_headless(args: &Cli, runtime: AudioRuntimeOptions) -> anyhow::Result<()> 
         let stream =
             RealtimeAudio::start(Arc::clone(&engine), command_queue, config.clone(), runtime)?;
 
+        let backend_label = stream
+            .host_label()
+            .map(|label| label.to_string())
+            .unwrap_or_else(|| stream.backend().to_string());
         println!(
             "Streaming realtime audio via {} on '{}' ({} layout) – press Ctrl+C to stop.",
-            stream.backend(),
+            backend_label,
             stream.device_name(),
             describe_layout(config.layout)
         );
@@ -714,10 +724,12 @@ fn run_ui(args: &Cli, runtime: AudioRuntimeOptions) -> anyhow::Result<()> {
 }
 
 struct EngineRunner {
-    _engine: Arc<Mutex<HarmoniqEngine>>,
-    running: Option<Arc<AtomicBool>>,
-    thread: Option<std::thread::JoinHandle<()>>,
-    _realtime: Option<RealtimeAudio>,
+    engine: Arc<Mutex<HarmoniqEngine>>,
+    config: BufferConfig,
+    command_queue: harmoniq_engine::EngineCommandQueue,
+    runtime: AudioRuntimeOptions,
+    realtime: Option<RealtimeAudio>,
+    offline_loop: Option<OfflineLoop>,
 }
 
 impl EngineRunner {
@@ -727,62 +739,228 @@ impl EngineRunner {
         command_queue: harmoniq_engine::EngineCommandQueue,
         runtime: AudioRuntimeOptions,
     ) -> anyhow::Result<Self> {
-        if runtime.is_enabled() {
-            let realtime =
-                RealtimeAudio::start(Arc::clone(&engine), command_queue, config, runtime)?;
-            Ok(Self {
-                _engine: engine,
-                running: None,
-                thread: None,
-                _realtime: Some(realtime),
-            })
-        } else {
-            let running = Arc::new(AtomicBool::new(true));
-            let thread_running = Arc::clone(&running);
-            let engine_clone = Arc::clone(&engine);
+        let mut runner = Self {
+            engine,
+            config,
+            command_queue,
+            runtime,
+            realtime: None,
+            offline_loop: None,
+        };
+        runner.refresh_runtime()?;
+        Ok(runner)
+    }
 
-            let thread = std::thread::spawn(move || {
-                let mut buffer = {
-                    let engine = engine_clone.lock();
-                    AudioBuffer::from_config(engine.config().clone())
-                };
-
-                while thread_running.load(Ordering::SeqCst) {
-                    {
-                        let mut engine = engine_clone.lock();
-                        if let Err(err) = engine.process_block(&mut buffer) {
-                            error!(?err, "engine processing failed");
-                        }
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-            });
-
-            Ok(Self {
-                _engine: engine,
-                running: Some(running),
-                thread: Some(thread),
-                _realtime: None,
-            })
+    fn refresh_runtime(&mut self) -> anyhow::Result<()> {
+        if let Some(mut loop_state) = self.offline_loop.take() {
+            loop_state.stop();
         }
+        self.realtime = None;
+
+        if self.runtime.is_enabled() {
+            let options = self.runtime.clone();
+            let realtime = RealtimeAudio::start(
+                Arc::clone(&self.engine),
+                self.command_queue.clone(),
+                self.config.clone(),
+                options,
+            )?;
+            if let Some(id) = realtime.device_id() {
+                self.runtime.output_device = Some(id.to_string());
+            }
+            self.realtime = Some(realtime);
+        } else {
+            self.offline_loop = Some(OfflineLoop::start(
+                Arc::clone(&self.engine),
+                self.config.clone(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn reconfigure_audio(&mut self, runtime: AudioRuntimeOptions) -> anyhow::Result<()> {
+        let previous = self.runtime.clone();
+        self.runtime = runtime;
+        if let Err(err) = self.refresh_runtime() {
+            self.runtime = previous;
+            if let Err(revert) = self.refresh_runtime() {
+                error!(
+                    ?revert,
+                    "failed to restore previous audio runtime after error"
+                );
+            }
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn runtime_options(&self) -> &AudioRuntimeOptions {
+        &self.runtime
+    }
+
+    fn realtime(&self) -> Option<&RealtimeAudio> {
+        self.realtime.as_ref()
     }
 }
 
 impl Drop for EngineRunner {
     fn drop(&mut self) {
-        if let Some(running) = &self.running {
-            running.store(false, Ordering::SeqCst);
+        if let Some(mut loop_state) = self.offline_loop.take() {
+            loop_state.stop();
         }
+    }
+}
+
+struct OfflineLoop {
+    running: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl OfflineLoop {
+    fn start(engine: Arc<Mutex<HarmoniqEngine>>, config: BufferConfig) -> Self {
+        let running = Arc::new(AtomicBool::new(true));
+        let thread_running = Arc::clone(&running);
+        let engine_clone = Arc::clone(&engine);
+        let handle = std::thread::spawn(move || {
+            let mut buffer = AudioBuffer::from_config(config.clone());
+            while thread_running.load(Ordering::SeqCst) {
+                {
+                    let mut engine = engine_clone.lock();
+                    if let Err(err) = engine.process_block(&mut buffer) {
+                        error!(?err, "engine processing failed");
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        Self {
+            running,
+            thread: Some(handle),
+        }
+    }
+
+    fn stop(&mut self) {
+        self.running.store(false, Ordering::SeqCst);
         if let Some(handle) = self.thread.take() {
             let _ = handle.join();
         }
     }
 }
 
+impl Drop for OfflineLoop {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+struct AudioSettingsState {
+    selected_backend: AudioBackend,
+    selected_device: Option<String>,
+    available_devices: Vec<OutputDeviceInfo>,
+    active_backend: Option<AudioBackend>,
+    active_device_name: Option<String>,
+    active_device_id: Option<String>,
+    active_host_label: Option<String>,
+    error: Option<String>,
+}
+
+impl AudioSettingsState {
+    fn initialise(runtime: &AudioRuntimeOptions, realtime: Option<&RealtimeAudio>) -> Self {
+        let mut state = Self {
+            selected_backend: runtime.backend,
+            selected_device: runtime.output_device.clone(),
+            available_devices: Vec::new(),
+            active_backend: None,
+            active_device_name: None,
+            active_device_id: None,
+            active_host_label: None,
+            error: None,
+        };
+        state.refresh_devices();
+        state.update_active(realtime);
+        state
+    }
+
+    fn refresh_devices(&mut self) {
+        match available_output_devices(self.selected_backend) {
+            Ok(devices) => {
+                self.available_devices = devices;
+                if let Some(selected) = &self.selected_device {
+                    if !self
+                        .available_devices
+                        .iter()
+                        .any(|info| &info.id == selected)
+                    {
+                        self.selected_device = None;
+                    }
+                }
+                self.error = None;
+            }
+            Err(err) => {
+                self.available_devices.clear();
+                self.error = Some(err.to_string());
+                self.selected_device = None;
+            }
+        }
+    }
+
+    fn set_selected_backend(&mut self, backend: AudioBackend) {
+        if self.selected_backend != backend {
+            self.selected_backend = backend;
+            self.selected_device = None;
+            self.refresh_devices();
+        }
+    }
+
+    fn set_selected_device(&mut self, device: Option<String>) {
+        self.selected_device = device;
+    }
+
+    fn update_active(&mut self, realtime: Option<&RealtimeAudio>) {
+        self.active_backend = realtime.map(|rt| rt.backend());
+        self.active_device_name = realtime.map(|rt| rt.device_name().to_string());
+        self.active_device_id = realtime.and_then(|rt| rt.device_id().map(|id| id.to_string()));
+        self.active_host_label =
+            realtime.and_then(|rt| rt.host_label().map(|label| label.to_string()));
+    }
+
+    fn sync_with_runtime(
+        &mut self,
+        runtime: &AudioRuntimeOptions,
+        realtime: Option<&RealtimeAudio>,
+    ) {
+        self.selected_backend = runtime.backend;
+        self.selected_device = runtime.output_device.clone();
+        self.refresh_devices();
+        self.update_active(realtime);
+    }
+
+    fn selected_backend_label(&self, options: &[(AudioBackend, String)]) -> String {
+        options
+            .iter()
+            .find(|(backend, _)| *backend == self.selected_backend)
+            .map(|(_, label)| label.clone())
+            .unwrap_or_else(|| self.selected_backend.to_string())
+    }
+
+    fn selected_device_label(&self) -> String {
+        self.selected_device
+            .as_ref()
+            .and_then(|selected| {
+                self.available_devices
+                    .iter()
+                    .find(|info| &info.id == selected)
+                    .map(|info| info.label.clone())
+            })
+            .unwrap_or_else(|| "System Default".to_string())
+    }
+}
+
 struct HarmoniqStudioApp {
     theme: HarmoniqTheme,
     icons: AppIcons,
-    _engine_runner: EngineRunner,
+    engine_runner: EngineRunner,
     command_queue: harmoniq_engine::EngineCommandQueue,
     engine_config: BufferConfig,
     graph_config: DemoGraphConfig,
@@ -799,6 +977,7 @@ struct HarmoniqStudioApp {
     piano_roll: PianoRollState,
     last_error: Option<String>,
     status_message: Option<String>,
+    audio_settings: AudioSettingsState,
     project_path: String,
     bounce_path: String,
     bounce_length_beats: f32,
@@ -829,6 +1008,11 @@ impl HarmoniqStudioApp {
             runtime,
         )?;
 
+        let audio_settings = AudioSettingsState::initialise(
+            engine_runner.runtime_options(),
+            engine_runner.realtime(),
+        );
+
         let tracks: Vec<Track> = (0..48).map(|index| Track::with_index(index + 1)).collect();
         let track_count = tracks.len();
         let master_track = MasterChannel::default();
@@ -836,7 +1020,7 @@ impl HarmoniqStudioApp {
         let mut app = Self {
             theme,
             icons,
-            _engine_runner: engine_runner,
+            engine_runner,
             command_queue,
             engine_config: config.clone(),
             graph_config,
@@ -853,6 +1037,7 @@ impl HarmoniqStudioApp {
             piano_roll: PianoRollState::default(),
             last_error: None,
             status_message: None,
+            audio_settings,
             project_path: "project.hst".into(),
             bounce_path: "bounce.wav".into(),
             bounce_length_beats: 16.0,
@@ -1471,6 +1656,10 @@ impl HarmoniqStudioApp {
 
                     ui.separator();
 
+                    self.draw_audio_settings(ui);
+
+                    ui.separator();
+
                     ui.vertical(|ui| {
                         self.section_label(ui, &self.icons.bounce, "Offline Bounce");
                         Self::tinted_frame(&palette, ui, palette.panel_alt, |ui| {
@@ -1521,6 +1710,153 @@ impl HarmoniqStudioApp {
                     );
                 });
             });
+    }
+
+    fn draw_audio_settings(&mut self, ui: &mut egui::Ui) {
+        self.audio_settings
+            .update_active(self.engine_runner.realtime());
+        let palette = self.palette().clone();
+        let mut backend_options: Vec<(AudioBackend, String)> = Vec::new();
+        for (backend, label) in available_backends() {
+            if backend_options
+                .iter()
+                .all(|(existing, _)| *existing != backend)
+            {
+                backend_options.push((backend, label));
+            }
+        }
+
+        self.section_label(ui, &self.icons.settings, "Audio Settings");
+        let backend_options = backend_options;
+        Self::tinted_frame(&palette, ui, palette.panel_alt, |ui| {
+            ui.vertical(|ui| {
+                ui.label(
+                    RichText::new("Audio backend")
+                        .color(palette.text_muted)
+                        .small()
+                        .strong(),
+                );
+                let mut backend_choice = self.audio_settings.selected_backend;
+                let backend_label = self.audio_settings.selected_backend_label(&backend_options);
+                egui::ComboBox::from_id_source("audio_backend_selector")
+                    .selected_text(backend_label)
+                    .show_ui(ui, |ui| {
+                        for (backend, label) in &backend_options {
+                            ui.selectable_value(&mut backend_choice, *backend, label);
+                        }
+                    });
+                if backend_choice != self.audio_settings.selected_backend {
+                    self.audio_settings.set_selected_backend(backend_choice);
+                }
+
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new("Output device")
+                        .color(palette.text_muted)
+                        .small()
+                        .strong(),
+                );
+                let mut device_choice = self.audio_settings.selected_device.clone();
+                let device_label = self.audio_settings.selected_device_label();
+                egui::ComboBox::from_id_source("audio_device_selector")
+                    .selected_text(device_label)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut device_choice, None, "System Default");
+                        for device in &self.audio_settings.available_devices {
+                            ui.selectable_value(
+                                &mut device_choice,
+                                Some(device.id.clone()),
+                                &device.label,
+                            );
+                        }
+                    });
+                if device_choice != self.audio_settings.selected_device {
+                    self.audio_settings.set_selected_device(device_choice);
+                }
+
+                if let Some(error) = &self.audio_settings.error {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(error).color(palette.warning).small());
+                }
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Refresh devices").clicked() {
+                        self.audio_settings.refresh_devices();
+                    }
+                    if ui.button("Apply settings").clicked() {
+                        self.apply_audio_settings();
+                    }
+                });
+
+                ui.add_space(6.0);
+                if let Some(active_backend) = self.audio_settings.active_backend {
+                    let backend_label = self
+                        .audio_settings
+                        .active_host_label
+                        .clone()
+                        .unwrap_or_else(|| active_backend.to_string());
+                    let device_label = self
+                        .audio_settings
+                        .active_device_name
+                        .clone()
+                        .unwrap_or_else(|| "Unknown device".to_string());
+                    ui.label(
+                        RichText::new(format!("Active: {backend_label} → {device_label}"))
+                            .color(palette.text_muted)
+                            .small(),
+                    );
+                    if let Some(id) = &self.audio_settings.active_device_id {
+                        ui.label(
+                            RichText::new(format!("Device ID: {id}"))
+                                .color(palette.text_muted)
+                                .small(),
+                        );
+                    }
+                } else {
+                    ui.label(
+                        RichText::new("Realtime audio disabled; engine running offline")
+                            .color(palette.warning)
+                            .small(),
+                    );
+                }
+            });
+        });
+    }
+
+    fn apply_audio_settings(&mut self) {
+        let mut runtime = self.engine_runner.runtime_options().clone();
+        runtime.set_backend(self.audio_settings.selected_backend);
+        runtime.set_output_device(self.audio_settings.selected_device.clone());
+
+        match self.engine_runner.reconfigure_audio(runtime) {
+            Ok(()) => {
+                self.audio_settings.sync_with_runtime(
+                    self.engine_runner.runtime_options(),
+                    self.engine_runner.realtime(),
+                );
+                if let Some(active) = self.engine_runner.realtime() {
+                    let backend_label = self
+                        .audio_settings
+                        .active_host_label
+                        .clone()
+                        .unwrap_or_else(|| active.backend().to_string());
+                    self.status_message = Some(format!(
+                        "Audio output switched to {backend_label} on '{}'",
+                        active.device_name()
+                    ));
+                } else {
+                    self.status_message = Some("Realtime audio disabled".to_string());
+                }
+                self.last_error = None;
+            }
+            Err(err) => {
+                let message = format!("Audio configuration failed: {err:#}");
+                self.audio_settings.error = Some(err.to_string());
+                self.last_error = Some(message);
+                self.status_message = None;
+            }
+        }
     }
 
     fn draw_playlist(&mut self, ui: &mut egui::Ui) {
