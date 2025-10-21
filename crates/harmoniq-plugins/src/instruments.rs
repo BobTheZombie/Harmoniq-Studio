@@ -1,4 +1,6 @@
 use std::f32::consts::{PI, TAU};
+use std::fs::File;
+use std::io::Cursor;
 use std::path::Path;
 
 use anyhow::{anyhow, Context};
@@ -878,17 +880,22 @@ impl SampleBuffer {
     }
 }
 
-pub fn load_sample_from_file(path: impl AsRef<Path>) -> anyhow::Result<SampleBuffer> {
-    use std::fs::File;
-
-    let path_ref = path.as_ref();
-    let file = File::open(path_ref).with_context(|| format!("failed to open {:?}", path_ref))?;
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+fn hint_for_path(path: Option<&Path>) -> Hint {
     let mut hint = Hint::new();
-    if let Some(ext) = path_ref.extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = path
+        .and_then(|p| p.extension())
+        .and_then(|ext| ext.to_str())
+    {
         hint.with_extension(ext);
     }
+    hint
+}
 
+fn decode_sample_stream(
+    display_name: &str,
+    mss: MediaSourceStream,
+    hint: Hint,
+) -> anyhow::Result<SampleBuffer> {
     let probed = symphonia::default::get_probe()
         .format(
             &hint,
@@ -896,22 +903,22 @@ pub fn load_sample_from_file(path: impl AsRef<Path>) -> anyhow::Result<SampleBuf
             &FormatOptions::default(),
             &MetadataOptions::default(),
         )
-        .map_err(|err| anyhow!("failed to probe {:?}: {}", path_ref, err))?;
+        .map_err(|err| anyhow!("failed to probe {display_name}: {err}"))?;
 
     let mut format = probed.format;
     let track = format
         .default_track()
-        .ok_or_else(|| anyhow!("no default track for {:?}", path_ref))?;
+        .ok_or_else(|| anyhow!("no default track for {display_name}"))?;
 
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
-        .map_err(|err| anyhow!("failed to create decoder: {}", err))?;
+        .map_err(|err| anyhow!("failed to create decoder: {err}"))?;
 
     let mut sample_buffer = SampleBuffer::new(
         track
             .codec_params
             .sample_rate
-            .ok_or_else(|| anyhow!("missing sample rate"))?,
+            .ok_or_else(|| anyhow!("missing sample rate for {display_name}"))?,
         track
             .codec_params
             .channels
@@ -947,7 +954,7 @@ pub fn load_sample_from_file(path: impl AsRef<Path>) -> anyhow::Result<SampleBuf
                 Err(SymphoniaError::DecodeError(_)) => {
                     decoder.reset();
                 }
-                Err(err) => return Err(anyhow!("decode error: {}", err)),
+                Err(err) => return Err(anyhow!("decode error for {display_name}: {err}")),
             },
             Err(SymphoniaError::IoError(err))
                 if err.kind() == std::io::ErrorKind::UnexpectedEof =>
@@ -957,11 +964,34 @@ pub fn load_sample_from_file(path: impl AsRef<Path>) -> anyhow::Result<SampleBuf
             Err(SymphoniaError::ResetRequired) => {
                 decoder.reset();
             }
-            Err(err) => return Err(anyhow!("format error: {}", err)),
+            Err(err) => return Err(anyhow!("format error for {display_name}: {err}")),
         }
     }
 
     Ok(sample_buffer)
+}
+
+pub fn load_sample_from_file(path: impl AsRef<Path>) -> anyhow::Result<SampleBuffer> {
+    let path_ref = path.as_ref();
+    let display_name = path_ref.display().to_string();
+    let file = File::open(path_ref).with_context(|| format!("failed to open {:?}", path_ref))?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let hint = hint_for_path(Some(path_ref));
+    decode_sample_stream(&display_name, mss, hint)
+}
+
+pub async fn load_sample_from_file_async(path: impl AsRef<Path>) -> anyhow::Result<SampleBuffer> {
+    use async_fs::read;
+
+    let path_buf = path.as_ref().to_path_buf();
+    let display_name = path_buf.display().to_string();
+    let bytes = read(&path_buf)
+        .await
+        .with_context(|| format!("failed to read {:?}", path_buf))?;
+    let cursor = Cursor::new(bytes);
+    let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+    let hint = hint_for_path(Some(&path_buf));
+    decode_sample_stream(&display_name, mss, hint)
 }
 
 // --- Sampler / Drum Machine --------------------------------------------------------------
@@ -993,6 +1023,11 @@ impl Default for Sampler {
 impl Sampler {
     pub fn load_sample(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
         self.sample = load_sample_from_file(path)?;
+        Ok(())
+    }
+
+    pub async fn load_sample_async(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+        self.sample = load_sample_from_file_async(path).await?;
         Ok(())
     }
 
@@ -1137,6 +1172,11 @@ impl Default for GranularSynth {
 impl GranularSynth {
     pub fn load_sample(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
         self.sample = load_sample_from_file(path)?;
+        Ok(())
+    }
+
+    pub async fn load_sample_async(&mut self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+        self.sample = load_sample_from_file_async(path).await?;
         Ok(())
     }
 

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crossbeam::queue::ArrayQueue;
 use parking_lot::{Mutex, RwLock};
+use rayon::prelude::*;
 
 use crate::{
     graph::{self, GraphHandle},
@@ -65,7 +66,7 @@ pub enum EngineCommand {
 /// Central Harmoniq engine responsible for orchestrating the processing graph.
 pub struct HarmoniqEngine {
     config: BufferConfig,
-    processors: RwLock<HashMap<PluginId, Box<dyn AudioProcessor>>>,
+    processors: RwLock<HashMap<PluginId, Arc<Mutex<Box<dyn AudioProcessor>>>>>,
     graph: RwLock<Option<GraphHandle>>,
     master_buffer: Mutex<AudioBuffer>,
     tone_shaper: ToneShaper,
@@ -126,7 +127,8 @@ impl HarmoniqEngine {
         let id = PluginId(self.next_plugin_id.fetch_add(1, Ordering::SeqCst));
         let descriptor = processor.descriptor();
         tracing::info!("Registered processor: {}", descriptor);
-        self.processors.write().insert(id, processor);
+        let shared = Arc::new(Mutex::new(processor));
+        self.processors.write().insert(id, shared);
         Ok(id)
     }
 
@@ -175,19 +177,33 @@ impl HarmoniqEngine {
             }
         };
 
-        let mut processors = self.processors.write();
-        let mut scratch_buffers: Vec<AudioBuffer> = Vec::with_capacity(graph.nodes.len());
-        for plugin_id in &graph.nodes {
-            let Some(processor) = processors.get_mut(plugin_id) else {
-                anyhow::bail!("Missing processor for plugin ID: {:?}", plugin_id);
-            };
-            if !pending_midi.is_empty() {
-                processor.process_midi(&pending_midi)?;
-            }
-            let mut buffer = AudioBuffer::from_config(self.config.clone());
-            processor.process(&mut buffer)?;
-            scratch_buffers.push(buffer);
-        }
+        let processors_guard = self.processors.read();
+        let processor_handles: Vec<_> = graph
+            .nodes
+            .iter()
+            .map(|plugin_id| {
+                processors_guard.get(plugin_id).cloned().ok_or_else(|| {
+                    anyhow::anyhow!("Missing processor for plugin ID: {:?}", plugin_id)
+                })
+            })
+            .collect::<anyhow::Result<_>>()?;
+        drop(processors_guard);
+
+        let mut scratch_buffers: Vec<AudioBuffer> = (0..processor_handles.len())
+            .map(|_| AudioBuffer::from_config(self.config.clone()))
+            .collect();
+
+        scratch_buffers
+            .par_iter_mut()
+            .zip(processor_handles.par_iter())
+            .try_for_each(|(buffer, processor)| -> anyhow::Result<()> {
+                let mut processor = processor.lock();
+                if !pending_midi.is_empty() {
+                    processor.process_midi(&pending_midi)?;
+                }
+                processor.process(buffer)?;
+                Ok(())
+            })?;
 
         {
             let mut master = self.master_buffer.lock();
