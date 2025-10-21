@@ -9,8 +9,8 @@ use anyhow::{anyhow, Context};
 use clap::Parser;
 use eframe::egui::Margin;
 use eframe::egui::{
-    self, Align2, Color32, CursorIcon, FontId, PointerButton, Rect, Rgba, RichText, Rounding,
-    Sense, Stroke, TextStyle, TextureOptions, Vec2,
+    self, Align2, Color32, FontId, PointerButton, Rect, Rgba, RichText, Rounding, Sense, Stroke,
+    TextStyle, TextureOptions, Vec2,
 };
 use eframe::{App, CreationContext, NativeOptions};
 use egui_extras::{image::load_svg_bytes, install_image_loaders};
@@ -1086,7 +1086,7 @@ impl WestCoastEditorState {
         egui::Window::new("West Coast Lead")
             .open(&mut open)
             .resizable(true)
-            .min_inner_size(Vec2::new(420.0, 360.0))
+            .min_size(Vec2::new(420.0, 360.0))
             .default_width(540.0)
             .show(ctx, |ui| self.draw_contents(ui, palette));
         self.show = open;
@@ -1550,12 +1550,17 @@ impl HarmoniqStudioApp {
     }
 
     fn ensure_clip_for_track(&mut self, track_idx: usize) -> Option<usize> {
-        let track = self.tracks.get_mut(track_idx)?;
-        if track.clips.is_empty() {
+        let needs_clip = match self.tracks.get(track_idx) {
+            Some(track) => track.clips.is_empty(),
+            None => return None,
+        };
+
+        if needs_clip {
             let clip_number = self.next_clip_index + 1;
             let color = self.next_color();
             self.next_clip_index += 1;
             let clip_name = format!("Clip {clip_number}");
+            let track = self.tracks.get_mut(track_idx)?;
             track.add_clip(Clip::new(clip_name, 0.0, 4.0, color, Vec::new()));
             Some(track.clips.len() - 1)
         } else {
@@ -3324,12 +3329,11 @@ impl HarmoniqStudioApp {
     }
 
     fn draw_effects_ui(
-        &mut self,
         track_index: Option<usize>,
         effects: &mut Vec<MixerEffect>,
         ui: &mut egui::Ui,
         palette: &HarmoniqPalette,
-    ) {
+    ) -> bool {
         if effects.is_empty() {
             ui.label(
                 RichText::new("No effects loaded")
@@ -3339,6 +3343,7 @@ impl HarmoniqStudioApp {
         }
 
         let mut removal: Option<usize> = None;
+        let mut open_piano_roll = false;
         for (index, effect) in effects.iter_mut().enumerate() {
             let response = ui.group(|ui| {
                 ui.horizontal(|ui| {
@@ -3358,10 +3363,10 @@ impl HarmoniqStudioApp {
                 );
             });
 
-            if let Some(track_idx) = track_index {
+            if track_index.is_some() {
                 response.response.context_menu(|ui| {
                     if ui.button("Open Piano Roll").clicked() {
-                        self.focus_piano_roll_on_track(track_idx);
+                        open_piano_roll = true;
                         ui.close_menu();
                     }
                 });
@@ -3380,16 +3385,17 @@ impl HarmoniqStudioApp {
                 }
             }
         });
+
+        open_piano_roll && track_index.is_some()
     }
 
     fn draw_track_strip(
-        &mut self,
         ui: &mut egui::Ui,
         index: usize,
         track: &mut Track,
         is_selected: bool,
         palette: &HarmoniqPalette,
-    ) -> bool {
+    ) -> (bool, bool) {
         let fill = if track.muted {
             palette.mixer_strip_muted
         } else if track.solo {
@@ -3403,6 +3409,7 @@ impl HarmoniqStudioApp {
         frame.fill = fill;
         frame.stroke = Stroke::new(1.0, palette.mixer_strip_border);
         let mut clicked = false;
+        let mut request_piano_roll = false;
         frame.show(ui, |ui| {
             ui.set_min_width(150.0);
             ui.vertical(|ui| {
@@ -3434,19 +3441,16 @@ impl HarmoniqStudioApp {
                         .small()
                         .color(palette.text_muted),
                 );
-                self.draw_effects_ui(Some(index), &mut track.effects, ui, palette);
+                if Self::draw_effects_ui(Some(index), &mut track.effects, ui, palette) {
+                    request_piano_roll = true;
+                }
             });
         });
         ui.add_space(8.0);
-        clicked
+        (clicked, request_piano_roll)
     }
 
-    fn draw_master_strip(
-        &mut self,
-        ui: &mut egui::Ui,
-        master: &mut MasterChannel,
-        palette: &HarmoniqPalette,
-    ) {
+    fn draw_master_strip(ui: &mut egui::Ui, master: &mut MasterChannel, palette: &HarmoniqPalette) {
         let mut frame = egui::Frame::group(ui.style());
         frame.fill = palette.mixer_strip_selected;
         frame.stroke = Stroke::new(1.0, palette.mixer_strip_border);
@@ -3474,7 +3478,7 @@ impl HarmoniqStudioApp {
                         .small()
                         .color(palette.text_muted),
                 );
-                self.draw_effects_ui(None, &mut master.effects, ui, palette);
+                let _ = Self::draw_effects_ui(None, &mut master.effects, ui, palette);
             });
         });
     }
@@ -3485,24 +3489,32 @@ impl HarmoniqStudioApp {
         ui.heading(RichText::new("Mixer").color(palette.text_primary));
         ui.add_space(6.0);
         let mut new_selection = None;
+        let mut piano_roll_request = None;
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal(|ui| {
-                for (index, track) in self.tracks.iter_mut().enumerate() {
-                    if self.draw_track_strip(
+                for index in 0..self.tracks.len() {
+                    let (clicked, request_piano_roll) = Self::draw_track_strip(
                         ui,
                         index,
-                        track,
+                        &mut self.tracks[index],
                         self.selected_track == Some(index),
                         &palette,
-                    ) {
+                    );
+                    if clicked {
                         new_selection = Some(index);
                     }
+                    if request_piano_roll {
+                        piano_roll_request = Some(index);
+                    }
                 }
-                self.draw_master_strip(ui, &mut self.master_track, &palette);
+                Self::draw_master_strip(ui, &mut self.master_track, &palette);
             });
         });
         if let Some(selection) = new_selection {
             self.selected_track = Some(selection);
+        }
+        if let Some(track_idx) = piano_roll_request {
+            self.focus_piano_roll_on_track(track_idx);
         }
     }
 }
