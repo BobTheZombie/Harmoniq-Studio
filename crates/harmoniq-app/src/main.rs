@@ -3551,6 +3551,9 @@ impl HarmoniqStudioApp {
         let mut removal: Option<usize> = None;
         let mut open_piano_roll = false;
 
+        let total_effects = effects.len();
+        let has_space_for_more = total_effects < MAX_INSERT_SLOTS;
+
         for (index, effect) in effects.iter_mut().enumerate() {
             let slot_fill = if effect.enabled {
                 palette.mixer_slot_active
@@ -3614,7 +3617,7 @@ impl HarmoniqStudioApp {
                 });
             }
 
-            if index + 1 < effects.len() || effects.len() < MAX_INSERT_SLOTS {
+            if index + 1 < total_effects || has_space_for_more {
                 ui.add_space(6.0);
             }
         }
