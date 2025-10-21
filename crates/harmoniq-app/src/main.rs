@@ -9,8 +9,8 @@ use anyhow::{anyhow, Context};
 use clap::Parser;
 use eframe::egui::Margin;
 use eframe::egui::{
-    self, Align2, Color32, FontId, PointerButton, Rect, Rgba, RichText, Rounding, Sense, Stroke,
-    TextStyle, TextureOptions, Vec2,
+    self, Align2, Color32, CursorIcon, FontId, PointerButton, Rect, Rgba, RichText, Rounding,
+    Sense, Stroke, TextStyle, TextureOptions, Vec2,
 };
 use eframe::{App, CreationContext, NativeOptions};
 use egui_extras::{image::load_svg_bytes, install_image_loaders};
@@ -1083,7 +1083,8 @@ impl WestCoastEditorState {
         let mut open = self.show;
         egui::Window::new("West Coast Lead")
             .open(&mut open)
-            .resizable(false)
+            .resizable(true)
+            .min_inner_size(Vec2::new(420.0, 360.0))
             .default_width(540.0)
             .show(ctx, |ui| self.draw_contents(ui, palette));
         self.show = open;
@@ -1354,6 +1355,8 @@ struct HarmoniqStudioApp {
     next_color_index: usize,
     playlist: PlaylistViewState,
     piano_roll: PianoRollState,
+    piano_roll_selected_note: Option<usize>,
+    piano_roll_drag: Option<PianoRollDragState>,
     last_error: Option<String>,
     status_message: Option<String>,
     audio_settings: AudioSettingsState,
@@ -1411,7 +1414,7 @@ impl HarmoniqStudioApp {
             tracks,
             master_track,
             selected_track: Some(0),
-            selected_clip: Some((0, 0)),
+            selected_clip: None,
             tempo: initial_tempo,
             transport_state: TransportState::Stopped,
             next_track_index: track_count,
@@ -1419,6 +1422,8 @@ impl HarmoniqStudioApp {
             next_color_index: 0,
             playlist: PlaylistViewState::default(),
             piano_roll: PianoRollState::default(),
+            piano_roll_selected_note: None,
+            piano_roll_drag: None,
             last_error: None,
             status_message: startup_status,
             audio_settings,
@@ -1429,6 +1434,14 @@ impl HarmoniqStudioApp {
         };
 
         app.initialise_demo_clips();
+        if app
+            .tracks
+            .get(0)
+            .and_then(|track| track.clips.get(0))
+            .is_some()
+        {
+            app.focus_clip(0, 0);
+        }
         Ok(app)
     }
 
@@ -1519,6 +1532,49 @@ impl HarmoniqStudioApp {
         let color = COLORS[self.next_color_index % COLORS.len()];
         self.next_color_index += 1;
         color
+    }
+
+    fn set_selected_clip(&mut self, selection: Option<(usize, usize)>) {
+        self.selected_clip = selection;
+        self.piano_roll_selected_note = None;
+        self.piano_roll_drag = None;
+    }
+
+    fn focus_clip(&mut self, track_idx: usize, clip_idx: usize) {
+        self.selected_track = Some(track_idx);
+        self.set_selected_clip(Some((track_idx, clip_idx)));
+    }
+
+    fn ensure_clip_for_track(&mut self, track_idx: usize) -> Option<usize> {
+        let track = self.tracks.get_mut(track_idx)?;
+        if track.clips.is_empty() {
+            let clip_number = self.next_clip_index + 1;
+            let color = self.next_color();
+            self.next_clip_index += 1;
+            let clip_name = format!("Clip {clip_number}");
+            track.add_clip(Clip::new(clip_name, 0.0, 4.0, color, Vec::new()));
+            Some(track.clips.len() - 1)
+        } else {
+            Some(0)
+        }
+    }
+
+    fn focus_piano_roll_on_track(&mut self, track_idx: usize) {
+        if track_idx >= self.tracks.len() {
+            return;
+        }
+        let existing_selection = self
+            .selected_clip
+            .filter(|(selected_track, _)| *selected_track == track_idx)
+            .map(|(_, clip_idx)| clip_idx);
+
+        let clip_idx = existing_selection.or_else(|| self.ensure_clip_for_track(track_idx));
+        if let Some(clip_idx) = clip_idx {
+            self.focus_clip(track_idx, clip_idx);
+        } else {
+            self.selected_track = Some(track_idx);
+            self.set_selected_clip(None);
+        }
     }
 
     fn palette(&self) -> &HarmoniqPalette {
@@ -1687,6 +1743,34 @@ impl HarmoniqStudioApp {
     fn add_track(&mut self) {
         self.next_track_index += 1;
         self.tracks.push(Track::with_index(self.next_track_index));
+    }
+
+    fn new_project(&mut self) {
+        self.tracks = (0..8).map(|index| Track::with_index(index + 1)).collect();
+        self.master_track = MasterChannel::default();
+        self.next_track_index = self.tracks.len();
+        self.next_clip_index = 0;
+        self.next_color_index = 0;
+        self.piano_roll = PianoRollState::default();
+        self.piano_roll_selected_note = None;
+        self.piano_roll_drag = None;
+        if self.tracks.is_empty() {
+            self.selected_track = None;
+            self.set_selected_clip(None);
+        } else {
+            self.selected_track = Some(0);
+            if let Some(clip_idx) = self.ensure_clip_for_track(0) {
+                self.focus_clip(0, clip_idx);
+            } else {
+                self.set_selected_clip(None);
+            }
+        }
+        self.transport_state = TransportState::Stopped;
+        self.send_command(EngineCommand::SetTransport(self.transport_state));
+        self.stop_all_clips();
+        self.status_message = Some("New project created".into());
+        self.last_error = None;
+        self.project_path = "project.hst".into();
     }
 
     fn stop_all_clips(&mut self) {
@@ -1862,16 +1946,19 @@ impl HarmoniqStudioApp {
             .into_iter()
             .map(ProjectTrack::into_track)
             .collect();
-        if let Some(first_track) = self.tracks.get(0) {
-            self.selected_track = Some(0);
-            self.selected_clip = if first_track.clips.is_empty() {
-                None
-            } else {
-                Some((0, 0))
-            };
-        } else {
+        if self.tracks.is_empty() {
             self.selected_track = None;
-            self.selected_clip = None;
+            self.set_selected_clip(None);
+        } else if self
+            .tracks
+            .get(0)
+            .map(|track| track.clips.is_empty())
+            .unwrap_or(true)
+        {
+            self.selected_track = Some(0);
+            self.set_selected_clip(None);
+        } else {
+            self.focus_clip(0, 0);
         }
         self.master_track = document.master.into_master();
         self.next_track_index = document.next_track_index.max(self.tracks.len());
@@ -1902,7 +1989,7 @@ impl HarmoniqStudioApp {
             let clip_name = format!("Clip {}", clip_number);
             track.add_clip(Clip::new(clip_name, start, 4.0, color, Vec::new()));
             let clip_idx = track.clips.len() - 1;
-            self.selected_clip = Some((track_idx, clip_idx));
+            self.focus_clip(track_idx, clip_idx);
         }
     }
 
@@ -1937,6 +2024,116 @@ impl HarmoniqStudioApp {
             self.status_message = Some(status);
             self.last_error = None;
         }
+    }
+
+    fn draw_main_menu(&mut self, ui: &mut egui::Ui) {
+        let palette = self.palette().clone();
+        egui::Frame::none()
+            .fill(palette.toolbar)
+            .stroke(Stroke::new(1.0, palette.toolbar_outline))
+            .rounding(Rounding::same(18.0))
+            .inner_margin(Margin::symmetric(16.0, 8.0))
+            .show(ui, |ui| {
+                egui::menu::bar(ui, |ui| {
+                    ui.menu_button("File", |ui| {
+                        if ui.button("New Project").clicked() {
+                            self.new_project();
+                            ui.close_menu();
+                        }
+                        if ui.button("Open…").clicked() {
+                            self.open_project();
+                            ui.close_menu();
+                        }
+                        if ui.button("Save").clicked() {
+                            self.save_project();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Export Audio").clicked() {
+                            self.bounce_project();
+                            ui.close_menu();
+                        }
+                    });
+
+                    ui.menu_button("Edit", |ui| {
+                        ui.add_enabled(false, egui::Button::new("Undo"));
+                        ui.add_enabled(false, egui::Button::new("Redo"));
+                        ui.separator();
+                        ui.add_enabled(false, egui::Button::new("Cut"));
+                        ui.add_enabled(false, egui::Button::new("Copy"));
+                        ui.add_enabled(false, egui::Button::new("Paste"));
+                    });
+
+                    ui.menu_button("View", |ui| {
+                        if ui.button("Zoom In Piano Roll").clicked() {
+                            self.piano_roll.pixels_per_beat =
+                                (self.piano_roll.pixels_per_beat * 1.2).clamp(40.0, 480.0);
+                            ui.close_menu();
+                        }
+                        if ui.button("Zoom Out Piano Roll").clicked() {
+                            self.piano_roll.pixels_per_beat =
+                                (self.piano_roll.pixels_per_beat / 1.2).clamp(40.0, 480.0);
+                            ui.close_menu();
+                        }
+                        if ui.button("Reset Piano Roll View").clicked() {
+                            let defaults = PianoRollState::default();
+                            self.piano_roll.pixels_per_beat = defaults.pixels_per_beat;
+                            self.piano_roll.key_height = defaults.key_height;
+                            ui.close_menu();
+                        }
+                    });
+
+                    ui.menu_button("Options", |ui| {
+                        if ui.button("Grid: 1/4 beat").clicked() {
+                            self.piano_roll.grid_division = 0.25;
+                            ui.close_menu();
+                        }
+                        if ui.button("Grid: 1/8 beat").clicked() {
+                            self.piano_roll.grid_division = 0.125;
+                            ui.close_menu();
+                        }
+                        if ui.button("Grid: 1/16 beat").clicked() {
+                            self.piano_roll.grid_division = 0.0625;
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Refresh Audio Devices").clicked() {
+                            self.audio_settings.refresh_devices();
+                            ui.close_menu();
+                        }
+                    });
+
+                    ui.menu_button("Tools", |ui| {
+                        if ui.button("Add Track").clicked() {
+                            self.add_track();
+                            ui.close_menu();
+                        }
+                        if ui.button("Render Bounce").clicked() {
+                            self.bounce_project();
+                            ui.close_menu();
+                        }
+                        if ui.button("Open Piano Roll on Lead").clicked() {
+                            self.focus_piano_roll_on_track(0);
+                            ui.close_menu();
+                        }
+                    });
+
+                    ui.menu_button("Help", |ui| {
+                        if ui.button("About Harmoniq Studio").clicked() {
+                            self.status_message = Some(
+                                "Harmoniq Studio prototype – FL-style piano roll and playlist"
+                                    .into(),
+                            );
+                            ui.close_menu();
+                        }
+                        if ui.button("Project Website").clicked() {
+                            self.status_message =
+                                Some("Visit harmoniq.studio for roadmap and updates.".into());
+                            ui.close_menu();
+                        }
+                    });
+                });
+            });
     }
 
     fn draw_transport_toolbar(&mut self, ui: &mut egui::Ui) {
@@ -2095,19 +2292,23 @@ impl HarmoniqStudioApp {
 
                     ui.vertical(|ui| {
                         self.section_label(ui, &self.icons.track, "West Coast Lead");
-                        if self
-                            .gradient_icon_button(
-                                ui,
-                                &self.icons.track,
-                                "Open Editor",
-                                (palette.accent_alt, palette.accent_soft),
-                                self.westcoast_editor.show,
-                                Vec2::new(186.0, 44.0),
-                            )
-                            .clicked()
-                        {
+                        let editor_button = self.gradient_icon_button(
+                            ui,
+                            &self.icons.track,
+                            "Open Editor",
+                            (palette.accent_alt, palette.accent_soft),
+                            self.westcoast_editor.show,
+                            Vec2::new(186.0, 44.0),
+                        );
+                        if editor_button.clicked() {
                             self.westcoast_editor.open();
                         }
+                        editor_button.context_menu(|ui| {
+                            if ui.button("Open Piano Roll").clicked() {
+                                self.focus_piano_roll_on_track(0);
+                                ui.close_menu();
+                            }
+                        });
                         ui.label(
                             RichText::new("Shape the sine lead's timbre and modulation")
                                 .color(palette.text_muted)
@@ -2799,11 +3000,10 @@ impl HarmoniqStudioApp {
             });
 
         if let Some((track_idx, clip_idx)) = clip_to_select {
-            self.selected_clip = Some((track_idx, clip_idx));
-            self.selected_track = Some(track_idx);
+            self.focus_clip(track_idx, clip_idx);
         } else if let Some(track_idx) = track_to_select {
             if self.selected_track != Some(track_idx) {
-                self.selected_clip = None;
+                self.set_selected_clip(None);
             }
             self.selected_track = Some(track_idx);
         }
@@ -2823,6 +3023,9 @@ impl HarmoniqStudioApp {
 
         if let Some((track_idx, clip_idx)) = self.selected_clip {
             if let Some(track) = self.tracks.get_mut(track_idx) {
+                let mut selected_note = self.piano_roll_selected_note;
+                let mut drag_state = self.piano_roll_drag.take();
+                let mut handled = false;
                 if let Some(clip) = track.clips.get_mut(clip_idx) {
                     let desired_size = egui::vec2(ui.available_width(), ui.available_height());
                     let (response, painter) =
@@ -2832,6 +3035,15 @@ impl HarmoniqStudioApp {
                     let key_height = self.piano_roll.key_height;
                     let pixels_per_beat = self.piano_roll.pixels_per_beat;
                     let num_keys = self.piano_roll.key_range_len();
+                    let pointer_primary_pressed = ui.input(|i| i.pointer.primary_pressed());
+                    let pointer_primary_down = ui.input(|i| i.pointer.primary_down());
+                    let pointer_primary_released = ui.input(|i| i.pointer.primary_released());
+                    let pointer_secondary_pressed = ui.input(|i| i.pointer.secondary_pressed());
+                    let pointer_pos_hover = ui.input(|i| i.pointer.hover_pos());
+                    let pointer_pos = response.interact_pointer_pos().or(pointer_pos_hover);
+                    let pointer_inside = pointer_pos.map_or(false, |pos| rect.contains(pos));
+                    let clip_length = clip.length_beats.max(self.piano_roll.note_min_length());
+                    let min_length = self.piano_roll.note_min_length();
 
                     // Background grid
                     painter.rect_filled(rect, 8.0, palette.piano_background);
@@ -2858,37 +3070,198 @@ impl HarmoniqStudioApp {
                         );
                     }
 
-                    // Draw notes
-                    for note in &clip.notes {
+                    let mut note_rects: Vec<(usize, egui::Rect)> = Vec::new();
+                    let mut hovered_note: Option<(usize, egui::Rect)> = None;
+                    for (index, note) in clip.notes.iter().enumerate() {
                         if !self.piano_roll.is_pitch_visible(note.pitch) {
                             continue;
                         }
                         let x = rect.left() + note.start_beats * pixels_per_beat;
-                        let width = note.length_beats * pixels_per_beat;
+                        let width = (note.length_beats * pixels_per_beat).max(10.0);
                         let y = self.piano_roll.pitch_to_y(rect, note.pitch);
                         let note_rect = egui::Rect::from_min_size(
                             egui::pos2(x, y - key_height + 2.0),
-                            egui::vec2(width.max(10.0), key_height - 4.0),
+                            egui::vec2(width, key_height - 4.0),
                         );
-                        painter.rect_filled(note_rect, 4.0, clip.color.gamma_multiply(1.2));
-                        painter.rect_stroke(
-                            note_rect,
-                            4.0,
-                            egui::Stroke::new(1.0, palette.timeline_border),
-                        );
+                        if pointer_pos
+                            .map(|pos| note_rect.contains(pos))
+                            .unwrap_or(false)
+                        {
+                            hovered_note = Some((index, note_rect));
+                        }
+                        let mut fill = clip.color.gamma_multiply(0.95);
+                        if selected_note == Some(index) {
+                            fill = fill.gamma_multiply(1.25);
+                        } else if hovered_note
+                            .map(|(hover_index, _)| hover_index == index)
+                            .unwrap_or(false)
+                        {
+                            fill = fill.gamma_multiply(1.1);
+                        }
+                        painter.rect_filled(note_rect, 4.0, fill);
+                        let border_color = if selected_note == Some(index) {
+                            palette.clip_border_active
+                        } else {
+                            palette.timeline_border
+                        };
+                        painter.rect_stroke(note_rect, 4.0, egui::Stroke::new(1.0, border_color));
+                        note_rects.push((index, note_rect));
                     }
 
-                    if response.double_clicked() {
-                        if let Some(pointer_pos) = response.interact_pointer_pos() {
-                            let beat = ((pointer_pos.x - rect.left()) / pixels_per_beat).max(0.0);
-                            let pitch = self
-                                .piano_roll
-                                .y_to_pitch(rect, pointer_pos.y)
-                                .unwrap_or(self.piano_roll.key_range.end().saturating_sub(12));
-                            clip.notes.push(Note::new(beat, 1.0, pitch));
+                    if let Some((hover_index, hover_rect)) = hovered_note {
+                        if pointer_inside {
+                            let edge = 8.0;
+                            if let Some(pos) = pointer_pos {
+                                let near_left = (pos.x - hover_rect.left()).abs();
+                                let near_right = (hover_rect.right() - pos.x).abs();
+                                let cursor = if near_left <= edge || near_right <= edge {
+                                    egui::CursorIcon::ResizeHorizontal
+                                } else {
+                                    egui::CursorIcon::Grab
+                                };
+                                ui.output_mut(|o| o.cursor_icon = cursor);
+                            }
+                        }
+                        if selected_note.is_none() && pointer_primary_pressed {
+                            selected_note = Some(hover_index);
+                            ui.ctx().request_repaint();
                         }
                     }
 
+                    if let Some(drag) = drag_state.as_mut() {
+                        if let Some(note) = clip.notes.get_mut(drag.note_index) {
+                            if let Some(pointer) = pointer_pos {
+                                match drag.mode {
+                                    PianoRollDragMode::Move => {
+                                        let mut new_start =
+                                            self.piano_roll.position_to_beat(rect, pointer.x)
+                                                - drag.drag_offset_beats;
+                                        new_start = self.piano_roll.quantize_beat(new_start);
+                                        let max_start = (clip_length - note.length_beats).max(0.0);
+                                        note.start_beats = new_start.clamp(0.0, max_start);
+                                        if let Some(pitch) =
+                                            self.piano_roll.y_to_pitch(rect, pointer.y)
+                                        {
+                                            note.pitch = pitch;
+                                        }
+                                    }
+                                    PianoRollDragMode::ResizeStart => {
+                                        let mut new_start = self.piano_roll.quantize_beat(
+                                            self.piano_roll.position_to_beat(rect, pointer.x),
+                                        );
+                                        let max_start = (drag.initial_end - min_length)
+                                            .max(0.0)
+                                            .min((clip_length - min_length).max(0.0));
+                                        new_start = new_start.clamp(0.0, max_start);
+                                        let mut new_length =
+                                            (drag.initial_end - new_start).max(min_length);
+                                        new_length = new_length
+                                            .min((clip_length - new_start).max(min_length));
+                                        note.start_beats = new_start;
+                                        note.length_beats = new_length;
+                                    }
+                                    PianoRollDragMode::ResizeEnd | PianoRollDragMode::Create => {
+                                        let mut new_end = self.piano_roll.quantize_beat(
+                                            self.piano_roll.position_to_beat(rect, pointer.x),
+                                        );
+                                        let min_end = note.start_beats + min_length;
+                                        let max_end = clip_length.max(min_end);
+                                        new_end = new_end.clamp(min_end, max_end);
+                                        note.length_beats =
+                                            (new_end - note.start_beats).max(min_length);
+                                    }
+                                }
+                                ui.ctx().request_repaint();
+                            }
+                        } else {
+                            drag_state = None;
+                        }
+                        if pointer_primary_released || !pointer_primary_down {
+                            drag_state = None;
+                        }
+                    }
+
+                    if drag_state.is_none() && pointer_secondary_pressed && pointer_inside {
+                        if let Some((index, _)) = hovered_note {
+                            clip.notes.remove(index);
+                            if let Some(selected) = selected_note {
+                                if selected == index {
+                                    selected_note = None;
+                                } else if selected > index {
+                                    selected_note = Some(selected - 1);
+                                }
+                            }
+                            drag_state = None;
+                            ui.ctx().request_repaint();
+                        }
+                    }
+
+                    if drag_state.is_none() && pointer_primary_pressed && pointer_inside {
+                        if let Some((note_index, note_rect)) = hovered_note {
+                            selected_note = Some(note_index);
+                            ui.ctx().request_repaint();
+                            if let Some(pointer) = pointer_pos {
+                                let edge = 8.0;
+                                let mode = if pointer.x <= note_rect.left() + edge {
+                                    PianoRollDragMode::ResizeStart
+                                } else if pointer.x >= note_rect.right() - edge {
+                                    PianoRollDragMode::ResizeEnd
+                                } else {
+                                    PianoRollDragMode::Move
+                                };
+                                if let Some(note) = clip.notes.get(note_index) {
+                                    let pointer_beat =
+                                        self.piano_roll.position_to_beat(rect, pointer.x);
+                                    let drag_offset = pointer_beat - note.start_beats;
+                                    drag_state = Some(PianoRollDragState {
+                                        mode,
+                                        note_index,
+                                        drag_offset_beats: drag_offset,
+                                        initial_start: note.start_beats,
+                                        initial_length: note.length_beats,
+                                        initial_end: note.start_beats + note.length_beats,
+                                        initial_pitch: note.pitch,
+                                    });
+                                }
+                            }
+                        } else if let Some(pointer) = pointer_pos {
+                            let mut beat = self
+                                .piano_roll
+                                .quantize_beat(self.piano_roll.position_to_beat(rect, pointer.x));
+                            let max_start = (clip_length - min_length).max(0.0);
+                            beat = beat.clamp(0.0, max_start);
+                            let pitch = self
+                                .piano_roll
+                                .y_to_pitch(rect, pointer.y)
+                                .unwrap_or(*self.piano_roll.key_range.end());
+                            let length = min_length;
+                            clip.notes.push(Note::new(beat, length, pitch));
+                            let note_index = clip.notes.len() - 1;
+                            selected_note = Some(note_index);
+                            drag_state = Some(PianoRollDragState {
+                                mode: PianoRollDragMode::Create,
+                                note_index,
+                                drag_offset_beats: 0.0,
+                                initial_start: beat,
+                                initial_length: length,
+                                initial_end: beat + length,
+                                initial_pitch: pitch,
+                            });
+                            ui.ctx().request_repaint();
+                        }
+                    }
+
+                    if let Some(idx) = selected_note {
+                        if idx >= clip.notes.len() {
+                            selected_note = None;
+                        }
+                    }
+
+                    handled = true;
+                }
+                self.piano_roll_selected_note = selected_note;
+                self.piano_roll_drag = drag_state;
+                if handled {
                     return;
                 }
             }
@@ -2947,6 +3320,8 @@ impl HarmoniqStudioApp {
     }
 
     fn draw_effects_ui(
+        &mut self,
+        track_index: Option<usize>,
         effects: &mut Vec<MixerEffect>,
         ui: &mut egui::Ui,
         palette: &HarmoniqPalette,
@@ -2961,7 +3336,7 @@ impl HarmoniqStudioApp {
 
         let mut removal: Option<usize> = None;
         for (index, effect) in effects.iter_mut().enumerate() {
-            ui.group(|ui| {
+            let response = ui.group(|ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(effect.effect_type.display_name()).strong());
                     let toggle_label = if effect.enabled { "Bypass" } else { "Enable" };
@@ -2978,6 +3353,15 @@ impl HarmoniqStudioApp {
                         .color(palette.text_muted),
                 );
             });
+
+            if let Some(track_idx) = track_index {
+                response.response.context_menu(|ui| {
+                    if ui.button("Open Piano Roll").clicked() {
+                        self.focus_piano_roll_on_track(track_idx);
+                        ui.close_menu();
+                    }
+                });
+            }
         }
 
         if let Some(index) = removal {
@@ -2995,6 +3379,7 @@ impl HarmoniqStudioApp {
     }
 
     fn draw_track_strip(
+        &mut self,
         ui: &mut egui::Ui,
         index: usize,
         track: &mut Track,
@@ -3045,14 +3430,19 @@ impl HarmoniqStudioApp {
                         .small()
                         .color(palette.text_muted),
                 );
-                Self::draw_effects_ui(&mut track.effects, ui, palette);
+                self.draw_effects_ui(Some(index), &mut track.effects, ui, palette);
             });
         });
         ui.add_space(8.0);
         clicked
     }
 
-    fn draw_master_strip(ui: &mut egui::Ui, master: &mut MasterChannel, palette: &HarmoniqPalette) {
+    fn draw_master_strip(
+        &mut self,
+        ui: &mut egui::Ui,
+        master: &mut MasterChannel,
+        palette: &HarmoniqPalette,
+    ) {
         let mut frame = egui::Frame::group(ui.style());
         frame.fill = palette.mixer_strip_selected;
         frame.stroke = Stroke::new(1.0, palette.mixer_strip_border);
@@ -3080,7 +3470,7 @@ impl HarmoniqStudioApp {
                         .small()
                         .color(palette.text_muted),
                 );
-                Self::draw_effects_ui(&mut master.effects, ui, palette);
+                self.draw_effects_ui(None, &mut master.effects, ui, palette);
             });
         });
     }
@@ -3094,7 +3484,7 @@ impl HarmoniqStudioApp {
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal(|ui| {
                 for (index, track) in self.tracks.iter_mut().enumerate() {
-                    if Self::draw_track_strip(
+                    if self.draw_track_strip(
                         ui,
                         index,
                         track,
@@ -3104,7 +3494,7 @@ impl HarmoniqStudioApp {
                         new_selection = Some(index);
                     }
                 }
-                Self::draw_master_strip(ui, &mut self.master_track, &palette);
+                self.draw_master_strip(ui, &mut self.master_track, &palette);
             });
         });
         if let Some(selection) = new_selection {
@@ -3116,6 +3506,14 @@ impl HarmoniqStudioApp {
 impl App for HarmoniqStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let palette = self.palette().clone();
+
+        egui::TopBottomPanel::top("main_menu")
+            .frame(
+                egui::Frame::none()
+                    .fill(palette.background)
+                    .outer_margin(Margin::symmetric(12.0, 4.0)),
+            )
+            .show(ctx, |ui| self.draw_main_menu(ui));
 
         egui::TopBottomPanel::top("transport")
             .frame(
@@ -3875,6 +4273,7 @@ struct PianoRollState {
     pixels_per_beat: f32,
     key_height: f32,
     key_range: std::ops::RangeInclusive<u8>,
+    grid_division: f32,
 }
 
 impl PianoRollState {
@@ -3900,6 +4299,22 @@ impl PianoRollState {
     fn is_pitch_visible(&self, pitch: u8) -> bool {
         self.key_range.contains(&pitch)
     }
+
+    fn position_to_beat(&self, rect: egui::Rect, x: f32) -> f32 {
+        ((x - rect.left()) / self.pixels_per_beat).max(0.0)
+    }
+
+    fn quantize_beat(&self, beat: f32) -> f32 {
+        if self.grid_division <= f32::EPSILON {
+            beat
+        } else {
+            (beat / self.grid_division).round() * self.grid_division
+        }
+    }
+
+    fn note_min_length(&self) -> f32 {
+        self.grid_division.max(0.125)
+    }
 }
 
 impl Default for PianoRollState {
@@ -3908,6 +4323,26 @@ impl Default for PianoRollState {
             pixels_per_beat: 120.0,
             key_height: 18.0,
             key_range: 36..=84,
+            grid_division: 0.25,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PianoRollDragMode {
+    Move,
+    ResizeStart,
+    ResizeEnd,
+    Create,
+}
+
+#[derive(Debug, Clone)]
+struct PianoRollDragState {
+    mode: PianoRollDragMode,
+    note_index: usize,
+    drag_offset_beats: f32,
+    initial_start: f32,
+    initial_length: f32,
+    initial_end: f32,
+    initial_pitch: u8,
 }
