@@ -7,9 +7,14 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context};
 use clap::Parser;
-use eframe::egui::{self, Align2, Color32, FontId, PointerButton, RichText, Sense, Stroke};
+use eframe::egui::epaint::Mesh;
+use eframe::egui::style::Margin;
+use eframe::egui::{
+    self, Align2, Color32, FontId, PointerButton, Pos2, Rect, RichText, Rounding, Sense, Stroke,
+    TextStyle, Vec2,
+};
 use eframe::{App, CreationContext, NativeOptions};
-use egui_extras::install_image_loaders;
+use egui_extras::{install_image_loaders, RetainedImage};
 use harmoniq_engine::{
     AudioBuffer, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine,
     TransportState,
@@ -164,6 +169,237 @@ impl AudioExportFormat {
             Self::Flac => "FLAC",
             Self::Mp3 => "MP3",
         }
+    }
+}
+
+#[derive(Clone)]
+struct HarmoniqPalette {
+    background: Color32,
+    panel: Color32,
+    panel_alt: Color32,
+    toolbar: Color32,
+    toolbar_highlight: Color32,
+    toolbar_outline: Color32,
+    text_primary: Color32,
+    text_muted: Color32,
+    accent: Color32,
+    accent_alt: Color32,
+    accent_soft: Color32,
+    success: Color32,
+    warning: Color32,
+    track_header: Color32,
+    track_header_selected: Color32,
+    track_lane_overlay: Color32,
+    track_button_bg: Color32,
+    track_button_border: Color32,
+    automation_header: Color32,
+    automation_header_muted: Color32,
+    automation_lane_bg: Color32,
+    automation_lane_hidden_bg: Color32,
+    automation_point_border: Color32,
+    timeline_bg: Color32,
+    timeline_header: Color32,
+    timeline_border: Color32,
+    timeline_grid_primary: Color32,
+    timeline_grid_secondary: Color32,
+    ruler_text: Color32,
+    clip_text_primary: Color32,
+    clip_text_secondary: Color32,
+    clip_border_default: Color32,
+    clip_border_active: Color32,
+    clip_border_playing: Color32,
+    clip_shadow: Color32,
+    piano_background: Color32,
+    piano_grid_major: Color32,
+    piano_grid_minor: Color32,
+    piano_white: Color32,
+    piano_black: Color32,
+    meter_background: Color32,
+    meter_border: Color32,
+    meter_left: Color32,
+    meter_right: Color32,
+    meter_rms: Color32,
+    knob_base: Color32,
+    knob_ring: Color32,
+    knob_indicator: Color32,
+    knob_label: Color32,
+    mixer_strip_bg: Color32,
+    mixer_strip_selected: Color32,
+    mixer_strip_solo: Color32,
+    mixer_strip_muted: Color32,
+    mixer_strip_border: Color32,
+}
+
+impl HarmoniqPalette {
+    fn new() -> Self {
+        Self {
+            background: Color32::from_rgb(16, 18, 32),
+            panel: Color32::from_rgb(28, 30, 48),
+            panel_alt: Color32::from_rgb(36, 38, 60),
+            toolbar: Color32::from_rgb(32, 36, 62),
+            toolbar_highlight: Color32::from_rgb(48, 54, 88),
+            toolbar_outline: Color32::from_rgb(74, 78, 118),
+            text_primary: Color32::from_rgb(240, 242, 255),
+            text_muted: Color32::from_rgb(176, 182, 214),
+            accent: Color32::from_rgb(255, 152, 92),
+            accent_alt: Color32::from_rgb(134, 190, 255),
+            accent_soft: Color32::from_rgb(255, 108, 208),
+            success: Color32::from_rgb(112, 220, 176),
+            warning: Color32::from_rgb(255, 112, 132),
+            track_header: Color32::from_rgb(52, 56, 86),
+            track_header_selected: Color32::from_rgb(76, 82, 124),
+            track_lane_overlay: Color32::from_rgba_unmultiplied(132, 180, 255, 40),
+            track_button_bg: Color32::from_rgb(64, 66, 92),
+            track_button_border: Color32::from_rgb(30, 32, 48),
+            automation_header: Color32::from_rgb(60, 64, 100),
+            automation_header_muted: Color32::from_rgb(46, 50, 78),
+            automation_lane_bg: Color32::from_rgb(34, 38, 64),
+            automation_lane_hidden_bg: Color32::from_rgb(28, 30, 52),
+            automation_point_border: Color32::from_rgb(28, 28, 40),
+            timeline_bg: Color32::from_rgb(24, 26, 46),
+            timeline_header: Color32::from_rgb(42, 46, 74),
+            timeline_border: Color32::from_rgb(74, 78, 118),
+            timeline_grid_primary: Color32::from_rgb(94, 104, 150),
+            timeline_grid_secondary: Color32::from_rgb(58, 62, 92),
+            ruler_text: Color32::from_rgb(204, 208, 238),
+            clip_text_primary: Color32::from_rgb(246, 248, 255),
+            clip_text_secondary: Color32::from_rgb(206, 210, 238),
+            clip_border_default: Color32::from_rgb(36, 38, 54),
+            clip_border_active: Color32::from_rgb(232, 232, 248),
+            clip_border_playing: Color32::from_rgb(255, 214, 128),
+            clip_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 90),
+            piano_background: Color32::from_rgb(18, 20, 36),
+            piano_grid_major: Color32::from_rgb(84, 90, 130),
+            piano_grid_minor: Color32::from_rgb(48, 52, 78),
+            piano_white: Color32::from_rgb(240, 244, 255),
+            piano_black: Color32::from_rgb(60, 62, 92),
+            meter_background: Color32::from_rgb(34, 36, 60),
+            meter_border: Color32::from_rgb(84, 88, 128),
+            meter_left: Color32::from_rgb(92, 218, 255),
+            meter_right: Color32::from_rgb(255, 138, 184),
+            meter_rms: Color32::from_rgb(255, 226, 132),
+            knob_base: Color32::from_rgb(48, 50, 82),
+            knob_ring: Color32::from_rgb(255, 162, 118),
+            knob_indicator: Color32::from_rgb(140, 234, 255),
+            knob_label: Color32::from_rgb(214, 218, 250),
+            mixer_strip_bg: Color32::from_rgb(44, 46, 74),
+            mixer_strip_selected: Color32::from_rgb(66, 70, 106),
+            mixer_strip_solo: Color32::from_rgb(60, 98, 88),
+            mixer_strip_muted: Color32::from_rgb(104, 62, 78),
+            mixer_strip_border: Color32::from_rgb(82, 86, 122),
+        }
+    }
+}
+
+struct HarmoniqTheme {
+    palette: HarmoniqPalette,
+}
+
+impl HarmoniqTheme {
+    fn init(ctx: &egui::Context) -> Self {
+        let palette = HarmoniqPalette::new();
+        let mut style = (*ctx.style()).clone();
+        let mut visuals = style.visuals.clone();
+        visuals.dark_mode = true;
+        visuals.override_text_color = Some(palette.text_primary);
+        visuals.panel_fill = palette.background;
+        visuals.window_fill = palette.panel;
+        visuals.window_stroke = Stroke::new(1.0, palette.toolbar_outline);
+        visuals.widgets.noninteractive.bg_fill = palette.panel;
+        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, palette.text_muted);
+        visuals.widgets.inactive.bg_fill = palette.panel_alt;
+        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, palette.text_primary);
+        visuals.widgets.hovered.bg_fill = palette.accent_alt.gamma_multiply(0.7);
+        visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, palette.text_primary);
+        visuals.widgets.active.bg_fill = palette.accent.gamma_multiply(0.8);
+        visuals.widgets.active.fg_stroke = Stroke::new(1.2, palette.text_primary);
+        visuals.widgets.open.bg_fill = palette.toolbar_highlight;
+        visuals.selection.bg_fill = palette.accent_soft.gamma_multiply(0.85);
+        visuals.selection.stroke = Stroke::new(1.0, palette.accent_alt);
+        visuals.hyperlink_color = palette.accent_alt;
+        style.visuals = visuals;
+        style.spacing.item_spacing = egui::vec2(12.0, 10.0);
+        style.spacing.button_padding = egui::vec2(18.0, 10.0);
+        style.spacing.window_margin = Margin::same(12.0);
+        style.text_styles = [
+            (TextStyle::Heading, FontId::proportional(26.0)),
+            (TextStyle::Body, FontId::proportional(17.0)),
+            (TextStyle::Button, FontId::proportional(16.0)),
+            (TextStyle::Small, FontId::proportional(13.0)),
+            (TextStyle::Monospace, FontId::monospace(15.0)),
+        ]
+        .into();
+        ctx.set_style(style);
+        Self { palette }
+    }
+
+    fn palette(&self) -> &HarmoniqPalette {
+        &self.palette
+    }
+}
+
+struct AppIcons {
+    play: RetainedImage,
+    pause: RetainedImage,
+    stop: RetainedImage,
+    save: RetainedImage,
+    open: RetainedImage,
+    bounce: RetainedImage,
+    track: RetainedImage,
+    clip: RetainedImage,
+    automation: RetainedImage,
+    tempo: RetainedImage,
+}
+
+impl AppIcons {
+    fn load() -> anyhow::Result<Self> {
+        fn load_svg(name: &str, bytes: &[u8]) -> anyhow::Result<RetainedImage> {
+            RetainedImage::from_svg_bytes(name, bytes)
+                .map_err(|err| anyhow!("failed to load icon {name}: {err}"))
+        }
+
+        Ok(Self {
+            play: load_svg(
+                "icon_play",
+                include_bytes!("../../../resources/icons/play.svg"),
+            )?,
+            pause: load_svg(
+                "icon_pause",
+                include_bytes!("../../../resources/icons/pause.svg"),
+            )?,
+            stop: load_svg(
+                "icon_stop",
+                include_bytes!("../../../resources/icons/stop.svg"),
+            )?,
+            save: load_svg(
+                "icon_save",
+                include_bytes!("../../../resources/icons/save.svg"),
+            )?,
+            open: load_svg(
+                "icon_open",
+                include_bytes!("../../../resources/icons/folder.svg"),
+            )?,
+            bounce: load_svg(
+                "icon_bounce",
+                include_bytes!("../../../resources/icons/bounce.svg"),
+            )?,
+            track: load_svg(
+                "icon_track",
+                include_bytes!("../../../resources/icons/track.svg"),
+            )?,
+            clip: load_svg(
+                "icon_clip",
+                include_bytes!("../../../resources/icons/clip.svg"),
+            )?,
+            automation: load_svg(
+                "icon_automation",
+                include_bytes!("../../../resources/icons/automation.svg"),
+            )?,
+            tempo: load_svg(
+                "icon_tempo",
+                include_bytes!("../../../resources/icons/tempo.svg"),
+            )?,
+        })
     }
 }
 
@@ -541,6 +777,8 @@ impl Drop for EngineRunner {
 }
 
 struct HarmoniqStudioApp {
+    theme: HarmoniqTheme,
+    icons: AppIcons,
     _engine_runner: EngineRunner,
     command_queue: harmoniq_engine::EngineCommandQueue,
     engine_config: BufferConfig,
@@ -570,7 +808,8 @@ impl HarmoniqStudioApp {
         runtime: AudioRuntimeOptions,
         cc: &CreationContext<'_>,
     ) -> anyhow::Result<Self> {
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        let theme = HarmoniqTheme::init(&cc.egui_ctx);
+        let icons = AppIcons::load()?;
 
         let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
         let graph_config = DemoGraphConfig::ui_default();
@@ -592,6 +831,8 @@ impl HarmoniqStudioApp {
         let master_track = MasterChannel::default();
 
         let mut app = Self {
+            theme,
+            icons,
             _engine_runner: engine_runner,
             command_queue,
             engine_config: config.clone(),
@@ -705,6 +946,100 @@ impl HarmoniqStudioApp {
         let color = COLORS[self.next_color_index % COLORS.len()];
         self.next_color_index += 1;
         color
+    }
+
+    fn palette(&self) -> &HarmoniqPalette {
+        self.theme.palette()
+    }
+
+    fn gradient_icon_button(
+        &self,
+        ui: &mut egui::Ui,
+        icon: &RetainedImage,
+        label: &str,
+        gradient: (Color32, Color32),
+        active: bool,
+        size: Vec2,
+    ) -> egui::Response {
+        let desired_size = Vec2::new(size.x.max(96.0), size.y.max(36.0));
+        let (rect, response) = ui.allocate_exact_size(desired_size, Sense::click());
+        let palette = self.palette();
+        let mut start = gradient.0;
+        let mut end = gradient.1;
+
+        if active {
+            start = start.gamma_multiply(1.1);
+            end = end.gamma_multiply(1.1);
+        }
+        if response.hovered() {
+            start = start.gamma_multiply(1.05);
+            end = end.gamma_multiply(1.05);
+        }
+        if response.is_pointer_button_down_on() {
+            start = start.gamma_multiply(0.95);
+            end = end.gamma_multiply(0.95);
+        }
+
+        let rounding = Rounding::same((desired_size.y * 0.48).clamp(8.0, 24.0));
+        let mut mesh = Mesh::default();
+        mesh.add_colored_rect(rect, rounding, [start, start, end, end]);
+        ui.painter().add(mesh);
+        ui.painter()
+            .rect_stroke(rect, rounding, Stroke::new(1.0, palette.toolbar_outline));
+
+        let content_rect = rect.shrink2(egui::vec2(16.0, 10.0));
+        let icon_side = (content_rect.height().min(28.0)).max(18.0);
+        let icon_rect = Rect::from_min_size(
+            egui::pos2(
+                content_rect.left(),
+                content_rect.center().y - icon_side * 0.5,
+            ),
+            Vec2::splat(icon_side),
+        );
+        ui.painter().image(
+            icon.texture_id(ui.ctx()),
+            icon_rect,
+            Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
+
+        let text_pos = egui::pos2(icon_rect.right() + 10.0, content_rect.center().y);
+        ui.painter().text(
+            text_pos,
+            Align2::LEFT_CENTER,
+            label,
+            FontId::proportional((desired_size.y * 0.42).clamp(14.0, 18.0)),
+            palette.text_primary,
+        );
+
+        response
+    }
+
+    fn section_label(&self, ui: &mut egui::Ui, icon: &RetainedImage, label: &str) {
+        let palette = self.palette();
+        ui.horizontal(|ui| {
+            let tint = palette.accent_alt;
+            ui.add(egui::Image::new(icon.texture_id(ui.ctx()), [18.0, 18.0]).tint(tint));
+            ui.label(
+                RichText::new(label)
+                    .color(palette.text_muted)
+                    .strong()
+                    .small(),
+            );
+        });
+    }
+
+    fn tinted_frame<F>(&self, ui: &mut egui::Ui, fill: Color32, add_contents: F)
+    where
+        F: FnOnce(&mut egui::Ui),
+    {
+        let palette = self.palette();
+        egui::Frame::none()
+            .fill(fill)
+            .stroke(Stroke::new(1.0, palette.toolbar_outline))
+            .rounding(Rounding::same(12.0))
+            .inner_margin(Margin::symmetric(12.0, 8.0))
+            .show(ui, add_contents);
     }
 
     fn send_command(&mut self, command: EngineCommand) {
@@ -995,83 +1330,212 @@ impl HarmoniqStudioApp {
     }
 
     fn draw_transport_toolbar(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            if ui
-                .button(match self.transport_state {
-                    TransportState::Playing => "Pause",
-                    _ => "Play",
-                })
-                .clicked()
-            {
-                self.toggle_transport();
-            }
+        let palette = self.palette();
+        egui::Frame::none()
+            .fill(palette.toolbar)
+            .stroke(Stroke::new(1.0, palette.toolbar_outline))
+            .rounding(Rounding::same(20.0))
+            .inner_margin(Margin::symmetric(20.0, 16.0))
+            .outer_margin(Margin::symmetric(4.0, 0.0))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(16.0, 12.0);
 
-            if ui.button("Stop").clicked() {
-                self.stop_transport();
-            }
+                    let playing = matches!(self.transport_state, TransportState::Playing);
+                    let play_icon = if playing {
+                        &self.icons.pause
+                    } else {
+                        &self.icons.play
+                    };
+                    let play_label = if playing { "Pause" } else { "Play" };
+                    if self
+                        .gradient_icon_button(
+                            ui,
+                            play_icon,
+                            play_label,
+                            (palette.accent, palette.accent_soft),
+                            playing,
+                            Vec2::new(150.0, 48.0),
+                        )
+                        .clicked()
+                    {
+                        self.toggle_transport();
+                    }
 
-            ui.separator();
-            ui.label("Tempo");
-            let tempo_response = ui.add(
-                egui::DragValue::new(&mut self.tempo)
-                    .clamp_range(40.0..=220.0)
-                    .speed(1.0)
-                    .suffix(" BPM"),
-            );
-            if tempo_response.changed() {
-                self.send_command(EngineCommand::SetTempo(self.tempo));
-            }
+                    if self
+                        .gradient_icon_button(
+                            ui,
+                            &self.icons.stop,
+                            "Stop",
+                            (palette.warning, palette.accent_soft),
+                            matches!(self.transport_state, TransportState::Stopped),
+                            Vec2::new(120.0, 48.0),
+                        )
+                        .clicked()
+                    {
+                        self.stop_transport();
+                    }
 
-            ui.separator();
-            ui.label("Project");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.project_path)
-                    .desired_width(160.0)
-                    .hint_text("my_project.hst"),
-            );
-            if ui.button("Open").clicked() {
-                self.open_project();
-            }
-            if ui.button("Save").clicked() {
-                self.save_project();
-            }
+                    ui.separator();
 
-            ui.separator();
-            ui.label("Bounce to");
-            ui.add(egui::TextEdit::singleline(&mut self.bounce_path).desired_width(160.0));
-            ui.label("Length");
-            ui.add(
-                egui::DragValue::new(&mut self.bounce_length_beats)
-                    .clamp_range(1.0..=256.0)
-                    .speed(1.0)
-                    .suffix(" beats"),
-            );
-            if ui.button("Offline Bounce").clicked() {
-                self.bounce_project();
-            }
+                    ui.vertical(|ui| {
+                        self.section_label(ui, &self.icons.tempo, "Tempo");
+                        let tempo_response = ui.add(
+                            egui::DragValue::new(&mut self.tempo)
+                                .clamp_range(40.0..=220.0)
+                                .speed(0.5)
+                                .suffix(" BPM"),
+                        );
+                        if tempo_response.changed() {
+                            self.send_command(EngineCommand::SetTempo(self.tempo));
+                        }
+                    });
 
-            ui.separator();
-            ui.label("Time signature 4/4");
-        });
+                    ui.separator();
+
+                    ui.vertical(|ui| {
+                        self.section_label(ui, &self.icons.open, "Project");
+                        self.tinted_frame(ui, palette.panel_alt, |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.project_path)
+                                    .desired_width(220.0)
+                                    .hint_text("my_project.hst"),
+                            );
+                        });
+                        ui.horizontal(|ui| {
+                            if self
+                                .gradient_icon_button(
+                                    ui,
+                                    &self.icons.open,
+                                    "Open",
+                                    (palette.accent_alt, palette.toolbar_highlight),
+                                    false,
+                                    Vec2::new(124.0, 40.0),
+                                )
+                                .clicked()
+                            {
+                                self.open_project();
+                            }
+                            if self
+                                .gradient_icon_button(
+                                    ui,
+                                    &self.icons.save,
+                                    "Save",
+                                    (palette.accent, palette.accent_alt),
+                                    false,
+                                    Vec2::new(124.0, 40.0),
+                                )
+                                .clicked()
+                            {
+                                self.save_project();
+                            }
+                        });
+                    });
+
+                    ui.separator();
+
+                    ui.vertical(|ui| {
+                        self.section_label(ui, &self.icons.bounce, "Offline Bounce");
+                        self.tinted_frame(ui, palette.panel_alt, |ui| {
+                            ui.vertical(|ui| {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.bounce_path)
+                                        .desired_width(220.0)
+                                        .hint_text("bounce.wav"),
+                                );
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new("Length")
+                                            .color(palette.text_muted)
+                                            .small()
+                                            .strong(),
+                                    );
+                                    ui.add_space(8.0);
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.bounce_length_beats)
+                                            .clamp_range(1.0..=256.0)
+                                            .speed(1.0)
+                                            .suffix(" beats"),
+                                    );
+                                });
+                            });
+                        });
+                        if self
+                            .gradient_icon_button(
+                                ui,
+                                &self.icons.bounce,
+                                "Render Bounce",
+                                (palette.success, palette.accent_alt),
+                                false,
+                                Vec2::new(186.0, 44.0),
+                            )
+                            .clicked()
+                        {
+                            self.bounce_project();
+                        }
+                    });
+
+                    ui.add_space(16.0);
+                    ui.label(
+                        RichText::new("Signature: 4 / 4")
+                            .color(palette.text_muted)
+                            .strong(),
+                    );
+                });
+            });
     }
 
     fn draw_playlist(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Playlist");
-        ui.add_space(4.0);
+        let palette = self.palette();
+        ui.heading(RichText::new("Playlist").color(palette.text_primary));
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
-            if ui.button("Add Track").clicked() {
+            if self
+                .gradient_icon_button(
+                    ui,
+                    &self.icons.track,
+                    "Add Track",
+                    (palette.accent_alt, palette.accent),
+                    false,
+                    Vec2::new(148.0, 40.0),
+                )
+                .clicked()
+            {
                 self.add_track();
             }
-            if ui.button("Add Clip").clicked() {
+            if self
+                .gradient_icon_button(
+                    ui,
+                    &self.icons.clip,
+                    "Add Clip",
+                    (palette.accent, palette.accent_soft),
+                    false,
+                    Vec2::new(138.0, 40.0),
+                )
+                .clicked()
+            {
                 self.add_clip_to_selected_track();
             }
-            if ui.button("Add Automation Lane").clicked() {
+            if self
+                .gradient_icon_button(
+                    ui,
+                    &self.icons.automation,
+                    "Add Automation",
+                    (palette.success, palette.accent_alt),
+                    false,
+                    Vec2::new(190.0, 40.0),
+                )
+                .clicked()
+            {
                 self.add_automation_lane_to_selected_track();
             }
         });
 
-        ui.add_space(4.0);
+        ui.add_space(8.0);
         ui.separator();
+        ui.add_space(6.0);
 
         enum ClipAction {
             Launch(usize, usize),
@@ -1135,27 +1599,28 @@ impl HarmoniqStudioApp {
                     rect.max(),
                 );
 
-                painter.rect_filled(rect, 0.0, Color32::from_rgb(18, 18, 22));
-                painter.rect_filled(header_column_rect, 0.0, Color32::from_rgb(32, 32, 38));
-                painter.rect_filled(timeline_rect, 0.0, Color32::from_rgb(20, 20, 26));
+                painter.rect_filled(rect, 10.0, palette.timeline_bg);
+                painter.rect_stroke(rect, 10.0, Stroke::new(1.0, palette.timeline_border));
+                painter.rect_filled(header_column_rect, 10.0, palette.track_header);
                 painter.rect_filled(
                     egui::Rect::from_min_max(
                         egui::pos2(header_column_rect.left(), rect.top()),
                         egui::pos2(header_column_rect.right(), ruler_rect.bottom()),
                     ),
-                    0.0,
-                    Color32::from_rgb(38, 38, 46),
+                    10.0,
+                    palette.timeline_header,
                 );
-                painter.rect_filled(ruler_rect, 0.0, Color32::from_rgb(26, 26, 32));
+                painter.rect_filled(timeline_rect, 4.0, palette.timeline_bg);
+                painter.rect_filled(ruler_rect, 4.0, palette.timeline_header);
 
                 let total_beats = visible_beats as usize;
                 for beat in 0..=total_beats {
                     let x = header_column_rect.right() + beat as f32 * pixels_per_beat;
                     let is_measure = beat % 4 == 0;
                     let color = if is_measure {
-                        Color32::from_rgb(70, 70, 78)
+                        palette.timeline_grid_primary
                     } else {
-                        Color32::from_rgb(48, 48, 54)
+                        palette.timeline_grid_secondary
                     };
                     painter.line_segment(
                         [
@@ -1171,7 +1636,7 @@ impl HarmoniqStudioApp {
                             Align2::LEFT_CENTER,
                             format!("Bar {bar_idx}"),
                             FontId::proportional(13.0),
-                            Color32::from_gray(210),
+                            palette.ruler_text,
                         );
                     }
                 }
@@ -1194,23 +1659,19 @@ impl HarmoniqStudioApp {
                     let is_selected = self.selected_track == Some(track_idx);
 
                     let header_fill = if is_selected {
-                        Color32::from_rgb(58, 66, 90)
+                        palette.track_header_selected
                     } else {
-                        Color32::from_rgb(40, 40, 46)
+                        palette.track_header
                     };
                     painter.rect_filled(track_header_rect, 6.0, header_fill);
                     painter.rect_stroke(
                         track_header_rect,
                         6.0,
-                        Stroke::new(1.0, Color32::from_rgb(70, 70, 78)),
+                        Stroke::new(1.0, palette.timeline_border),
                     );
 
                     if is_selected {
-                        painter.rect_filled(
-                            track_lane_rect,
-                            0.0,
-                            Color32::from_rgba_unmultiplied(80, 110, 150, 35),
-                        );
+                        painter.rect_filled(track_lane_rect, 0.0, palette.track_lane_overlay);
                     }
 
                     painter.text(
@@ -1221,7 +1682,7 @@ impl HarmoniqStudioApp {
                         Align2::LEFT_CENTER,
                         format!("{:02} {}", track_idx + 1, track.name),
                         FontId::proportional(14.0),
-                        Color32::from_gray(220),
+                        palette.text_primary,
                     );
 
                     let button_size = egui::vec2(28.0, 20.0);
@@ -1242,41 +1703,41 @@ impl HarmoniqStudioApp {
                     );
 
                     let mute_color = if track.muted {
-                        Color32::from_rgb(140, 60, 60)
+                        palette.warning
                     } else {
-                        Color32::from_rgb(60, 60, 66)
+                        palette.track_button_bg
                     };
                     painter.rect_filled(mute_rect, 4.0, mute_color);
                     painter.rect_stroke(
                         mute_rect,
                         4.0,
-                        Stroke::new(1.0, Color32::from_rgb(26, 26, 32)),
+                        Stroke::new(1.0, palette.track_button_border),
                     );
                     painter.text(
                         mute_rect.center(),
                         Align2::CENTER_CENTER,
                         "M",
                         FontId::proportional(13.0),
-                        Color32::from_gray(230),
+                        palette.text_primary,
                     );
 
                     let solo_color = if track.solo {
-                        Color32::from_rgb(60, 130, 90)
+                        palette.success
                     } else {
-                        Color32::from_rgb(60, 60, 66)
+                        palette.track_button_bg
                     };
                     painter.rect_filled(solo_rect, 4.0, solo_color);
                     painter.rect_stroke(
                         solo_rect,
                         4.0,
-                        Stroke::new(1.0, Color32::from_rgb(26, 26, 32)),
+                        Stroke::new(1.0, palette.track_button_border),
                     );
                     painter.text(
                         solo_rect.center(),
                         Align2::CENTER_CENTER,
                         "S",
                         FontId::proportional(13.0),
-                        Color32::from_gray(230),
+                        palette.text_primary,
                     );
 
                     if clicked {
@@ -1305,6 +1766,9 @@ impl HarmoniqStudioApp {
                             .map(|pos| clip_rect.contains(pos))
                             .unwrap_or(false);
 
+                        let shadow_rect = clip_rect.translate(Vec2::new(0.0, 3.0));
+                        painter.rect_filled(shadow_rect, 8.0, palette.clip_shadow);
+
                         let mut fill = if clip_selected {
                             clip.color
                         } else {
@@ -1319,11 +1783,11 @@ impl HarmoniqStudioApp {
 
                         painter.rect_filled(clip_rect, 6.0, fill);
                         let border_color = if clip.launch_state.is_playing() {
-                            Color32::from_rgb(255, 200, 60)
+                            palette.clip_border_playing
                         } else if clip_selected {
-                            Color32::from_rgb(220, 220, 220)
+                            palette.clip_border_active
                         } else {
-                            Color32::from_rgb(30, 30, 34)
+                            palette.clip_border_default
                         };
                         painter.rect_stroke(clip_rect, 6.0, Stroke::new(1.5, border_color));
 
@@ -1332,14 +1796,14 @@ impl HarmoniqStudioApp {
                             Align2::LEFT_CENTER,
                             clip.name.as_str(),
                             FontId::proportional(13.0),
-                            Color32::from_gray(240),
+                            palette.clip_text_primary,
                         );
                         painter.text(
                             egui::pos2(clip_rect.right() - 10.0, clip_rect.bottom() - 8.0),
                             Align2::RIGHT_BOTTOM,
                             format!("{:.1} – {:.1}", clip.start_beat, clip.length_beats),
                             FontId::proportional(11.0),
-                            Color32::from_gray(220),
+                            palette.clip_text_secondary,
                         );
                         if clip.launch_state.is_playing() {
                             painter.text(
@@ -1347,7 +1811,7 @@ impl HarmoniqStudioApp {
                                 Align2::LEFT_TOP,
                                 "▶",
                                 FontId::proportional(12.0),
-                                Color32::from_gray(240),
+                                palette.clip_text_primary,
                             );
                         }
 
@@ -1377,15 +1841,15 @@ impl HarmoniqStudioApp {
                         );
 
                         let header_fill = if lane.visible {
-                            Color32::from_rgb(36, 36, 42)
+                            palette.automation_header
                         } else {
-                            Color32::from_rgb(32, 32, 36)
+                            palette.automation_header_muted
                         };
                         painter.rect_filled(lane_header_rect, 6.0, header_fill);
                         painter.rect_stroke(
                             lane_header_rect,
                             6.0,
-                            Stroke::new(1.0, Color32::from_rgb(60, 60, 68)),
+                            Stroke::new(1.0, palette.timeline_border),
                         );
                         painter.text(
                             egui::pos2(lane_header_rect.left() + 12.0, lane_header_rect.center().y),
@@ -1417,50 +1881,48 @@ impl HarmoniqStudioApp {
                         painter.rect_stroke(
                             add_rect,
                             4.0,
-                            Stroke::new(1.0, Color32::from_rgb(26, 26, 32)),
+                            Stroke::new(1.0, palette.track_button_border),
                         );
                         painter.text(
                             add_rect.center(),
                             Align2::CENTER_CENTER,
                             "+",
                             FontId::proportional(14.0),
-                            Color32::from_gray(240),
+                            palette.text_primary,
                         );
 
                         let visibility_color = if lane.visible {
-                            Color32::from_rgb(70, 110, 150)
+                            lane.color().gamma_multiply(0.85)
                         } else {
-                            Color32::from_rgb(60, 60, 66)
+                            palette.track_button_bg
                         };
                         painter.rect_filled(visibility_rect, 4.0, visibility_color);
                         painter.rect_stroke(
                             visibility_rect,
                             4.0,
-                            Stroke::new(1.0, Color32::from_rgb(26, 26, 32)),
+                            Stroke::new(1.0, palette.track_button_border),
                         );
                         painter.text(
                             visibility_rect.center(),
                             Align2::CENTER_CENTER,
                             if lane.visible { "On" } else { "Off" },
                             FontId::proportional(11.0),
-                            Color32::from_gray(230),
+                            palette.text_primary,
                         );
 
                         if lane.visible {
-                            painter.rect_filled(
-                                lane_rect,
-                                4.0,
-                                Color32::from_rgba_unmultiplied(
-                                    lane.color().r(),
-                                    lane.color().g(),
-                                    lane.color().b(),
-                                    28,
-                                ),
+                            painter.rect_filled(lane_rect, 6.0, palette.automation_lane_bg);
+                            let overlay = Color32::from_rgba_unmultiplied(
+                                lane.color().r(),
+                                lane.color().g(),
+                                lane.color().b(),
+                                28,
                             );
+                            painter.rect_filled(lane_rect, 6.0, overlay);
                             painter.rect_stroke(
                                 lane_rect,
-                                4.0,
-                                Stroke::new(1.0, Color32::from_rgb(36, 36, 42)),
+                                6.0,
+                                Stroke::new(1.0, palette.timeline_border),
                             );
 
                             let mut last_point_pos: Option<egui::Pos2> = None;
@@ -1482,7 +1944,7 @@ impl HarmoniqStudioApp {
                                 painter.circle_stroke(
                                     pos,
                                     4.0,
-                                    Stroke::new(1.0, Color32::from_rgb(20, 20, 24)),
+                                    Stroke::new(1.0, palette.automation_point_border),
                                 );
                                 if right_clicked {
                                     if let Some(pointer) = pointer_pos {
@@ -1509,18 +1971,18 @@ impl HarmoniqStudioApp {
                                 }
                             }
                         } else {
-                            painter.rect_filled(lane_rect, 4.0, Color32::from_rgb(24, 24, 30));
+                            painter.rect_filled(lane_rect, 6.0, palette.automation_lane_hidden_bg);
                             painter.rect_stroke(
                                 lane_rect,
-                                4.0,
-                                Stroke::new(1.0, Color32::from_rgb(34, 34, 40)),
+                                6.0,
+                                Stroke::new(1.0, palette.timeline_border),
                             );
                             painter.text(
                                 lane_rect.center(),
                                 Align2::CENTER_CENTER,
-                                "Hidden",
-                                FontId::proportional(12.0),
-                                Color32::from_gray(170),
+                                "Automation lane hidden",
+                                FontId::proportional(11.0),
+                                palette.text_muted,
                             );
                         }
 
@@ -1570,8 +2032,9 @@ impl HarmoniqStudioApp {
     }
 
     fn draw_piano_roll(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Piano Roll");
-        ui.add_space(4.0);
+        let palette = self.palette();
+        ui.heading(RichText::new("Piano Roll").color(palette.text_primary));
+        ui.add_space(6.0);
 
         if let Some((track_idx, clip_idx)) = self.selected_clip {
             if let Some(track) = self.tracks.get_mut(track_idx) {
@@ -1586,13 +2049,13 @@ impl HarmoniqStudioApp {
                     let num_keys = self.piano_roll.key_range_len();
 
                     // Background grid
-                    painter.rect_filled(rect, 0.0, Color32::from_rgb(30, 30, 30));
+                    painter.rect_filled(rect, 8.0, palette.piano_background);
 
                     for i in 0..=num_keys {
                         let y = rect.bottom() - key_height * i as f32;
                         painter.line_segment(
                             [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                            egui::Stroke::new(1.0, Color32::from_rgb(45, 45, 45)),
+                            egui::Stroke::new(1.0, palette.piano_grid_minor),
                         );
                     }
 
@@ -1600,9 +2063,9 @@ impl HarmoniqStudioApp {
                     for beat in 0..=total_beats * 4 {
                         let x = rect.left() + beat as f32 * pixels_per_beat / 4.0;
                         let color = if beat % 4 == 0 {
-                            Color32::from_rgb(70, 70, 70)
+                            palette.piano_grid_major
                         } else {
-                            Color32::from_rgb(50, 50, 50)
+                            palette.piano_grid_minor
                         };
                         painter.line_segment(
                             [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
@@ -1626,7 +2089,7 @@ impl HarmoniqStudioApp {
                         painter.rect_stroke(
                             note_rect,
                             4.0,
-                            egui::Stroke::new(1.0, Color32::from_rgb(20, 20, 20)),
+                            egui::Stroke::new(1.0, palette.timeline_border),
                         );
                     }
 
@@ -1659,12 +2122,12 @@ impl HarmoniqStudioApp {
         self.master_track.update_from_tracks(&self.tracks);
     }
 
-    fn draw_meter(ui: &mut egui::Ui, meter: &TrackMeter) {
+    fn draw_meter(ui: &mut egui::Ui, meter: &TrackMeter, palette: &HarmoniqPalette) {
         let desired_size = egui::vec2(32.0, 120.0);
         let (rect, _) = ui.allocate_exact_size(desired_size, Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 4.0, Color32::from_rgb(28, 28, 28));
-        painter.rect_stroke(rect, 4.0, Stroke::new(1.0, Color32::from_rgb(60, 60, 60)));
+        painter.rect_filled(rect, 6.0, palette.meter_background);
+        painter.rect_stroke(rect, 6.0, Stroke::new(1.0, palette.meter_border));
 
         let gutter = 3.0;
         let bar_width = (rect.width() - gutter * 3.0) / 2.0;
@@ -1684,8 +2147,8 @@ impl HarmoniqStudioApp {
             egui::pos2(rect.right() - gutter, rect.bottom() - gutter),
         );
 
-        painter.rect_filled(left_rect, 2.0, Color32::from_rgb(0x2d, 0xb6, 0xff));
-        painter.rect_filled(right_rect, 2.0, Color32::from_rgb(0xff, 0x82, 0xaa));
+        painter.rect_filled(left_rect, 3.0, palette.meter_left);
+        painter.rect_filled(right_rect, 3.0, palette.meter_right);
 
         let rms_height = meter.rms_level().clamp(0.0, 1.0) * max_height;
         let rms_y = rect.bottom() - gutter - rms_height;
@@ -1694,13 +2157,21 @@ impl HarmoniqStudioApp {
                 egui::pos2(rect.left() + gutter, rms_y),
                 egui::pos2(rect.right() - gutter, rms_y),
             ],
-            Stroke::new(1.0, Color32::from_rgb(90, 90, 90)),
+            Stroke::new(1.0, palette.meter_rms),
         );
     }
 
-    fn draw_effects_ui(effects: &mut Vec<MixerEffect>, ui: &mut egui::Ui) {
+    fn draw_effects_ui(
+        effects: &mut Vec<MixerEffect>,
+        ui: &mut egui::Ui,
+        palette: &HarmoniqPalette,
+    ) {
         if effects.is_empty() {
-            ui.label(RichText::new("No effects loaded").italics().weak());
+            ui.label(
+                RichText::new("No effects loaded")
+                    .italics()
+                    .color(palette.text_muted),
+            );
         }
 
         let mut removal: Option<usize> = None;
@@ -1719,7 +2190,7 @@ impl HarmoniqStudioApp {
                 ui.label(
                     RichText::new(effect.effect_type.identifier())
                         .small()
-                        .color(Color32::from_gray(170)),
+                        .color(palette.text_muted),
                 );
             });
         }
@@ -1743,19 +2214,20 @@ impl HarmoniqStudioApp {
         index: usize,
         track: &mut Track,
         is_selected: bool,
+        palette: &HarmoniqPalette,
     ) -> bool {
         let fill = if track.muted {
-            Color32::from_rgb(70, 40, 40)
+            palette.mixer_strip_muted
         } else if track.solo {
-            Color32::from_rgb(40, 70, 55)
+            palette.mixer_strip_solo
         } else if is_selected {
-            Color32::from_rgb(45, 55, 75)
+            palette.mixer_strip_selected
         } else {
-            Color32::from_rgb(35, 35, 35)
+            palette.mixer_strip_bg
         };
         let mut frame = egui::Frame::group(ui.style());
         frame.fill = fill;
-        frame.stroke = Stroke::new(1.0, Color32::from_rgb(60, 60, 60));
+        frame.stroke = Stroke::new(1.0, palette.mixer_strip_border);
         let mut clicked = false;
         frame.show(ui, |ui| {
             ui.set_min_width(150.0);
@@ -1768,10 +2240,10 @@ impl HarmoniqStudioApp {
                     clicked = true;
                 }
                 ui.add_space(6.0);
-                Self::draw_meter(ui, &track.meter);
+                Self::draw_meter(ui, &track.meter, palette);
                 ui.add_space(6.0);
-                ui.add(Knob::new(&mut track.volume, 0.0, 1.5, 0.9, "Vol"));
-                ui.add(Knob::new(&mut track.pan, -1.0, 1.0, 0.0, "Pan"));
+                ui.add(Knob::new(&mut track.volume, 0.0, 1.5, 0.9, "Vol", palette));
+                ui.add(Knob::new(&mut track.pan, -1.0, 1.0, 0.0, "Pan", palette));
                 ui.horizontal(|ui| {
                     ui.toggle_value(&mut track.muted, "Mute");
                     ui.toggle_value(&mut track.solo, "Solo");
@@ -1779,55 +2251,75 @@ impl HarmoniqStudioApp {
                 ui.label(
                     RichText::new(format!("{:.1} dB", track.meter.level_db()))
                         .small()
-                        .color(Color32::from_gray(180)),
+                        .color(palette.text_muted),
                 );
                 ui.separator();
-                ui.label(RichText::new("Effects").strong().small());
-                Self::draw_effects_ui(&mut track.effects, ui);
+                ui.label(
+                    RichText::new("Effects")
+                        .strong()
+                        .small()
+                        .color(palette.text_muted),
+                );
+                Self::draw_effects_ui(&mut track.effects, ui, palette);
             });
         });
         ui.add_space(8.0);
         clicked
     }
 
-    fn draw_master_strip(ui: &mut egui::Ui, master: &mut MasterChannel) {
+    fn draw_master_strip(ui: &mut egui::Ui, master: &mut MasterChannel, palette: &HarmoniqPalette) {
         let mut frame = egui::Frame::group(ui.style());
-        frame.fill = Color32::from_rgb(40, 45, 70);
-        frame.stroke = Stroke::new(1.0, Color32::from_rgb(70, 70, 90));
+        frame.fill = palette.mixer_strip_selected;
+        frame.stroke = Stroke::new(1.0, palette.mixer_strip_border);
         frame.show(ui, |ui| {
             ui.set_min_width(170.0);
             ui.vertical(|ui| {
-                ui.label(RichText::new(&master.name).strong());
+                ui.label(
+                    RichText::new(&master.name)
+                        .strong()
+                        .color(palette.text_primary),
+                );
                 ui.add_space(6.0);
-                Self::draw_meter(ui, &master.meter);
+                Self::draw_meter(ui, &master.meter, palette);
                 ui.add_space(6.0);
-                ui.add(Knob::new(&mut master.volume, 0.0, 1.5, 1.0, "Vol"));
+                ui.add(Knob::new(&mut master.volume, 0.0, 1.5, 1.0, "Vol", palette));
                 ui.label(
                     RichText::new(format!("{:.1} dB", master.meter.level_db()))
                         .small()
-                        .color(Color32::from_gray(200)),
+                        .color(palette.text_muted),
                 );
                 ui.separator();
-                ui.label(RichText::new("Master Effects").strong().small());
-                Self::draw_effects_ui(&mut master.effects, ui);
+                ui.label(
+                    RichText::new("Master Effects")
+                        .strong()
+                        .small()
+                        .color(palette.text_muted),
+                );
+                Self::draw_effects_ui(&mut master.effects, ui, palette);
             });
         });
     }
 
     fn draw_mixer(&mut self, ui: &mut egui::Ui) {
         self.update_mixer_visuals(ui.ctx());
-        ui.heading("Mixer");
-        ui.add_space(4.0);
+        let palette = self.palette();
+        ui.heading(RichText::new("Mixer").color(palette.text_primary));
+        ui.add_space(6.0);
         let mut new_selection = None;
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal(|ui| {
                 for (index, track) in self.tracks.iter_mut().enumerate() {
-                    if Self::draw_track_strip(ui, index, track, self.selected_track == Some(index))
-                    {
+                    if Self::draw_track_strip(
+                        ui,
+                        index,
+                        track,
+                        self.selected_track == Some(index),
+                        palette,
+                    ) {
                         new_selection = Some(index);
                     }
                 }
-                Self::draw_master_strip(ui, &mut self.master_track);
+                Self::draw_master_strip(ui, &mut self.master_track, palette);
             });
         });
         if let Some(selection) = new_selection {
@@ -1838,27 +2330,66 @@ impl HarmoniqStudioApp {
 
 impl App for HarmoniqStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::TopBottomPanel::top("transport").show(ctx, |ui| self.draw_transport_toolbar(ui));
+        let palette = self.palette();
+
+        egui::TopBottomPanel::top("transport")
+            .frame(
+                egui::Frame::none()
+                    .fill(palette.background)
+                    .outer_margin(Margin::symmetric(12.0, 10.0)),
+            )
+            .show(ctx, |ui| self.draw_transport_toolbar(ui));
 
         egui::SidePanel::left("playlist")
             .resizable(true)
-            .default_width(250.0)
+            .default_width(280.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(palette.panel)
+                    .inner_margin(Margin::symmetric(18.0, 16.0))
+                    .outer_margin(Margin::symmetric(12.0, 8.0))
+                    .stroke(Stroke::new(1.0, palette.toolbar_outline))
+                    .rounding(Rounding::same(18.0)),
+            )
             .show(ctx, |ui| self.draw_playlist(ui));
 
         egui::TopBottomPanel::bottom("mixer")
             .resizable(true)
-            .default_height(220.0)
+            .default_height(240.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(palette.panel)
+                    .inner_margin(Margin::symmetric(18.0, 14.0))
+                    .outer_margin(Margin::symmetric(12.0, 10.0))
+                    .stroke(Stroke::new(1.0, palette.toolbar_outline))
+                    .rounding(Rounding::same(18.0)),
+            )
             .show(ctx, |ui| self.draw_mixer(ui));
 
-        egui::CentralPanel::default().show(ctx, |ui| self.draw_piano_roll(ui));
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(palette.panel)
+                    .inner_margin(Margin::symmetric(18.0, 16.0))
+                    .stroke(Stroke::new(1.0, palette.toolbar_outline))
+                    .rounding(Rounding::same(20.0)),
+            )
+            .show(ctx, |ui| self.draw_piano_roll(ui));
 
         if let Some(message) = self.status_message.clone() {
             let mut clear_message = false;
             egui::Window::new("Status")
                 .anchor(egui::Align2::LEFT_BOTTOM, [16.0, -16.0])
                 .collapsible(false)
+                .frame(
+                    egui::Frame::none()
+                        .fill(palette.panel)
+                        .stroke(Stroke::new(1.0, palette.toolbar_outline))
+                        .rounding(Rounding::same(16.0))
+                        .inner_margin(Margin::symmetric(12.0, 10.0)),
+                )
                 .show(ctx, |ui| {
-                    ui.label(message);
+                    ui.label(RichText::new(message).color(palette.text_primary));
                     if ui.button("Dismiss").clicked() {
                         clear_message = true;
                     }
@@ -1872,8 +2403,15 @@ impl App for HarmoniqStudioApp {
             egui::Window::new("Engine Warnings")
                 .anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -16.0])
                 .collapsible(false)
+                .frame(
+                    egui::Frame::none()
+                        .fill(palette.panel)
+                        .stroke(Stroke::new(1.0, palette.toolbar_outline))
+                        .rounding(Rounding::same(16.0))
+                        .inner_margin(Margin::symmetric(12.0, 10.0)),
+                )
                 .show(ctx, |ui| {
-                    ui.label(error);
+                    ui.label(RichText::new(error).color(palette.warning));
                 });
         }
     }
@@ -2325,16 +2863,25 @@ struct Knob<'a> {
     max: f32,
     default: f32,
     label: &'a str,
+    palette: &'a HarmoniqPalette,
 }
 
 impl<'a> Knob<'a> {
-    fn new(value: &'a mut f32, min: f32, max: f32, default: f32, label: &'a str) -> Self {
+    fn new(
+        value: &'a mut f32,
+        min: f32,
+        max: f32,
+        default: f32,
+        label: &'a str,
+        palette: &'a HarmoniqPalette,
+    ) -> Self {
         Self {
             value,
             min,
             max,
             default,
             label,
+            palette,
         }
     }
 }
@@ -2365,11 +2912,11 @@ impl<'a> egui::Widget for Knob<'a> {
         let knob_radius = 22.0;
         let knob_center = egui::pos2(rect.center().x, rect.top() + knob_radius + 6.0);
         let painter = ui.painter_at(rect);
-        painter.circle_filled(knob_center, knob_radius, Color32::from_rgb(45, 45, 45));
+        painter.circle_filled(knob_center, knob_radius, self.palette.knob_base);
         painter.circle_stroke(
             knob_center,
             knob_radius,
-            Stroke::new(2.0, Color32::from_rgb(90, 90, 90)),
+            Stroke::new(2.0, self.palette.knob_ring),
         );
 
         let normalized = (value - self.min) / (self.max - self.min).max(1e-6);
@@ -2380,9 +2927,9 @@ impl<'a> egui::Widget for Knob<'a> {
         );
         painter.line_segment(
             [knob_center, indicator],
-            Stroke::new(3.0, Color32::from_rgb(220, 220, 220)),
+            Stroke::new(3.0, self.palette.knob_indicator),
         );
-        painter.circle_filled(knob_center, 3.0, Color32::from_rgb(200, 200, 200));
+        painter.circle_filled(knob_center, 3.0, self.palette.knob_indicator);
 
         let label_pos = egui::pos2(rect.center().x, rect.bottom() - 6.0);
         painter.text(
@@ -2390,7 +2937,7 @@ impl<'a> egui::Widget for Knob<'a> {
             Align2::CENTER_BOTTOM,
             self.label,
             FontId::proportional(12.0),
-            Color32::from_rgb(210, 210, 210),
+            self.palette.knob_label,
         );
 
         response
