@@ -73,7 +73,7 @@ impl<T> SharedReceiver<T> {
     }
 
     pub fn drain(&self) -> Vec<T> {
-        let mut guard = self.inner.lock();
+        let guard = self.inner.lock();
         let mut events = Vec::new();
         while let Ok(event) = guard.try_recv() {
             events.push(event);

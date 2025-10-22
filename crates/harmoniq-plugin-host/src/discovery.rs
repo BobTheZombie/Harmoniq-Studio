@@ -90,7 +90,7 @@ impl DiscoveredPlugin {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DiscoveryResult {
     pub plugins: Vec<DiscoveredPlugin>,
     pub errors: Vec<HostError>,
