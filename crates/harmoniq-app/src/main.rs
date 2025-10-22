@@ -1093,7 +1093,7 @@ impl WestCoastEditorState {
             .unwrap_or(fallback_default);
         let mut value = self.plugin.parameter_value(id).unwrap_or(default);
         let response = ui
-            .add(Knob::new(&mut value, min, max, default, label, palette))
+            .add(Knob::new(&mut value, min, max, default, label, palette).with_diameter(64.0))
             .on_hover_text(format!("{description}\nCurrent: {value:.3}"));
         if response.changed() {
             match self.plugin.set_parameter_from_ui(id, value) {
@@ -3075,33 +3075,165 @@ impl HarmoniqStudioApp {
                     let pointer_secondary_pressed = ui.input(|i| i.pointer.secondary_pressed());
                     let pointer_pos_hover = ui.input(|i| i.pointer.hover_pos());
                     let pointer_pos = response.interact_pointer_pos().or(pointer_pos_hover);
-                    let pointer_inside = pointer_pos.map_or(false, |pos| rect.contains(pos));
+
+                    let mut keyboard_width = (rect.width() * 0.18).clamp(48.0, 96.0);
+                    let gap = 6.0;
+                    if rect.width() - keyboard_width - gap < 160.0 {
+                        keyboard_width = (rect.width() - 160.0 - gap).clamp(32.0, 72.0);
+                    }
+                    if keyboard_width.is_nan() || keyboard_width <= 0.0 {
+                        keyboard_width = 48.0;
+                    }
+                    let grid_left = (rect.left() + keyboard_width + gap).min(rect.right() - 40.0);
+                    let keyboard_right = (grid_left - gap).max(rect.left());
+                    let keyboard_rect = egui::Rect::from_min_max(
+                        rect.min,
+                        egui::pos2(keyboard_right, rect.bottom()),
+                    );
+                    let grid_rect = if grid_left < rect.right() {
+                        egui::Rect::from_min_max(egui::pos2(grid_left, rect.top()), rect.max)
+                    } else {
+                        rect
+                    };
+                    let separator_rect = egui::Rect::from_min_max(
+                        egui::pos2(keyboard_right, rect.top()),
+                        egui::pos2(grid_rect.left(), rect.bottom()),
+                    );
+
+                    let pointer_inside = pointer_pos.map_or(false, |pos| grid_rect.contains(pos));
+                    let pointer_pitch =
+                        pointer_pos.and_then(|pos| self.piano_roll.y_to_pitch(grid_rect, pos.y));
+
                     let clip_length = clip.length_beats.max(self.piano_roll.note_min_length());
                     let min_length = self.piano_roll.note_min_length();
 
-                    // Background grid
-                    painter.rect_filled(rect, 8.0, palette.piano_background);
+                    painter.rect_filled(grid_rect, 6.0, palette.piano_background);
+                    painter.rect_filled(keyboard_rect, 6.0, palette.panel_alt);
+                    if separator_rect.width() > 0.0 {
+                        painter.rect_filled(
+                            separator_rect,
+                            2.0,
+                            palette.toolbar_outline.gamma_multiply(0.35),
+                        );
+                    }
+
+                    for pitch in (*self.piano_roll.key_range.start()
+                        ..=*self.piano_roll.key_range.end())
+                        .rev()
+                    {
+                        let bottom = self.piano_roll.pitch_to_y(grid_rect, pitch);
+                        let top = bottom - key_height;
+                        let lane_rect = egui::Rect::from_min_max(
+                            egui::pos2(grid_rect.left(), top),
+                            egui::pos2(grid_rect.right(), bottom),
+                        );
+                        let key_rect = egui::Rect::from_min_max(
+                            egui::pos2(keyboard_rect.left(), top),
+                            egui::pos2(keyboard_rect.right(), bottom),
+                        );
+                        let is_black = PianoRollState::is_black_key(pitch);
+                        if is_black {
+                            painter.rect_filled(
+                                lane_rect,
+                                0.0,
+                                palette.piano_grid_minor.gamma_multiply(0.6),
+                            );
+                        } else if pitch % 12 == 0 {
+                            painter.rect_filled(
+                                lane_rect,
+                                0.0,
+                                palette.piano_background.gamma_multiply(1.15),
+                            );
+                        }
+                        painter.rect_filled(
+                            key_rect,
+                            3.0,
+                            if is_black {
+                                palette.piano_black
+                            } else {
+                                palette.piano_white
+                            },
+                        );
+                        painter.rect_stroke(
+                            key_rect,
+                            3.0,
+                            Stroke::new(1.0, palette.timeline_border.gamma_multiply(0.5)),
+                        );
+
+                        if pitch % 12 == 0 {
+                            let label = PianoRollState::note_label(pitch);
+                            painter.text(
+                                egui::pos2(key_rect.center().x, key_rect.center().y),
+                                Align2::CENTER_CENTER,
+                                label,
+                                FontId::proportional(11.0),
+                                if is_black {
+                                    palette.piano_white
+                                } else {
+                                    palette.toolbar_outline
+                                },
+                            );
+                        }
+                    }
 
                     for i in 0..=num_keys {
-                        let y = rect.bottom() - key_height * i as f32;
+                        let y = grid_rect.bottom() - key_height * i as f32;
                         painter.line_segment(
-                            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                            [
+                                egui::pos2(grid_rect.left(), y),
+                                egui::pos2(grid_rect.right(), y),
+                            ],
                             egui::Stroke::new(1.0, palette.piano_grid_minor),
                         );
                     }
 
                     let total_beats = clip.length_beats.max(1.0).ceil() as usize;
                     for beat in 0..=total_beats * 4 {
-                        let x = rect.left() + beat as f32 * pixels_per_beat / 4.0;
+                        let x = grid_rect.left() + beat as f32 * pixels_per_beat / 4.0;
                         let color = if beat % 4 == 0 {
                             palette.piano_grid_major
                         } else {
                             palette.piano_grid_minor
                         };
                         painter.line_segment(
-                            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                            [
+                                egui::pos2(x, grid_rect.top()),
+                                egui::pos2(x, grid_rect.bottom()),
+                            ],
                             egui::Stroke::new(1.0, color),
                         );
+                    }
+
+                    for bar in 0..=total_beats {
+                        let x = grid_rect.left() + bar as f32 * pixels_per_beat;
+                        painter.text(
+                            egui::pos2(x + pixels_per_beat * 0.5, grid_rect.top() + 4.0),
+                            Align2::CENTER_TOP,
+                            format!("{}", bar + 1),
+                            FontId::proportional(11.0),
+                            palette.text_muted,
+                        );
+                    }
+
+                    if let Some(pitch_hover) = pointer_pitch {
+                        if self.piano_roll.is_pitch_visible(pitch_hover) {
+                            let bottom = self.piano_roll.pitch_to_y(grid_rect, pitch_hover);
+                            let top = bottom - key_height;
+                            let lane_rect = egui::Rect::from_min_max(
+                                egui::pos2(grid_rect.left(), top),
+                                egui::pos2(grid_rect.right(), bottom),
+                            );
+                            let key_rect = egui::Rect::from_min_max(
+                                egui::pos2(keyboard_rect.left(), top),
+                                egui::pos2(keyboard_rect.right(), bottom),
+                            );
+                            painter.rect_stroke(
+                                lane_rect,
+                                0.0,
+                                Stroke::new(1.2, palette.accent.gamma_multiply(0.45)),
+                            );
+                            painter.rect_stroke(key_rect, 3.0, Stroke::new(1.6, palette.accent));
+                        }
                     }
 
                     let mut note_rects: Vec<(usize, egui::Rect)> = Vec::new();
@@ -3110,9 +3242,9 @@ impl HarmoniqStudioApp {
                         if !self.piano_roll.is_pitch_visible(note.pitch) {
                             continue;
                         }
-                        let x = rect.left() + note.start_beats * pixels_per_beat;
+                        let x = grid_rect.left() + note.start_beats * pixels_per_beat;
                         let width = (note.length_beats * pixels_per_beat).max(10.0);
-                        let y = self.piano_roll.pitch_to_y(rect, note.pitch);
+                        let y = self.piano_roll.pitch_to_y(grid_rect, note.pitch);
                         let note_rect = egui::Rect::from_min_size(
                             egui::pos2(x, y - key_height + 2.0),
                             egui::vec2(width, key_height - 4.0),
@@ -3168,20 +3300,20 @@ impl HarmoniqStudioApp {
                                 match drag.mode {
                                     PianoRollDragMode::Move => {
                                         let mut new_start =
-                                            self.piano_roll.position_to_beat(rect, pointer.x)
+                                            self.piano_roll.position_to_beat(grid_rect, pointer.x)
                                                 - drag.drag_offset_beats;
                                         new_start = self.piano_roll.quantize_beat(new_start);
                                         let max_start = (clip_length - note.length_beats).max(0.0);
                                         note.start_beats = new_start.clamp(0.0, max_start);
                                         if let Some(pitch) =
-                                            self.piano_roll.y_to_pitch(rect, pointer.y)
+                                            self.piano_roll.y_to_pitch(grid_rect, pointer.y)
                                         {
                                             note.pitch = pitch;
                                         }
                                     }
                                     PianoRollDragMode::ResizeStart => {
                                         let mut new_start = self.piano_roll.quantize_beat(
-                                            self.piano_roll.position_to_beat(rect, pointer.x),
+                                            self.piano_roll.position_to_beat(grid_rect, pointer.x),
                                         );
                                         let max_start = (drag.initial_end - min_length)
                                             .max(0.0)
@@ -3196,7 +3328,7 @@ impl HarmoniqStudioApp {
                                     }
                                     PianoRollDragMode::ResizeEnd | PianoRollDragMode::Create => {
                                         let mut new_end = self.piano_roll.quantize_beat(
-                                            self.piano_roll.position_to_beat(rect, pointer.x),
+                                            self.piano_roll.position_to_beat(grid_rect, pointer.x),
                                         );
                                         let min_end = note.start_beats + min_length;
                                         let max_end = clip_length.max(min_end);
@@ -3245,7 +3377,7 @@ impl HarmoniqStudioApp {
                                 };
                                 if let Some(note) = clip.notes.get(note_index) {
                                     let pointer_beat =
-                                        self.piano_roll.position_to_beat(rect, pointer.x);
+                                        self.piano_roll.position_to_beat(grid_rect, pointer.x);
                                     let drag_offset = pointer_beat - note.start_beats;
                                     drag_state = Some(PianoRollDragState {
                                         mode,
@@ -3259,14 +3391,14 @@ impl HarmoniqStudioApp {
                                 }
                             }
                         } else if let Some(pointer) = pointer_pos {
-                            let mut beat = self
-                                .piano_roll
-                                .quantize_beat(self.piano_roll.position_to_beat(rect, pointer.x));
+                            let mut beat = self.piano_roll.quantize_beat(
+                                self.piano_roll.position_to_beat(grid_rect, pointer.x),
+                            );
                             let max_start = (clip_length - min_length).max(0.0);
                             beat = beat.clamp(0.0, max_start);
                             let pitch = self
                                 .piano_roll
-                                .y_to_pitch(rect, pointer.y)
+                                .y_to_pitch(grid_rect, pointer.y)
                                 .unwrap_or(*self.piano_roll.key_range.end());
                             let length = min_length;
                             clip.notes.push(Note::new(beat, length, pitch));
@@ -3314,8 +3446,21 @@ impl HarmoniqStudioApp {
         self.master_track.update_from_tracks(&self.tracks);
     }
 
-    fn draw_meter(ui: &mut egui::Ui, meter: &TrackMeter, palette: &HarmoniqPalette) {
-        let desired_size = egui::vec2(36.0, 150.0);
+    fn volume_db_string(value: f32) -> String {
+        if value <= 1e-5 {
+            "-∞ dB".to_string()
+        } else {
+            let db = 20.0 * value.log10();
+            format!("{:+.1} dB", db)
+        }
+    }
+
+    fn draw_meter(
+        ui: &mut egui::Ui,
+        meter: &TrackMeter,
+        palette: &HarmoniqPalette,
+        desired_size: egui::Vec2,
+    ) {
         let (rect, _) = ui.allocate_exact_size(desired_size, Sense::hover());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 8.0, palette.meter_background);
@@ -3391,8 +3536,8 @@ impl HarmoniqStudioApp {
         selected: bool,
         palette: &HarmoniqPalette,
     ) -> egui::Response {
-        let width = ui.available_width().max(110.0);
-        let header_height = 44.0;
+        let width = ui.available_width().max(96.0);
+        let header_height = 34.0;
         let (rect, response) =
             ui.allocate_exact_size(egui::vec2(width, header_height), Sense::click());
         let painter = ui.painter_at(rect);
@@ -3401,19 +3546,19 @@ impl HarmoniqStudioApp {
         } else {
             palette.mixer_strip_header
         };
-        painter.rect_filled(rect, 10.0, fill);
-        painter.rect_stroke(rect, 10.0, Stroke::new(1.0, palette.mixer_strip_border));
+        painter.rect_filled(rect, 8.0, fill);
+        painter.rect_stroke(rect, 8.0, Stroke::new(1.0, palette.mixer_strip_border));
 
         let accent_rect = egui::Rect::from_min_max(
             egui::pos2(rect.left(), rect.top()),
-            egui::pos2(rect.left() + 4.0, rect.bottom()),
+            egui::pos2(rect.left() + 3.0, rect.bottom()),
         );
         painter.rect_filled(
             accent_rect,
             Rounding {
-                nw: 10.0,
+                nw: 8.0,
                 ne: 0.0,
-                sw: 10.0,
+                sw: 8.0,
                 se: 0.0,
             },
             accent,
@@ -3421,10 +3566,10 @@ impl HarmoniqStudioApp {
 
         if let Some(index) = index {
             painter.text(
-                egui::pos2(rect.left() + 12.0, rect.center().y),
+                egui::pos2(rect.left() + 10.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 format!("{:02}", index + 1),
-                FontId::proportional(12.0),
+                FontId::proportional(11.0),
                 palette.text_muted,
             );
         }
@@ -3433,7 +3578,7 @@ impl HarmoniqStudioApp {
             rect.center(),
             Align2::CENTER_CENTER,
             label,
-            FontId::proportional(15.0),
+            FontId::proportional(13.0),
             palette.text_primary,
         );
 
@@ -3446,7 +3591,7 @@ impl HarmoniqStudioApp {
         label: &str,
         palette: &HarmoniqPalette,
     ) -> egui::Response {
-        let size = egui::vec2(46.0, 24.0);
+        let size = egui::vec2(38.0, 20.0);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         let painter = ui.painter_at(rect);
         let active = *value;
@@ -3466,7 +3611,7 @@ impl HarmoniqStudioApp {
             rect.center(),
             Align2::CENTER_CENTER,
             label,
-            FontId::proportional(11.0),
+            FontId::proportional(10.0),
             text_color,
         );
         if response.clicked() {
@@ -3673,11 +3818,11 @@ impl HarmoniqStudioApp {
         let mut frame = egui::Frame::group(ui.style());
         frame.fill = fill;
         frame.stroke = Stroke::new(1.0, palette.mixer_strip_border);
-        frame.rounding = Rounding::same(12.0);
+        frame.rounding = Rounding::same(10.0);
         let mut clicked = false;
         let mut request_piano_roll = false;
         frame.show(ui, |ui| {
-            ui.set_min_width(132.0);
+            ui.set_min_width(104.0);
             ui.add_space(4.0);
             let accent = if track.solo {
                 palette.success
@@ -3701,47 +3846,66 @@ impl HarmoniqStudioApp {
                 clicked = true;
             }
 
-            ui.add_space(10.0);
-            ui.vertical_centered(|ui| {
-                Self::draw_meter(ui, &track.meter, palette);
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(format!("{:.1} dB", track.meter.level_db()))
-                        .small()
-                        .color(palette.text_muted),
+            ui.add_space(6.0);
+            let fader_height = 132.0;
+            ui.horizontal(|ui| {
+                ui.vertical_centered(|ui| {
+                    Self::draw_meter(ui, &track.meter, palette, egui::vec2(18.0, fader_height));
+                    ui.add_space(2.0);
+                    ui.label(
+                        RichText::new(format!("{:.1} dB", track.meter.level_db()))
+                            .small()
+                            .color(palette.text_muted),
+                    );
+                });
+                ui.add_space(6.0);
+                ui.vertical_centered(|ui| {
+                    ui.add(
+                        Fader::new(&mut track.volume, 0.0, 1.5, 0.9, palette)
+                            .with_height(fader_height),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(Self::volume_db_string(track.volume))
+                            .small()
+                            .color(palette.text_primary),
+                    );
+                });
+            });
+
+            ui.add_space(6.0);
+            ui.centered_and_justified(|ui| {
+                ui.add(
+                    Knob::new(&mut track.pan, -1.0, 1.0, 0.0, "PAN", palette).with_diameter(40.0),
                 );
             });
 
             ui.add_space(6.0);
-            ui.vertical_centered(|ui| {
-                ui.add(Knob::new(&mut track.volume, 0.0, 1.5, 0.9, "VOL", palette));
-                ui.add(Knob::new(&mut track.pan, -1.0, 1.0, 0.0, "PAN", palette));
-            });
-
-            ui.add_space(6.0);
-            ui.vertical_centered_justified(|ui| {
+            ui.centered_and_justified(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
                 ui.horizontal(|ui| {
                     let _ = Self::draw_strip_toggle(ui, &mut track.muted, "M", palette);
-                    ui.add_space(6.0);
                     let _ = Self::draw_strip_toggle(ui, &mut track.solo, "S", palette);
                 });
             });
 
-            ui.add_space(10.0);
+            ui.add_space(6.0);
             ui.separator();
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new("INSERTS")
-                    .small()
-                    .extra_letter_spacing(4.0)
-                    .color(palette.text_muted),
-            );
-            ui.add_space(6.0);
-            if Self::draw_effects_ui(Some(index), &mut track.effects, ui, palette) {
-                request_piano_roll = true;
-            }
+            ui.add_space(4.0);
+            let header_text = RichText::new("INSERTS")
+                .small()
+                .extra_letter_spacing(2.0)
+                .color(palette.text_muted);
+            egui::CollapsingHeader::new(header_text)
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add_space(4.0);
+                    if Self::draw_effects_ui(Some(index), &mut track.effects, ui, palette) {
+                        request_piano_roll = true;
+                    }
+                });
         });
-        ui.add_space(8.0);
+        ui.add_space(6.0);
         (clicked, request_piano_roll)
     }
 
@@ -3749,9 +3913,9 @@ impl HarmoniqStudioApp {
         let mut frame = egui::Frame::group(ui.style());
         frame.fill = palette.mixer_strip_selected;
         frame.stroke = Stroke::new(1.0, palette.mixer_strip_border);
-        frame.rounding = Rounding::same(12.0);
+        frame.rounding = Rounding::same(10.0);
         frame.show(ui, |ui| {
-            ui.set_min_width(160.0);
+            ui.set_min_width(120.0);
             ui.add_space(4.0);
             let _ = Self::draw_strip_header(
                 ui,
@@ -3762,71 +3926,98 @@ impl HarmoniqStudioApp {
                 palette,
             );
 
-            ui.add_space(10.0);
-            ui.vertical_centered(|ui| {
-                Self::draw_meter(ui, &master.meter, palette);
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(format!("{:.1} dB", master.meter.level_db()))
-                        .small()
-                        .color(palette.text_muted),
-                );
+            ui.add_space(6.0);
+            let fader_height = 144.0;
+            ui.horizontal(|ui| {
+                ui.vertical_centered(|ui| {
+                    Self::draw_meter(ui, &master.meter, palette, egui::vec2(20.0, fader_height));
+                    ui.add_space(2.0);
+                    ui.label(
+                        RichText::new(format!("{:.1} dB", master.meter.level_db()))
+                            .small()
+                            .color(palette.text_muted),
+                    );
+                });
+                ui.add_space(8.0);
+                ui.vertical_centered(|ui| {
+                    ui.add(
+                        Fader::new(&mut master.volume, 0.0, 1.5, 1.0, palette)
+                            .with_height(fader_height),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(Self::volume_db_string(master.volume))
+                            .small()
+                            .color(palette.text_primary),
+                    );
+                });
             });
 
             ui.add_space(6.0);
-            ui.vertical_centered(|ui| {
-                ui.add(Knob::new(&mut master.volume, 0.0, 1.5, 1.0, "VOL", palette));
-            });
-
-            ui.add_space(10.0);
             ui.separator();
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new("MASTER INSERTS")
-                    .small()
-                    .extra_letter_spacing(4.0)
-                    .color(palette.text_muted),
-            );
-            ui.add_space(6.0);
-            let _ = Self::draw_effects_ui(None, &mut master.effects, ui, palette);
+            ui.add_space(4.0);
+            let header_text = RichText::new("MASTER INSERTS")
+                .small()
+                .extra_letter_spacing(2.0)
+                .color(palette.text_muted);
+            egui::CollapsingHeader::new(header_text)
+                .default_open(false)
+                .show(ui, |ui| {
+                    ui.add_space(4.0);
+                    let _ = Self::draw_effects_ui(None, &mut master.effects, ui, palette);
+                });
         });
     }
 
     fn draw_mixer(&mut self, ui: &mut egui::Ui) {
         self.update_mixer_visuals(ui.ctx());
         let palette = self.palette().clone();
-        ui.label(
-            RichText::new("MIXER")
-                .size(17.0)
-                .extra_letter_spacing(6.0)
-                .color(palette.text_muted)
-                .strong(),
-        );
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Mixer Console")
+                    .size(15.0)
+                    .color(palette.text_primary)
+                    .strong(),
+            );
+            if let Some(index) = self.selected_track {
+                if let Some(track) = self.tracks.get(index) {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new(format!("Selected: {}", track.name))
+                            .small()
+                            .color(palette.text_muted),
+                    );
+                }
+            }
+        });
         ui.add_space(4.0);
         ui.separator();
-        ui.add_space(10.0);
+        ui.add_space(6.0);
         let mut new_selection = None;
         let mut piano_roll_request = None;
-        egui::ScrollArea::horizontal().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for index in 0..self.tracks.len() {
-                    let (clicked, request_piano_roll) = Self::draw_track_strip(
-                        ui,
-                        index,
-                        &mut self.tracks[index],
-                        self.selected_track == Some(index),
-                        &palette,
-                    );
-                    if clicked {
-                        new_selection = Some(index);
+        egui::ScrollArea::horizontal()
+            .id_source("mixer_console_scroll")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    for index in 0..self.tracks.len() {
+                        let (clicked, request_piano_roll) = Self::draw_track_strip(
+                            ui,
+                            index,
+                            &mut self.tracks[index],
+                            self.selected_track == Some(index),
+                            &palette,
+                        );
+                        if clicked {
+                            new_selection = Some(index);
+                        }
+                        if request_piano_roll {
+                            piano_roll_request = Some(index);
+                        }
                     }
-                    if request_piano_roll {
-                        piano_roll_request = Some(index);
-                    }
-                }
-                Self::draw_master_strip(ui, &mut self.master_track, &palette);
+                    Self::draw_master_strip(ui, &mut self.master_track, &palette);
+                });
             });
-        });
         if let Some(selection) = new_selection {
             self.selected_track = Some(selection);
         }
@@ -4379,6 +4570,87 @@ impl ProjectMaster {
     }
 }
 
+struct Fader<'a> {
+    value: &'a mut f32,
+    min: f32,
+    max: f32,
+    default: f32,
+    height: f32,
+    palette: &'a HarmoniqPalette,
+}
+
+impl<'a> Fader<'a> {
+    fn new(
+        value: &'a mut f32,
+        min: f32,
+        max: f32,
+        default: f32,
+        palette: &'a HarmoniqPalette,
+    ) -> Self {
+        Self {
+            value,
+            min,
+            max,
+            default,
+            height: 156.0,
+            palette,
+        }
+    }
+
+    fn with_height(mut self, height: f32) -> Self {
+        self.height = height.max(80.0);
+        self
+    }
+}
+
+impl<'a> egui::Widget for Fader<'a> {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let width = 32.0;
+        let (rect, mut response) =
+            ui.allocate_exact_size(egui::vec2(width, self.height), Sense::click_and_drag());
+        let mut value = (*self.value).clamp(self.min, self.max);
+
+        if response.dragged() {
+            let delta = ui.ctx().input(|i| i.pointer.delta().y);
+            let sensitivity = (self.max - self.min).abs() / self.height.max(1.0);
+            value -= delta * sensitivity;
+            value = value.clamp(self.min, self.max);
+            *self.value = value;
+            response.mark_changed();
+            ui.ctx().request_repaint();
+        } else {
+            *self.value = value;
+        }
+
+        if response.double_clicked() {
+            *self.value = self.default.clamp(self.min, self.max);
+            response.mark_changed();
+        }
+
+        let track_rect = rect.shrink2(egui::vec2(width * 0.3, 10.0));
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 8.0, self.palette.meter_background);
+        painter.rect_stroke(rect, 8.0, Stroke::new(1.0, self.palette.meter_border));
+
+        let normalized = (value - self.min) / (self.max - self.min).max(1e-6);
+        let handle_y = track_rect.bottom() - normalized * track_rect.height();
+        let handle_rect = egui::Rect::from_center_size(
+            egui::pos2(track_rect.center().x, handle_y),
+            egui::vec2(track_rect.width() + 6.0, 14.0),
+        );
+
+        painter.rect_filled(track_rect, 4.0, self.palette.toolbar_highlight);
+        painter.rect_filled(handle_rect, 6.0, self.palette.accent);
+        painter.rect_stroke(
+            handle_rect,
+            6.0,
+            Stroke::new(1.0, self.palette.toolbar_outline),
+        );
+
+        response
+    }
+}
+
 struct Knob<'a> {
     value: &'a mut f32,
     min: f32,
@@ -4386,6 +4658,7 @@ struct Knob<'a> {
     default: f32,
     label: &'a str,
     palette: &'a HarmoniqPalette,
+    diameter: f32,
 }
 
 impl<'a> Knob<'a> {
@@ -4404,13 +4677,21 @@ impl<'a> Knob<'a> {
             default,
             label,
             palette,
+            diameter: 56.0,
         }
+    }
+
+    fn with_diameter(mut self, diameter: f32) -> Self {
+        self.diameter = diameter.max(28.0);
+        self
     }
 }
 
 impl<'a> egui::Widget for Knob<'a> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        let desired_size = egui::vec2(64.0, 80.0);
+        let knob_diameter = self.diameter;
+        let label_height = 18.0;
+        let desired_size = egui::vec2(knob_diameter + 16.0, knob_diameter + label_height + 12.0);
         let (rect, mut response) = ui.allocate_exact_size(desired_size, Sense::drag());
         let mut value = (*self.value).clamp(self.min, self.max);
 
@@ -4431,7 +4712,7 @@ impl<'a> egui::Widget for Knob<'a> {
             response.mark_changed();
         }
 
-        let knob_radius = 22.0;
+        let knob_radius = knob_diameter * 0.5;
         let knob_center = egui::pos2(rect.center().x, rect.top() + knob_radius + 6.0);
         let painter = ui.painter_at(rect);
         painter.circle_filled(knob_center, knob_radius, self.palette.knob_base);
@@ -4635,6 +4916,19 @@ impl PianoRollState {
 
     fn is_pitch_visible(&self, pitch: u8) -> bool {
         self.key_range.contains(&pitch)
+    }
+
+    fn is_black_key(pitch: u8) -> bool {
+        matches!(pitch % 12, 1 | 3 | 6 | 8 | 10)
+    }
+
+    fn note_label(pitch: u8) -> String {
+        const NAMES: [&str; 12] = [
+            "C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B",
+        ];
+        let name = NAMES[(pitch % 12) as usize];
+        let octave = (pitch / 12) as i32 - 1;
+        format!("{}{}", name, octave)
     }
 
     fn position_to_beat(&self, rect: egui::Rect, x: f32) -> f32 {
