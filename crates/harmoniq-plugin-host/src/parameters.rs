@@ -52,7 +52,10 @@ pub struct ParameterAutomation {
 
 impl ParameterAutomation {
     pub fn send(&self, message: AutomationMessage) -> Result<(), AutomationMessage> {
-        self.to_engine.try_send(message)
+        self
+            .to_engine
+            .try_send(message)
+            .map_err(crossbeam_channel::TrySendError::into_inner)
     }
 
     pub fn poll(&self) -> Vec<AutomationMessage> {
@@ -91,6 +94,10 @@ impl<T> SharedSender<T> {
     }
 
     pub fn send(&self, value: T) -> Result<(), T> {
-        self.inner.lock().try_send(value)
+        self
+            .inner
+            .lock()
+            .try_send(value)
+            .map_err(crossbeam_channel::TrySendError::into_inner)
     }
 }
