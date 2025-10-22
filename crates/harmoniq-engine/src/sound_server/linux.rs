@@ -228,24 +228,24 @@ fn build_stream(
     let err_fn = |err| tracing::error!(?err, "audio stream error");
 
     match sample_format {
-        SampleFormat::F32 => device.build_output_stream(
+        SampleFormat::F32 => Ok(device.build_output_stream(
             config,
             move |output: &mut [f32], _| fill_from_queue(output, &queue, &running),
             err_fn,
             None,
-        ),
-        SampleFormat::I16 => device.build_output_stream(
+        )?),
+        SampleFormat::I16 => Ok(device.build_output_stream(
             config,
             move |output: &mut [i16], _| fill_from_queue(output, &queue, &running),
             err_fn,
             None,
-        ),
-        SampleFormat::U16 => device.build_output_stream(
+        )?),
+        SampleFormat::U16 => Ok(device.build_output_stream(
             config,
             move |output: &mut [u16], _| fill_from_queue(output, &queue, &running),
             err_fn,
             None,
-        ),
+        )?),
         other => Err(anyhow!("unsupported sample format: {other:?}")),
     }
 }
