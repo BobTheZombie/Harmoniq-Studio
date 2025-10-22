@@ -1,0 +1,12 @@
+[package]
+name = "harmoniq-plugin-additive"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+harmoniq-plugin-sdk = { path = "../harmoniq-plugin-sdk" }
+harmoniq-plugins = { path = "../harmoniq-plugins" }

@@ -1,11 +1,11 @@
 [package]
 name = "harmoniq-plugin-sdk"
-version = "0.1.0"
-edition = "2021"
-description = "Harmoniq plugin interface definitions."
-license = "GPL-3.0-or-later"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
 
 [dependencies]
-serde = { workspace = true }
-engine-graph = { path = "../engine-graph" }
-engine-rt = { path = "../engine-rt" }
+harmoniq-engine = { path = "../harmoniq-engine" }
+thiserror.workspace = true
+serde.workspace = true
+anyhow.workspace = true
