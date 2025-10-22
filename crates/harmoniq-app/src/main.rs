@@ -6153,23 +6153,6 @@ impl HarmoniqStudioApp {
                 plugin.cpu = (ctx.cpu_usage * 0.4 + dynamic).clamp(0.02, 0.95);
                 plugin.latency_ms = 3.0 + index as f32 * 1.2;
             }
-        let mut ctx = self.engine_context.lock();
-        ctx.tempo = self.tempo;
-        ctx.time_signature = self.time_signature;
-        ctx.transport = self.transport_state;
-        ctx.pattern_mode = self.pattern_mode;
-        ctx.cpu_usage = self.estimate_cpu_usage();
-        ctx.clock = self.transport_clock;
-        ctx.master_meter = (
-            self.master_track.meter.left_level(),
-            self.master_track.meter.right_level(),
-        );
-        ctx.ensure_demo_plugins();
-        for (index, plugin) in ctx.plugins.iter_mut().enumerate() {
-            let phase = self.playback_position_beats + index as f32 * 0.37;
-            let dynamic = ((phase.sin() + 1.0) * 0.5 * 0.08).clamp(0.0, 0.25);
-            plugin.cpu = (ctx.cpu_usage * 0.4 + dynamic).clamp(0.02, 0.95);
-            plugin.latency_ms = 3.0 + index as f32 * 1.2;
         }
     }
 
