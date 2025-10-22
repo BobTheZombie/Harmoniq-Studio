@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -1636,6 +1637,7 @@ struct HarmoniqStudioApp {
     next_clip_index: usize,
     next_color_index: usize,
     playlist: PlaylistViewState,
+    sequencer: SequencerState,
     piano_roll: PianoRollState,
     piano_roll_selected_note: Option<usize>,
     piano_roll_drag: Option<PianoRollDragState>,
@@ -1706,6 +1708,7 @@ impl HarmoniqStudioApp {
             next_clip_index: 1,
             next_color_index: 0,
             playlist: PlaylistViewState::default(),
+            sequencer: SequencerState::default(),
             piano_roll: PianoRollState::default(),
             piano_roll_selected_note: None,
             piano_roll_drag: None,
@@ -1721,6 +1724,7 @@ impl HarmoniqStudioApp {
         };
 
         app.initialise_demo_clips();
+        app.initialise_demo_sequencer();
         if app
             .tracks
             .get(0)
@@ -1801,6 +1805,251 @@ impl HarmoniqStudioApp {
                 bass_color,
                 vec![Note::new(0.0, 1.0, 48), Note::new(2.0, 1.0, 43)],
             ));
+        }
+    }
+
+    fn initialise_demo_sequencer(&mut self) {
+        if !self.sequencer.instruments.is_empty() || self.tracks.is_empty() {
+            return;
+        }
+
+        let assignments = [
+            (InstrumentPlugin::WestCoastLead, 0usize, Some(0usize)),
+            (InstrumentPlugin::NoiseDrums, 1usize, Some(0usize)),
+            (InstrumentPlugin::Sub808, 2usize, Some(0usize)),
+        ];
+
+        for (plugin, track_idx, clip_idx) in assignments {
+            if track_idx >= self.tracks.len() {
+                continue;
+            }
+            let mut instrument = SequencerInstrument::new(
+                self.sequencer.allocate_id(),
+                self.tracks
+                    .get(track_idx)
+                    .map(|track| track.name.clone())
+                    .unwrap_or_else(|| plugin.display_name().to_string()),
+                plugin,
+                track_idx,
+                plugin.default_pattern(),
+            );
+            if let Some(clip_idx) = clip_idx {
+                if self
+                    .tracks
+                    .get(track_idx)
+                    .and_then(|track| track.clips.get(clip_idx))
+                    .is_some()
+                {
+                    instrument.clip = Some(ClipReference {
+                        track_index: track_idx,
+                        clip_index: clip_idx,
+                    });
+                }
+            }
+            let index = self.sequencer.push_instrument(instrument);
+            self.ensure_instrument_clip(index);
+        }
+    }
+
+    fn refresh_sequencer_clips(&mut self) {
+        if self.tracks.is_empty() {
+            for instrument in &mut self.sequencer.instruments {
+                instrument.clip = None;
+            }
+            return;
+        }
+
+        let last_track = self.tracks.len() - 1;
+        for index in 0..self.sequencer.instruments.len() {
+            if self.sequencer.instruments[index].mixer_track > last_track {
+                self.sequencer.instruments[index].mixer_track = last_track;
+                self.sequencer.instruments[index].clip = None;
+            }
+            let _ = self.ensure_instrument_clip(index);
+        }
+    }
+
+    fn ensure_instrument_clip(&mut self, instrument_idx: usize) -> Option<ClipReference> {
+        let Some(instrument) = self.sequencer.instruments.get_mut(instrument_idx) else {
+            return None;
+        };
+
+        if self.tracks.is_empty() {
+            instrument.clip = None;
+            return None;
+        }
+
+        if instrument.mixer_track >= self.tracks.len() {
+            instrument.mixer_track = self.tracks.len() - 1;
+            instrument.clip = None;
+        }
+
+        if let Some(reference) = instrument.clip {
+            if let Some(track) = self.tracks.get(reference.track_index) {
+                if reference.clip_index < track.clips.len() {
+                    return Some(reference);
+                }
+            }
+        }
+
+        let track_idx = instrument.mixer_track;
+        let clip_index = {
+            let track = self.tracks.get_mut(track_idx)?;
+            if let Some((idx, _)) = track
+                .clips
+                .iter()
+                .enumerate()
+                .find(|(_, clip)| clip.name == instrument.name)
+            {
+                idx
+            } else {
+                let color = self.next_color();
+                let mut clip = Clip::new(
+                    instrument.name.clone(),
+                    0.0,
+                    instrument.pattern.total_length().max(4.0),
+                    color,
+                    Vec::new(),
+                );
+                clip.length_beats = clip.length_beats.max(instrument.pattern.total_length());
+                track.add_clip(clip);
+                track.clips.len() - 1
+            }
+        };
+
+        if let Some(track) = self.tracks.get_mut(track_idx) {
+            if let Some(clip) = track.clips.get_mut(clip_index) {
+                clip.length_beats = clip.length_beats.max(instrument.pattern.total_length());
+            }
+        }
+
+        let reference = ClipReference {
+            track_index: track_idx,
+            clip_index,
+        };
+        instrument.clip = Some(reference);
+        Some(reference)
+    }
+
+    fn add_sequencer_instrument(&mut self, plugin: InstrumentPlugin) {
+        if self.tracks.is_empty() {
+            self.last_error = Some("Add a track before inserting instruments".into());
+            self.status_message = None;
+            return;
+        }
+
+        let track_idx = self
+            .selected_track
+            .unwrap_or(0)
+            .min(self.tracks.len().saturating_sub(1));
+        let name = self.sequencer.next_name_for(plugin);
+        let mut instrument = SequencerInstrument::new(
+            self.sequencer.allocate_id(),
+            name.clone(),
+            plugin,
+            track_idx,
+            plugin.default_pattern(),
+        );
+        let index = self.sequencer.push_instrument(instrument);
+        let reference = self.ensure_instrument_clip(index);
+        if let Some(track) = self.tracks.get(track_idx) {
+            self.status_message = Some(format!("Added {name} to {}", track.name));
+        }
+        if reference.is_none() {
+            self.last_error = Some("Unable to create clip for instrument".into());
+        } else {
+            self.last_error = None;
+        }
+    }
+
+    fn assign_instrument_to_track(&mut self, instrument_idx: usize, track_idx: usize) {
+        if track_idx >= self.tracks.len() {
+            return;
+        }
+        if let Some(instrument) = self.sequencer.instruments.get_mut(instrument_idx) {
+            instrument.mixer_track = track_idx;
+            instrument.clip = None;
+            let name = instrument.name.clone();
+            let routed_to = self.tracks.get(track_idx).map(|track| track.name.clone());
+            let _ = self.ensure_instrument_clip(instrument_idx);
+            if let Some(track_name) = routed_to {
+                self.status_message = Some(format!("Routed {name} to {track_name}"));
+            }
+        }
+    }
+
+    fn remove_sequencer_instrument(&mut self, instrument_idx: usize) {
+        if instrument_idx >= self.sequencer.instruments.len() {
+            return;
+        }
+        let removed = self.sequencer.instruments.remove(instrument_idx);
+        if let Some(reference) = removed.clip {
+            if self.selected_clip == Some((reference.track_index, reference.clip_index)) {
+                self.set_selected_clip(None);
+            }
+        }
+        self.status_message = Some(format!("Removed {}", removed.name));
+    }
+
+    fn instrument_step_active(
+        &self,
+        reference: ClipReference,
+        pattern: &SequencerPattern,
+        step: usize,
+    ) -> bool {
+        self.tracks
+            .get(reference.track_index)
+            .and_then(|track| track.clips.get(reference.clip_index))
+            .map(|clip| {
+                let start = pattern.step_start(step);
+                let tolerance = pattern.tolerance();
+                clip.notes.iter().any(|note| {
+                    note.pitch == pattern.base_pitch
+                        && (note.start_beats - start).abs() <= tolerance
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    fn toggle_instrument_step(&mut self, instrument_idx: usize, step: usize, enable: bool) {
+        if self.ensure_instrument_clip(instrument_idx).is_none() {
+            return;
+        }
+
+        let pattern = self.sequencer.instruments[instrument_idx].pattern;
+        let Some(reference) = self.sequencer.instruments[instrument_idx].clip else {
+            return;
+        };
+
+        if let Some(track) = self.tracks.get_mut(reference.track_index) {
+            if let Some(clip) = track.clips.get_mut(reference.clip_index) {
+                let start = pattern.step_start(step);
+                let end = start + pattern.step_length;
+                let tolerance = pattern.tolerance();
+                if enable {
+                    let exists = clip.notes.iter().any(|note| {
+                        note.pitch == pattern.base_pitch
+                            && (note.start_beats - start).abs() <= tolerance
+                    });
+                    if !exists {
+                        clip.notes
+                            .push(Note::new(start, pattern.step_length, pattern.base_pitch));
+                        clip.notes.sort_by(|a, b| {
+                            a.start_beats
+                                .partial_cmp(&b.start_beats)
+                                .unwrap_or(Ordering::Equal)
+                        });
+                    }
+                    clip.length_beats = clip.length_beats.max(end);
+                } else {
+                    clip.notes.retain(|note| {
+                        if note.pitch != pattern.base_pitch {
+                            return true;
+                        }
+                        (note.start_beats - start).abs() > tolerance
+                    });
+                }
+            }
         }
     }
 
@@ -2046,6 +2295,7 @@ impl HarmoniqStudioApp {
         self.piano_roll = PianoRollState::default();
         self.piano_roll_selected_note = None;
         self.piano_roll_drag = None;
+        self.sequencer = SequencerState::default();
         if self.tracks.is_empty() {
             self.selected_track = None;
             self.set_selected_clip(None);
@@ -2063,6 +2313,7 @@ impl HarmoniqStudioApp {
         self.status_message = Some("New project created".into());
         self.last_error = None;
         self.project_path = "project.hst".into();
+        self.refresh_sequencer_clips();
     }
 
     fn stop_all_clips(&mut self) {
@@ -2228,6 +2479,7 @@ impl HarmoniqStudioApp {
             next_color_index: self.next_color_index,
             bounce_path: self.bounce_path.clone(),
             bounce_length_beats: self.bounce_length_beats,
+            sequencer: self.sequencer.clone(),
         }
     }
 
@@ -2259,10 +2511,12 @@ impl HarmoniqStudioApp {
         self.bounce_path = document.bounce_path;
         self.bounce_length_beats = document.bounce_length_beats;
         self.tempo = document.tempo;
+        self.sequencer = document.sequencer;
         self.transport_state = TransportState::Stopped;
         self.stop_all_clips();
         self.send_command(EngineCommand::SetTransport(self.transport_state));
         self.send_command(EngineCommand::SetTempo(self.tempo));
+        self.refresh_sequencer_clips();
         Ok(())
     }
 
@@ -2813,6 +3067,228 @@ impl HarmoniqStudioApp {
                 self.status_message = None;
             }
         }
+    }
+
+    fn draw_sequencer(&mut self, ui: &mut egui::Ui) {
+        let palette = self.palette().clone();
+        self.section_label(ui, &self.icons.track, "Channel Rack");
+        ui.add_space(10.0);
+
+        if self.sequencer.instruments.is_empty() {
+            Self::tinted_frame(&palette, ui, palette.panel_alt, |ui| {
+                ui.label(
+                    RichText::new("Add an instrument to begin sequencing.")
+                        .color(palette.text_muted),
+                );
+                ui.label(
+                    RichText::new("Each instrument can open the piano roll with a right click.")
+                        .color(palette.text_muted)
+                        .small(),
+                );
+            });
+        } else {
+            for index in 0..self.sequencer.instruments.len() {
+                Self::tinted_frame(&palette, ui, palette.panel_alt, |ui| {
+                    self.draw_sequencer_instrument(ui, index);
+                });
+                ui.add_space(8.0);
+            }
+        }
+
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.menu_button("Add Instrument", |ui| {
+                for plugin in InstrumentPlugin::all() {
+                    if ui
+                        .button(plugin.display_name())
+                        .on_hover_text(plugin.description())
+                        .clicked()
+                    {
+                        self.add_sequencer_instrument(*plugin);
+                        ui.close_menu();
+                    }
+                }
+            });
+            if ui.button("Refresh Clips").clicked() {
+                self.refresh_sequencer_clips();
+            }
+        });
+    }
+
+    fn draw_sequencer_instrument(&mut self, ui: &mut egui::Ui, instrument_idx: usize) {
+        if instrument_idx >= self.sequencer.instruments.len() {
+            return;
+        }
+
+        let clip_reference = self.ensure_instrument_clip(instrument_idx);
+        let palette = self.palette().clone();
+        let instrument = self.sequencer.instruments[instrument_idx].clone();
+        let accent = instrument.plugin.accent_color(&palette);
+
+        let mut remove_requested = false;
+        let header_response = ui
+            .horizontal(|ui| {
+                ui.label(
+                    RichText::new(&instrument.name)
+                        .color(palette.text_primary)
+                        .strong(),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(instrument.plugin.display_name())
+                        .color(palette.text_muted)
+                        .small(),
+                );
+                ui.add_space(8.0);
+
+                if self.tracks.is_empty() {
+                    ui.label(
+                        RichText::new("No mixer tracks available")
+                            .color(palette.warning)
+                            .small(),
+                    );
+                } else {
+                    let mut target_track = instrument
+                        .mixer_track
+                        .min(self.tracks.len().saturating_sub(1));
+                    let current_label = self
+                        .tracks
+                        .get(target_track)
+                        .map(|track| track.name.clone())
+                        .unwrap_or_else(|| "Unassigned".into());
+                    egui::ComboBox::from_id_source(("sequencer_route", instrument.id))
+                        .selected_text(current_label)
+                        .width(160.0)
+                        .show_ui(ui, |ui| {
+                            for (idx, track) in self.tracks.iter().enumerate() {
+                                ui.selectable_value(
+                                    &mut target_track,
+                                    idx,
+                                    format!("{:02} – {}", idx + 1, track.name),
+                                );
+                            }
+                        });
+                    if target_track != instrument.mixer_track {
+                        self.assign_instrument_to_track(instrument_idx, target_track);
+                    }
+                }
+            })
+            .response;
+
+        header_response.on_hover_text(instrument.plugin.description());
+
+        header_response.context_menu(|ui| {
+            if let Some(reference) = clip_reference {
+                if ui.button("Open Piano Roll").clicked() {
+                    self.focus_clip(reference.track_index, reference.clip_index);
+                    ui.close_menu();
+                }
+            }
+            match instrument.plugin {
+                InstrumentPlugin::WestCoastLead => {
+                    if ui.button("Open Instrument Editor").clicked() {
+                        self.westcoast_editor.open();
+                        ui.close_menu();
+                    }
+                }
+                InstrumentPlugin::Sub808 => {
+                    if ui.button("Open Instrument Editor").clicked() {
+                        self.sub808_editor.open();
+                        ui.close_menu();
+                    }
+                }
+                _ => {}
+            }
+            if let Some(selected_track) = self.selected_track {
+                if selected_track < self.tracks.len() {
+                    let label = format!("Route to {}", self.tracks[selected_track].name);
+                    if ui.button(label).clicked() {
+                        self.assign_instrument_to_track(instrument_idx, selected_track);
+                        ui.close_menu();
+                    }
+                }
+            }
+            ui.separator();
+            if ui.button("Remove Instrument").clicked() {
+                remove_requested = true;
+                ui.close_menu();
+            }
+        });
+
+        if remove_requested {
+            self.remove_sequencer_instrument(instrument_idx);
+            return;
+        }
+
+        ui.add_space(6.0);
+
+        if let Some(reference) = clip_reference {
+            let track_label = self
+                .tracks
+                .get(reference.track_index)
+                .map(|track| track.name.clone())
+                .unwrap_or_else(|| "Mixer".into());
+            ui.label(
+                RichText::new(format!("Channel → {}", track_label))
+                    .color(palette.text_muted)
+                    .small(),
+            );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for step in 0..instrument.pattern.step_count {
+                    if step > 0 && step % 4 == 0 {
+                        ui.add_space(8.0);
+                    }
+                    let active = self.instrument_step_active(reference, &instrument.pattern, step);
+                    let response =
+                        Self::sequencer_step_widget(ui, active, accent, &palette, step % 4 == 0);
+                    if response.clicked() {
+                        self.toggle_instrument_step(instrument_idx, step, !active);
+                    }
+                    response.on_hover_text(format!("Step {}", step + 1));
+                }
+            });
+        } else {
+            ui.label(
+                RichText::new("Clip unavailable for this instrument")
+                    .color(palette.warning)
+                    .small(),
+            );
+        }
+    }
+
+    fn sequencer_step_widget(
+        ui: &mut egui::Ui,
+        active: bool,
+        accent: Color32,
+        palette: &HarmoniqPalette,
+        emphasise: bool,
+    ) -> egui::Response {
+        let base = if emphasise {
+            palette.toolbar_highlight
+        } else {
+            palette.panel
+        };
+        let desired = egui::vec2(18.0, 32.0);
+        let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
+        let mut fill = if active {
+            accent
+        } else {
+            base.gamma_multiply(1.05)
+        };
+        if response.hovered() {
+            fill = fill.gamma_multiply(1.08);
+        }
+        let stroke = if active {
+            palette.accent_alt.gamma_multiply(1.1)
+        } else {
+            palette.toolbar_outline
+        };
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect.shrink(2.0), 4.0, fill);
+        painter.rect_stroke(rect.shrink(2.0), 4.0, Stroke::new(1.0, stroke));
+        response
     }
 
     fn draw_playlist(&mut self, ui: &mut egui::Ui) {
@@ -4390,6 +4866,19 @@ impl App for HarmoniqStudioApp {
             )
             .show(ctx, |ui| self.draw_transport_toolbar(ui));
 
+        egui::SidePanel::left("sequencer")
+            .resizable(true)
+            .default_width(260.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(palette.panel)
+                    .inner_margin(Margin::symmetric(18.0, 16.0))
+                    .outer_margin(Margin::symmetric(12.0, 8.0))
+                    .stroke(Stroke::new(1.0, palette.toolbar_outline))
+                    .rounding(Rounding::same(18.0)),
+            )
+            .show(ctx, |ui| self.draw_sequencer(ui));
+
         egui::SidePanel::left("playlist")
             .resizable(true)
             .default_width(280.0)
@@ -4709,7 +5198,7 @@ impl MasterChannel {
     }
 }
 
-const PROJECT_FILE_VERSION: u32 = 1;
+const PROJECT_FILE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProjectDocument {
@@ -4723,6 +5212,8 @@ struct ProjectDocument {
     next_color_index: usize,
     bounce_path: String,
     bounce_length_beats: f32,
+    #[serde(default)]
+    sequencer: SequencerState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5194,6 +5685,167 @@ impl Note {
             length_beats,
             pitch,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum InstrumentPlugin {
+    SineSynth,
+    WestCoastLead,
+    Sub808,
+    NoiseDrums,
+}
+
+impl InstrumentPlugin {
+    fn all() -> &'static [InstrumentPlugin] {
+        &[
+            InstrumentPlugin::SineSynth,
+            InstrumentPlugin::WestCoastLead,
+            InstrumentPlugin::Sub808,
+            InstrumentPlugin::NoiseDrums,
+        ]
+    }
+
+    fn display_name(&self) -> &'static str {
+        match self {
+            InstrumentPlugin::SineSynth => "Sine Synth",
+            InstrumentPlugin::WestCoastLead => "West Coast Lead",
+            InstrumentPlugin::Sub808 => "Sub 808",
+            InstrumentPlugin::NoiseDrums => "Noise Drums",
+        }
+    }
+
+    fn description(&self) -> &'static str {
+        match self {
+            InstrumentPlugin::SineSynth => "Simple harmonic oscillator for lead or pad sketches",
+            InstrumentPlugin::WestCoastLead => "Folded sine lead with LPG and modulation",
+            InstrumentPlugin::Sub808 => "Punchy sub-bass generator with transient shaping",
+            InstrumentPlugin::NoiseDrums => "Noise-based percussion generator for quick grooves",
+        }
+    }
+
+    fn default_pitch(&self) -> u8 {
+        match self {
+            InstrumentPlugin::SineSynth => 72,
+            InstrumentPlugin::WestCoastLead => 76,
+            InstrumentPlugin::Sub808 => 36,
+            InstrumentPlugin::NoiseDrums => 38,
+        }
+    }
+
+    fn default_pattern(&self) -> SequencerPattern {
+        SequencerPattern::new(16, 0.25, self.default_pitch())
+    }
+
+    fn accent_color(&self, palette: &HarmoniqPalette) -> Color32 {
+        match self {
+            InstrumentPlugin::SineSynth => palette.accent_alt,
+            InstrumentPlugin::WestCoastLead => palette.accent,
+            InstrumentPlugin::Sub808 => palette.accent_soft,
+            InstrumentPlugin::NoiseDrums => palette.accent.gamma_multiply(0.85),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct ClipReference {
+    track_index: usize,
+    clip_index: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct SequencerPattern {
+    step_count: usize,
+    step_length: f32,
+    base_pitch: u8,
+}
+
+impl SequencerPattern {
+    fn new(step_count: usize, step_length: f32, base_pitch: u8) -> Self {
+        Self {
+            step_count: step_count.max(1),
+            step_length: step_length.max(0.03125),
+            base_pitch,
+        }
+    }
+
+    fn total_length(&self) -> f32 {
+        self.step_length * self.step_count as f32
+    }
+
+    fn step_start(&self, index: usize) -> f32 {
+        self.step_length * index as f32
+    }
+
+    fn tolerance(&self) -> f32 {
+        (self.step_length * 0.25).max(0.002)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SequencerInstrument {
+    id: usize,
+    name: String,
+    plugin: InstrumentPlugin,
+    mixer_track: usize,
+    pattern: SequencerPattern,
+    clip: Option<ClipReference>,
+}
+
+impl SequencerInstrument {
+    fn new(
+        id: usize,
+        name: impl Into<String>,
+        plugin: InstrumentPlugin,
+        mixer_track: usize,
+        pattern: SequencerPattern,
+    ) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            plugin,
+            mixer_track,
+            pattern,
+            clip: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SequencerState {
+    instruments: Vec<SequencerInstrument>,
+    next_id: usize,
+}
+
+impl Default for SequencerState {
+    fn default() -> Self {
+        Self {
+            instruments: Vec::new(),
+            next_id: 1,
+        }
+    }
+}
+
+impl SequencerState {
+    fn allocate_id(&mut self) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    fn push_instrument(&mut self, instrument: SequencerInstrument) -> usize {
+        self.instruments.push(instrument);
+        self.instruments.len() - 1
+    }
+
+    fn next_name_for(&self, plugin: InstrumentPlugin) -> String {
+        let count = self
+            .instruments
+            .iter()
+            .filter(|instrument| instrument.plugin == plugin)
+            .count()
+            + 1;
+        format!("{} {}", plugin.display_name(), count)
     }
 }
 
