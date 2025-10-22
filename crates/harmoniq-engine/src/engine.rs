@@ -259,8 +259,7 @@ impl HarmoniqEngine {
         }
 
         {
-            let scratch_buffers = &mut self.scratch_buffers[..scratch_len];
-            self.apply_delay_compensation(&plugin_ids, &latencies, scratch_buffers, max_latency);
+            self.apply_delay_compensation(&plugin_ids, &latencies, scratch_len, max_latency);
         }
 
         {
@@ -333,7 +332,7 @@ impl HarmoniqEngine {
         &mut self,
         plugin_ids: &[PluginId],
         latencies: &[usize],
-        buffers: &mut [AudioBuffer],
+        scratch_len: usize,
         max_latency: usize,
     ) {
         if max_latency == 0 {
@@ -346,6 +345,8 @@ impl HarmoniqEngine {
             }
             return;
         }
+
+        let buffers = &mut self.scratch_buffers[..scratch_len];
 
         for (index, plugin_id) in plugin_ids.iter().enumerate() {
             let plugin_latency = latencies.get(index).copied().unwrap_or(0);
