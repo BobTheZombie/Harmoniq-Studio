@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use petgraph::stable_graph::{NodeIndex, StableDiGraph};
-use petgraph::Direction;
 
 use crate::{plugin::PluginId, AudioBuffer};
 
