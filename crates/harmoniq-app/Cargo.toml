@@ -7,11 +7,13 @@ version.workspace = true
 [dependencies]
 harmoniq-engine = { path = "../harmoniq-engine" }
 harmoniq-plugins = { path = "../harmoniq-plugins" }
+harmoniq-plugin-host = { path = "../harmoniq-plugin-host" }
 anyhow.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 eframe = { version = "0.27", features = ["wgpu"] }
 egui_extras = { version = "0.27", features = ["image", "svg"] }
 parking_lot.workspace = true
+crossbeam-channel = "0.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 hound = "3.5"

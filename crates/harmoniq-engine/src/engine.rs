@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crossbeam::queue::ArrayQueue;
 use parking_lot::{Mutex, RwLock};
 use rayon::prelude::*;
+use ringbuf::{Consumer, HeapRb, Producer};
 
 use crate::{
     graph::{self, GraphHandle},
@@ -74,6 +75,7 @@ pub struct HarmoniqEngine {
     transport: RwLock<TransportState>,
     command_queue: Arc<ArrayQueue<EngineCommand>>,
     pending_midi: Mutex<Vec<MidiEvent>>,
+    automations: RwLock<HashMap<PluginId, AutomationLane>>,
 }
 
 impl HarmoniqEngine {
@@ -91,6 +93,7 @@ impl HarmoniqEngine {
             pending_midi: Mutex::new(Vec::new()),
             config,
             tone_shaper,
+            automations: RwLock::new(HashMap::new()),
         })
     }
 
@@ -136,6 +139,10 @@ impl HarmoniqEngine {
         tracing::info!("Registered processor: {}", descriptor);
         let shared = Arc::new(Mutex::new(processor));
         self.processors.write().insert(id, shared);
+        let mut lanes = self.automations.write();
+        let ring = HeapRb::new(256);
+        let (producer, consumer) = ring.split();
+        lanes.insert(id, AutomationLane::new(producer, consumer));
         Ok(id)
     }
 
@@ -185,8 +192,8 @@ impl HarmoniqEngine {
         };
 
         let processors_guard = self.processors.read();
-        let processor_handles: Vec<_> = graph
-            .nodes
+        let plugin_ids = graph.plugin_ids();
+        let processor_handles: Vec<_> = plugin_ids
             .iter()
             .map(|plugin_id| {
                 processors_guard.get(plugin_id).cloned().ok_or_else(|| {
@@ -199,6 +206,8 @@ impl HarmoniqEngine {
         let mut scratch_buffers: Vec<AudioBuffer> = (0..processor_handles.len())
             .map(|_| AudioBuffer::from_config(self.config.clone()))
             .collect();
+
+        let _automation_events = self.drain_automation_events();
 
         scratch_buffers
             .par_iter_mut()
@@ -214,7 +223,7 @@ impl HarmoniqEngine {
 
         {
             let mut master = self.master_buffer.lock();
-            graph::mixdown(&mut master, &scratch_buffers, &graph.mixer_gains);
+            graph::mixdown(&graph, &mut master, &scratch_buffers);
             self.tone_shaper.process(&mut master);
             for (target_channel, source_channel) in output.channels_mut().zip(master.channels()) {
                 target_channel.copy_from_slice(source_channel);
@@ -229,5 +238,67 @@ impl HarmoniqEngine {
             self.handle_command(command)?;
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AutomationEvent {
+    pub plugin_id: PluginId,
+    pub parameter: usize,
+    pub value: f32,
+}
+
+#[derive(Clone)]
+pub struct AutomationSender {
+    producer: Arc<Mutex<Producer<AutomationEvent>>>,
+}
+
+impl AutomationSender {
+    pub fn send(&self, event: AutomationEvent) -> Result<(), AutomationEvent> {
+        let mut producer = self.producer.lock();
+        producer.push(event).map_err(|event| event)
+    }
+}
+
+struct AutomationLane {
+    producer: Arc<Mutex<Producer<AutomationEvent>>>,
+    consumer: Consumer<AutomationEvent>,
+}
+
+impl AutomationLane {
+    fn new(producer: Producer<AutomationEvent>, consumer: Consumer<AutomationEvent>) -> Self {
+        Self {
+            producer: Arc::new(Mutex::new(producer)),
+            consumer,
+        }
+    }
+
+    fn sender(&self) -> AutomationSender {
+        AutomationSender {
+            producer: Arc::clone(&self.producer),
+        }
+    }
+}
+
+impl HarmoniqEngine {
+    pub fn automation_sender(&self, plugin_id: PluginId) -> Option<AutomationSender> {
+        self.automations
+            .read()
+            .get(&plugin_id)
+            .map(|lane| lane.sender())
+    }
+
+    fn drain_automation_events(&self) -> Vec<AutomationEvent> {
+        let mut events = Vec::new();
+        let mut lanes = self.automations.write();
+        for (plugin_id, lane) in lanes.iter_mut() {
+            while let Some(mut event) = lane.consumer.pop() {
+                if event.plugin_id.0 == 0 {
+                    event.plugin_id = *plugin_id;
+                }
+                events.push(event);
+            }
+        }
+        events
     }
 }

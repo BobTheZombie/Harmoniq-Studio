@@ -37,6 +37,7 @@ use tracing::{error, warn};
 use tracing_subscriber::EnvFilter;
 
 mod audio;
+mod external_plugins;
 mod midi;
 mod typing_keyboard;
 
@@ -44,6 +45,10 @@ use audio::{
     available_backends, available_output_devices, describe_layout, AudioBackend,
     AudioRuntimeOptions, OutputDeviceInfo, RealtimeAudio,
 };
+use external_plugins::{
+    external_id_from_ui, is_external_plugin_id, ExternalPluginManager, ExternalPluginSummary,
+};
+use harmoniq_plugin_host::{DiscoveredPlugin, PluginParam};
 use midi::list_midi_inputs;
 use typing_keyboard::TypingKeyboard;
 #[derive(Debug, Parser)]
@@ -533,6 +538,18 @@ impl PluginInstanceInfo {
             cpu: 0.0,
             latency_ms: 0.0,
             bypassed: false,
+            open: false,
+        }
+    }
+
+    fn from_external(summary: &ExternalPluginSummary) -> Self {
+        Self {
+            id: summary.ui_id,
+            name: summary.name.clone(),
+            plugin_type: summary.plugin_type.clone(),
+            cpu: summary.cpu,
+            latency_ms: summary.latency_ms,
+            bypassed: summary.bypassed,
             open: false,
         }
     }
@@ -2655,6 +2672,7 @@ struct AppState {
     plugin_rack: PluginRackState,
     command_palette: CommandPaletteState,
     drag_payload: Option<DragPayload>,
+    external_plugins: ExternalPluginManager,
 }
 
 struct HarmoniqStudioApp {
@@ -2723,6 +2741,8 @@ impl HarmoniqStudioApp {
         let mut plugin_rack = PluginRackState::default();
         plugin_rack.visible = layout.persistence().plugin_rack_visible;
 
+        let mut external_plugins = ExternalPluginManager::new();
+
         let time_signature = TimeSignature::default();
         let mut context = EngineContext::new(initial_tempo, time_signature);
         context.ensure_demo_plugins();
@@ -2771,6 +2791,7 @@ impl HarmoniqStudioApp {
             plugin_rack,
             command_palette: CommandPaletteState::new(),
             drag_payload: None,
+            external_plugins,
         };
 
         let mut app = Self {
@@ -6120,6 +6141,12 @@ impl HarmoniqStudioApp {
                 self.master_track.meter.right_level(),
             );
             ctx.ensure_demo_plugins();
+            let external = self.external_plugins.summaries();
+            ctx.plugins
+                .retain(|plugin| !is_external_plugin_id(plugin.id));
+            for summary in &external {
+                ctx.plugins.push(PluginInstanceInfo::from_external(summary));
+            }
             for (index, plugin) in ctx.plugins.iter_mut().enumerate() {
                 let phase = self.playback_position_beats + index as f32 * 0.37;
                 let dynamic = ((phase.sin() + 1.0) * 0.5 * 0.08).clamp(0.0, 0.25);
@@ -6270,6 +6297,28 @@ impl HarmoniqStudioApp {
         }
     }
 
+    fn draw_plugin_browser_tab(&mut self, ui: &mut egui::Ui) {
+        let palette = self.palette().clone();
+        let filter = self.browser_panel.filter.trim().to_ascii_lowercase();
+        for plugin in self.external_plugins.catalog() {
+            if !filter.is_empty() && !plugin.name.to_ascii_lowercase().contains(&filter) {
+                continue;
+            }
+            let label = format!("{} [{}]", plugin.name, plugin.display_format());
+            let response = ui.selectable_label(false, label);
+            if response.double_clicked() {
+                self.load_external_plugin(plugin);
+            }
+            response.on_hover_text(plugin.path.display().to_string());
+        }
+        if self.external_plugins.catalog().is_empty() {
+            ui.label(
+                RichText::new("No plugins detected. Install VST3/LV2/CLAP components to begin.")
+                    .color(palette.text_muted),
+            );
+        }
+    }
+
     fn draw_waveform_preview(
         &mut self,
         ui: &mut egui::Ui,
@@ -6348,7 +6397,12 @@ impl HarmoniqStudioApp {
                         let mut header = egui::CollapsingHeader::new(label)
                             .id_source(id)
                             .default_open(category.expanded);
-                        header.show(ui, |ui| self.draw_browser_directory(ui, &category.path, 0));
+                        if category.name == "Plugins" {
+                            header.show(ui, |ui| self.draw_plugin_browser_tab(ui));
+                        } else {
+                            header
+                                .show(ui, |ui| self.draw_browser_directory(ui, &category.path, 0));
+                        }
                         category.expanded = !header.fully_closed();
                         ui.add_space(4.0);
                     }
@@ -6454,7 +6508,52 @@ impl HarmoniqStudioApp {
         self.process_plugin_actions();
     }
 
+    fn draw_external_plugin_editors(&mut self, ctx: &egui::Context) {
+        let ids = self.external_plugins.loaded_ids();
+        for id in ids {
+            let Some((name, format, is_open)) = self.external_plugins.editor_metadata(id) else {
+                continue;
+            };
+            if !is_open {
+                continue;
+            }
+            let mut open = is_open;
+            let title = format!("{} ({})", name, format);
+            egui::Window::new(title)
+                .resizable(true)
+                .default_width(360.0)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.vertical(|ui| {
+                        if let Some(parameters) = self.external_plugins.parameters(id) {
+                            for param in parameters.iter_mut() {
+                                let mut value = param.value;
+                                let slider = egui::Slider::new(&mut value, param.min..=param.max)
+                                    .text(param.name.clone());
+                                if ui.add(slider).changed() {
+                                    self.external_plugins.set_parameter(id, param.index, value);
+                                }
+                            }
+                        } else {
+                            ui.label("No parameters available for this plugin");
+                        }
+                    });
+                });
+            if !open {
+                self.external_plugins.set_editor_open(id, false);
+            }
+        }
+    }
+
     fn open_plugin_editor(&mut self, plugin: &PluginInstanceInfo) {
+        if let Some(external_id) = external_id_from_ui(plugin.id) {
+            if let Some(_handle) = self.external_plugins.open_editor(external_id) {
+                self.status_message = Some(format!("Opened {}", plugin.name));
+            } else {
+                self.status_message = Some(format!("{} does not expose an editor", plugin.name));
+            }
+            return;
+        }
         match plugin.name.as_str() {
             "West Coast Lead" => self.westcoast_editor.open(),
             "Sub 808" => self.sub808_editor.open(),
@@ -6540,6 +6639,19 @@ impl HarmoniqStudioApp {
         self.status_message = Some(format!("Channel rack focused on {}", instrument.name));
     }
 
+    fn load_external_plugin(&mut self, plugin: &DiscoveredPlugin) {
+        match self.external_plugins.load(plugin) {
+            Ok(id) => {
+                self.status_message = Some(format!("Loaded {}", plugin.name));
+                self.external_plugins.open_editor(id);
+            }
+            Err(err) => {
+                self.last_error = Some(err.to_string());
+                self.status_message = Some(format!("Failed to load {}", plugin.name));
+            }
+        }
+    }
+
     fn process_plugin_actions(&mut self) {
         let (removals, bypasses) = self.plugin_rack.take_pending();
         if removals.is_empty() && bypasses.is_empty() {
@@ -6547,6 +6659,9 @@ impl HarmoniqStudioApp {
         }
         if let Ok(mut engine_ctx) = self.engine_context.lock() {
             for (id, bypassed) in bypasses {
+                if let Some(external_id) = external_id_from_ui(id) {
+                    self.external_plugins.set_bypassed(external_id, bypassed);
+                }
                 if let Some(plugin) = engine_ctx.plugins.iter_mut().find(|p| p.id == id) {
                     plugin.bypassed = bypassed;
                     let state = if bypassed { "bypassed" } else { "active" };
@@ -6554,6 +6669,9 @@ impl HarmoniqStudioApp {
                 }
             }
             for id in removals {
+                if let Some(external_id) = external_id_from_ui(id) {
+                    self.external_plugins.unload(external_id);
+                }
                 if let Some(index) = engine_ctx.plugins.iter().position(|p| p.id == id) {
                     let plugin = engine_ctx.plugins.remove(index);
                     self.status_message = Some(format!("Removed {}", plugin.name));
@@ -6776,6 +6894,7 @@ impl App for HarmoniqStudioApp {
             .show(ctx, |ui| self.draw_playlist(ui));
 
         self.draw_plugin_rack(ctx);
+        self.draw_external_plugin_editors(ctx);
         self.westcoast_editor.draw(ctx, &palette);
         self.sub808_editor.draw(ctx, &palette);
         self.audio_editor.draw(ctx, &palette, &self.icons);
