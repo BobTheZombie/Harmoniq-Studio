@@ -13,6 +13,8 @@ serde_json = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+eframe = { version = "0.27", default-features = false, features = ["wgpu", "glow", "default_fonts", "accesskit"] }
+harmoniq-engine = { path = "../harmoniq-engine" }
 
 [features]
 default = []
