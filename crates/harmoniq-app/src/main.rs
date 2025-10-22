@@ -20,7 +20,7 @@ use harmoniq_engine::{
     AudioBuffer, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine,
     TransportState,
 };
-use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth, WestCoastLead};
+use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth, Sub808, WestCoastLead};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use mp3lame_encoder::{
     self, Builder as Mp3Builder, FlushNoGap, InterleavedPcm, MonoPcm, Quality as Mp3Quality,
@@ -1364,6 +1364,237 @@ impl WestCoastEditorState {
     }
 }
 
+struct Sub808EditorState {
+    plugin: Sub808,
+    show: bool,
+    last_error: Option<String>,
+}
+
+impl Sub808EditorState {
+    fn new(sample_rate: f32) -> Self {
+        let mut plugin = Sub808::default();
+        plugin.set_sample_rate(sample_rate);
+        Self {
+            plugin,
+            show: false,
+            last_error: None,
+        }
+    }
+
+    fn open(&mut self) {
+        self.show = true;
+    }
+
+    fn knob(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &HarmoniqPalette,
+        id: &str,
+        min: f32,
+        max: f32,
+        fallback_default: f32,
+        label: &str,
+        description: &str,
+    ) {
+        let default = self
+            .plugin
+            .parameter_default(id)
+            .unwrap_or(fallback_default);
+        let mut value = self.plugin.parameter_value(id).unwrap_or(default);
+        let response = ui
+            .add(Knob::new(&mut value, min, max, default, label, palette))
+            .on_hover_text(format!("{description}\nCurrent: {value:.3}"));
+        if response.changed() {
+            match self.plugin.set_parameter_from_ui(id, value) {
+                Ok(()) => self.last_error = None,
+                Err(err) => self.last_error = Some(err),
+            }
+        }
+    }
+
+    fn draw(&mut self, ctx: &egui::Context, palette: &HarmoniqPalette) {
+        if !self.show {
+            return;
+        }
+        let mut open = self.show;
+        egui::Window::new("808 Sub Bass")
+            .open(&mut open)
+            .resizable(true)
+            .min_size(Vec2::new(420.0, 340.0))
+            .default_width(520.0)
+            .show(ctx, |ui| self.draw_contents(ui, palette));
+        self.show = open;
+    }
+
+    fn draw_contents(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette) {
+        ui.heading(RichText::new("808 Sub Bass").color(palette.text_primary));
+        ui.label(
+            RichText::new(
+                "Classic TR-808 inspired sub generator with pitch drop and tone shaping.",
+            )
+            .color(palette.text_muted),
+        );
+        ui.add_space(12.0);
+
+        ui.label(
+            RichText::new("Output & Tone")
+                .color(palette.text_primary)
+                .small()
+                .strong(),
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            self.knob(
+                ui,
+                palette,
+                "sub808.level",
+                0.0,
+                1.5,
+                0.9,
+                "Level",
+                "Overall output level of the instrument",
+            );
+            self.knob(
+                ui,
+                palette,
+                "sub808.tone",
+                0.0,
+                1.0,
+                0.55,
+                "Tone",
+                "Low-pass filter tilt spanning roughly 60 Hz to 8 kHz",
+            );
+            self.knob(
+                ui,
+                palette,
+                "sub808.drive",
+                0.0,
+                1.0,
+                0.25,
+                "Drive",
+                "Pre-filter saturation amount",
+            );
+            self.knob(
+                ui,
+                palette,
+                "sub808.harmonics",
+                0.0,
+                1.0,
+                0.15,
+                "Harmonics",
+                "Blend of the second harmonic for extra bite",
+            );
+        });
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(10.0);
+
+        ui.label(
+            RichText::new("Amplitude Envelope")
+                .color(palette.text_primary)
+                .small()
+                .strong(),
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            self.knob(
+                ui,
+                palette,
+                "sub808.attack",
+                0.0,
+                0.08,
+                0.005,
+                "Attack",
+                "Rise time for shaping kick drum style thumps",
+            );
+            self.knob(
+                ui,
+                palette,
+                "sub808.decay",
+                0.05,
+                4.0,
+                1.2,
+                "Decay",
+                "Primary tail length of the bass hit",
+            );
+            self.knob(
+                ui,
+                palette,
+                "sub808.sustain",
+                0.0,
+                1.0,
+                0.0,
+                "Sustain",
+                "Level held when keys are sustained",
+            );
+            self.knob(
+                ui,
+                palette,
+                "sub808.release",
+                0.05,
+                2.5,
+                0.45,
+                "Release",
+                "Release tail after note off",
+            );
+        });
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(10.0);
+
+        ui.label(
+            RichText::new("Pitch Envelope")
+                .color(palette.text_primary)
+                .small()
+                .strong(),
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            self.knob(
+                ui,
+                palette,
+                "sub808.pitch_amount",
+                0.0,
+                24.0,
+                12.0,
+                "Pitch Amt",
+                "Amount of downward pitch sweep in semitones",
+            );
+            self.knob(
+                ui,
+                palette,
+                "sub808.pitch_decay",
+                0.05,
+                1.2,
+                0.35,
+                "Pitch Decay",
+                "Time for the pitch drop to settle",
+            );
+        });
+
+        ui.add_space(12.0);
+        ui.label(
+            RichText::new("Tip: double-click any knob to restore its default value.")
+                .color(palette.text_muted)
+                .small(),
+        );
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Reset to defaults").clicked() {
+                self.plugin.reset_to_defaults();
+                self.last_error = None;
+            }
+            if let Some(error) = &self.last_error {
+                ui.add_space(12.0);
+                ui.label(RichText::new(error).color(palette.warning));
+            }
+        });
+    }
+}
+
 struct HarmoniqStudioApp {
     theme: HarmoniqTheme,
     icons: AppIcons,
@@ -1389,6 +1620,7 @@ struct HarmoniqStudioApp {
     status_message: Option<String>,
     audio_settings: AudioSettingsState,
     westcoast_editor: WestCoastEditorState,
+    sub808_editor: Sub808EditorState,
     project_path: String,
     bounce_path: String,
     bounce_length_beats: f32,
@@ -1457,6 +1689,7 @@ impl HarmoniqStudioApp {
             status_message: startup_status,
             audio_settings,
             westcoast_editor: WestCoastEditorState::new(config.sample_rate),
+            sub808_editor: Sub808EditorState::new(config.sample_rate),
             project_path: "project.hst".into(),
             bounce_path: "bounce.wav".into(),
             bounce_length_beats: 16.0,
@@ -2345,6 +2578,34 @@ impl HarmoniqStudioApp {
                         });
                         ui.label(
                             RichText::new("Shape the sine lead's timbre and modulation")
+                                .color(palette.text_muted)
+                                .small(),
+                        );
+                    });
+
+                    ui.separator();
+
+                    ui.vertical(|ui| {
+                        self.section_label(ui, &self.icons.track, "808 Sub Bass");
+                        let editor_button = self.gradient_icon_button(
+                            ui,
+                            &self.icons.track,
+                            "Open Editor",
+                            (palette.accent, palette.accent_soft),
+                            self.sub808_editor.show,
+                            Vec2::new(186.0, 44.0),
+                        );
+                        if editor_button.clicked() {
+                            self.sub808_editor.open();
+                        }
+                        editor_button.context_menu(|ui| {
+                            if ui.button("Open Piano Roll").clicked() {
+                                self.focus_piano_roll_on_track(2);
+                                ui.close_menu();
+                            }
+                        });
+                        ui.label(
+                            RichText::new("Dial in 808-style subs with pitch drop and drive")
                                 .color(palette.text_muted)
                                 .small(),
                         );
@@ -3897,6 +4158,7 @@ impl App for HarmoniqStudioApp {
             .show(ctx, |ui| self.draw_piano_roll(ui));
 
         self.westcoast_editor.draw(ctx, &palette);
+        self.sub808_editor.draw(ctx, &palette);
 
         if let Some(message) = self.status_message.clone() {
             let mut clear_message = false;

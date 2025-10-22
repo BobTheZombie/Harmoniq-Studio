@@ -2526,3 +2526,511 @@ impl PluginFactory for WestCoastLeadFactory {
         Box::new(WestCoastLead::default())
     }
 }
+
+// --- Sub 808 Bass -------------------------------------------------------------------------
+
+const SUB808_LEVEL: &str = "sub808.level";
+const SUB808_ATTACK: &str = "sub808.attack";
+const SUB808_DECAY: &str = "sub808.decay";
+const SUB808_SUSTAIN: &str = "sub808.sustain";
+const SUB808_RELEASE: &str = "sub808.release";
+const SUB808_PITCH_AMOUNT: &str = "sub808.pitch_amount";
+const SUB808_PITCH_DECAY: &str = "sub808.pitch_decay";
+const SUB808_TONE: &str = "sub808.tone";
+const SUB808_DRIVE: &str = "sub808.drive";
+const SUB808_HARMONICS: &str = "sub808.harmonics";
+
+const SUB808_MIN_CUTOFF: f32 = 60.0;
+const SUB808_MAX_CUTOFF: f32 = 8_000.0;
+const SUB808_PITCH_BEND_RANGE: f32 = 2.0;
+
+#[derive(Debug, Clone)]
+struct PitchEnvelope {
+    sample_rate: f32,
+    amount: f32,
+    decay: f32,
+    value: f32,
+}
+
+impl Default for PitchEnvelope {
+    fn default() -> Self {
+        Self {
+            sample_rate: 44_100.0,
+            amount: 12.0,
+            decay: 0.3,
+            value: 0.0,
+        }
+    }
+}
+
+impl PitchEnvelope {
+    fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate.max(1.0);
+    }
+
+    fn set_params(&mut self, amount: f32, decay: f32) {
+        self.amount = amount.max(0.0);
+        self.decay = decay.max(0.001);
+    }
+
+    fn trigger(&mut self) {
+        self.value = self.amount;
+    }
+
+    fn reset(&mut self) {
+        self.value = 0.0;
+    }
+
+    fn next(&mut self) -> f32 {
+        let current = self.value;
+        if current.abs() <= 1e-6 {
+            self.value = 0.0;
+            return 0.0;
+        }
+        let decay = self.decay.max(0.001);
+        let coeff = (-1.0 / (decay * self.sample_rate.max(1.0))).exp();
+        self.value *= coeff;
+        if self.value.abs() <= 1e-6 {
+            self.value = 0.0;
+        }
+        current
+    }
+}
+
+impl PitchEnvelope {
+    fn is_active(&self) -> bool {
+        self.value.abs() > 1e-5
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OnePoleLowPass {
+    sample_rate: f32,
+    cutoff: f32,
+    alpha: f32,
+    state: f32,
+}
+
+impl Default for OnePoleLowPass {
+    fn default() -> Self {
+        let mut filter = Self {
+            sample_rate: 44_100.0,
+            cutoff: 1_800.0,
+            alpha: 0.0,
+            state: 0.0,
+        };
+        filter.recalculate();
+        filter
+    }
+}
+
+impl OnePoleLowPass {
+    fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate.max(1.0);
+        self.recalculate();
+    }
+
+    fn set_cutoff(&mut self, cutoff: f32) {
+        self.cutoff = cutoff;
+        self.recalculate();
+    }
+
+    fn recalculate(&mut self) {
+        let sr = self.sample_rate.max(1.0);
+        let freq = self
+            .cutoff
+            .clamp(SUB808_MIN_CUTOFF, (sr * 0.45).max(SUB808_MIN_CUTOFF + 10.0));
+        self.alpha = 1.0 - (-TAU * freq / sr).exp();
+    }
+
+    fn reset(&mut self) {
+        self.state = 0.0;
+    }
+
+    fn process(&mut self, input: f32) -> f32 {
+        self.state += self.alpha * (input - self.state);
+        self.state
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Sub808 {
+    sample_rate: f32,
+    phase: f32,
+    base_freq: f32,
+    velocity: f32,
+    pitch_bend: f32,
+    level: f32,
+    harmonics: f32,
+    drive: f32,
+    tone: f32,
+    amp_envelope: AdsrEnvelope,
+    pitch_envelope: PitchEnvelope,
+    filter: OnePoleLowPass,
+    active_note: Option<u8>,
+    parameters: ParameterSet,
+}
+
+impl Default for Sub808 {
+    fn default() -> Self {
+        let parameters = ParameterSet::new(sub808_layout());
+        let level = parameter_continuous(&parameters, SUB808_LEVEL, 0.9);
+        let tone = parameter_continuous(&parameters, SUB808_TONE, 0.55);
+        let drive = parameter_continuous(&parameters, SUB808_DRIVE, 0.25);
+        let harmonics = parameter_continuous(&parameters, SUB808_HARMONICS, 0.15);
+        let pitch_amount = parameter_continuous(&parameters, SUB808_PITCH_AMOUNT, 12.0);
+        let pitch_decay = parameter_continuous(&parameters, SUB808_PITCH_DECAY, 0.35);
+        let mut synth = Self {
+            sample_rate: 44_100.0,
+            phase: 0.0,
+            base_freq: 55.0,
+            velocity: 0.0,
+            pitch_bend: 0.0,
+            level,
+            harmonics,
+            drive,
+            tone,
+            amp_envelope: AdsrEnvelope::default(),
+            pitch_envelope: {
+                let mut env = PitchEnvelope::default();
+                env.set_params(pitch_amount, pitch_decay);
+                env
+            },
+            filter: OnePoleLowPass::default(),
+            active_note: None,
+            parameters,
+        };
+        synth.amp_envelope.set_sample_rate(44_100.0);
+        synth.sync_envelope();
+        synth.sync_pitch();
+        synth.sync_filter();
+        synth
+    }
+}
+
+impl Sub808 {
+    pub fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.update_sample_rate(sample_rate);
+    }
+
+    pub fn parameter_value(&self, id: &str) -> Option<f32> {
+        let id = ParameterId::from(id);
+        self.parameters
+            .get(&id)
+            .and_then(ParameterValue::as_continuous)
+    }
+
+    pub fn parameter_default(&self, id: &str) -> Option<f32> {
+        let id = ParameterId::from(id);
+        self.parameters
+            .layout()
+            .find(&id)
+            .and_then(|definition| match &definition.kind {
+                ParameterKind::Continuous(opts) => Some(opts.default),
+                _ => None,
+            })
+    }
+
+    pub fn set_parameter_from_ui(&mut self, id: &str, value: f32) -> Result<(), String> {
+        let id = ParameterId::from(id);
+        self.set_parameter(&id, ParameterValue::Continuous(value))
+            .map_err(|err| err.to_string())
+    }
+
+    pub fn reset_to_defaults(&mut self) {
+        let defaults: Vec<(ParameterId, ParameterValue)> = self
+            .parameters
+            .layout()
+            .parameters()
+            .iter()
+            .filter_map(|definition| match &definition.kind {
+                ParameterKind::Continuous(opts) => Some((
+                    definition.id.clone(),
+                    ParameterValue::Continuous(opts.default),
+                )),
+                _ => None,
+            })
+            .collect();
+        for (id, value) in defaults {
+            let _ = self.set_parameter(&id, value);
+        }
+    }
+
+    pub fn sample_rate(&self) -> f32 {
+        self.sample_rate
+    }
+
+    pub fn tone_cutoff(normalised: f32, sample_rate: f32) -> f32 {
+        let normalised = normalised.clamp(0.0, 1.0);
+        let min = SUB808_MIN_CUTOFF;
+        let max = SUB808_MAX_CUTOFF.min((sample_rate * 0.45).max(min + 20.0));
+        let exponent = normalised.powf(1.6);
+        min * (max / min).powf(exponent)
+    }
+
+    fn sync_envelope(&mut self) {
+        let attack = parameter_continuous(&self.parameters, SUB808_ATTACK, 0.005);
+        let decay = parameter_continuous(&self.parameters, SUB808_DECAY, 1.2);
+        let sustain = parameter_continuous(&self.parameters, SUB808_SUSTAIN, 0.0);
+        let release = parameter_continuous(&self.parameters, SUB808_RELEASE, 0.45);
+        self.amp_envelope
+            .set_params(attack, decay, sustain.clamp(0.0, 1.0), release);
+    }
+
+    fn sync_pitch(&mut self) {
+        let amount = parameter_continuous(&self.parameters, SUB808_PITCH_AMOUNT, 12.0);
+        let decay = parameter_continuous(&self.parameters, SUB808_PITCH_DECAY, 0.35);
+        self.pitch_envelope.set_params(amount, decay);
+    }
+
+    fn sync_filter(&mut self) {
+        let cutoff = Self::tone_cutoff(self.tone, self.sample_rate);
+        self.filter.set_cutoff(cutoff);
+    }
+
+    fn update_sample_rate(&mut self, sample_rate: f32) {
+        self.sample_rate = sample_rate.max(1.0);
+        self.amp_envelope.set_sample_rate(self.sample_rate);
+        self.pitch_envelope.set_sample_rate(self.sample_rate);
+        self.filter.set_sample_rate(self.sample_rate);
+        self.sync_filter();
+    }
+
+    fn note_on(&mut self, note: u8, velocity: u8) {
+        self.base_freq = midi_note_to_freq(note);
+        self.velocity = (velocity as f32 / 127.0).clamp(0.0, 1.0).powf(1.1);
+        self.phase = 0.0;
+        self.pitch_envelope.trigger();
+        self.amp_envelope.trigger();
+        self.filter.reset();
+        self.active_note = Some(note);
+    }
+
+    fn note_off(&mut self, note: u8) {
+        if self.active_note == Some(note) {
+            self.amp_envelope.release();
+            self.active_note = None;
+        }
+    }
+
+    fn render_sample(&mut self) -> f32 {
+        if !self.amp_envelope.is_active() {
+            self.velocity = 0.0;
+            if self.pitch_envelope.is_active() {
+                self.pitch_envelope.reset();
+            }
+            return 0.0;
+        }
+
+        let pitch_offset = self.pitch_envelope.next();
+        let pitch_bend = self.pitch_bend * SUB808_PITCH_BEND_RANGE;
+        let freq = self.base_freq
+            * 2.0_f32
+                .powf((pitch_offset + pitch_bend) / 12.0)
+                .clamp(20.0, self.sample_rate * 0.45);
+        let increment = TAU * freq / self.sample_rate.max(1.0);
+        self.phase = (self.phase + increment).rem_euclid(TAU);
+
+        let fundamental = self.phase.sin();
+        let second = (self.phase * 2.0).sin();
+        let harmonic_mix = self.harmonics.clamp(0.0, 1.0);
+        let mut signal = fundamental * (1.0 - harmonic_mix) + second * 0.6 * harmonic_mix;
+
+        let drive = 1.0 + self.drive.clamp(0.0, 1.0) * 6.0;
+        signal = (signal * drive).tanh();
+
+        let filtered = self.filter.process(signal);
+        let envelope = self.amp_envelope.next();
+        let output = filtered * envelope * self.velocity * self.level;
+        output
+    }
+}
+
+impl AudioProcessor for Sub808 {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.sub808", "808 Sub Bass", "Harmoniq Labs")
+            .with_description("Punchy sine sub generator with pitch drop and tone shaping")
+    }
+
+    fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
+        self.update_sample_rate(config.sample_rate);
+        self.filter.reset();
+        Ok(())
+    }
+
+    fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
+        if !self.amp_envelope.is_active() {
+            for sample in buffer.iter_mut() {
+                *sample = 0.0;
+            }
+            return Ok(());
+        }
+
+        fill_buffer(buffer, || self.render_sample());
+        Ok(())
+    }
+
+    fn supports_layout(&self, layout: ChannelLayout) -> bool {
+        matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
+    }
+}
+
+impl MidiProcessor for Sub808 {
+    fn process_midi(&mut self, events: &[MidiEvent]) -> anyhow::Result<()> {
+        for event in events {
+            match event {
+                MidiEvent::NoteOn { note, velocity, .. } => {
+                    if *velocity > 0 {
+                        self.note_on(*note, *velocity);
+                    } else {
+                        self.note_off(*note);
+                    }
+                }
+                MidiEvent::NoteOff { note, .. } => {
+                    self.note_off(*note);
+                }
+                MidiEvent::PitchBend { lsb, msb, .. } => {
+                    let value = ((*msb as u16) << 7) | (*lsb as u16);
+                    self.pitch_bend = (value as f32 - 8_192.0) / 8_192.0;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+impl NativePlugin for Sub808 {
+    fn parameters(&self) -> &ParameterSet {
+        &self.parameters
+    }
+
+    fn parameters_mut(&mut self) -> &mut ParameterSet {
+        &mut self.parameters
+    }
+
+    fn on_parameter_changed(
+        &mut self,
+        id: &ParameterId,
+        value: &ParameterValue,
+    ) -> Result<(), PluginParameterError> {
+        match id.as_str() {
+            SUB808_LEVEL => {
+                if let Some(level) = value.as_continuous() {
+                    self.level = level;
+                }
+            }
+            SUB808_ATTACK | SUB808_DECAY | SUB808_SUSTAIN | SUB808_RELEASE => {
+                self.sync_envelope();
+            }
+            SUB808_PITCH_AMOUNT | SUB808_PITCH_DECAY => {
+                self.sync_pitch();
+            }
+            SUB808_TONE => {
+                if let Some(tone) = value.as_continuous() {
+                    self.tone = tone;
+                    self.sync_filter();
+                }
+            }
+            SUB808_DRIVE => {
+                if let Some(drive) = value.as_continuous() {
+                    self.drive = drive.clamp(0.0, 1.0);
+                }
+            }
+            SUB808_HARMONICS => {
+                if let Some(harmonics) = value.as_continuous() {
+                    self.harmonics = harmonics.clamp(0.0, 1.0);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+fn sub808_layout() -> ParameterLayout {
+    ParameterLayout::new(vec![
+        ParameterDefinition::new(
+            SUB808_LEVEL,
+            "Level",
+            ParameterKind::continuous(0.0..=1.5, 0.9),
+        )
+        .with_description("Master output level"),
+        ParameterDefinition::new(
+            SUB808_ATTACK,
+            "Attack",
+            ParameterKind::continuous(0.0..=0.08, 0.005),
+        )
+        .with_unit("s")
+        .with_description("Rise time of the amplitude envelope"),
+        ParameterDefinition::new(
+            SUB808_DECAY,
+            "Decay",
+            ParameterKind::continuous(0.05..=4.0, 1.2),
+        )
+        .with_unit("s")
+        .with_description("Decay time controlling tail length"),
+        ParameterDefinition::new(
+            SUB808_SUSTAIN,
+            "Sustain",
+            ParameterKind::continuous(0.0..=1.0, 0.0),
+        )
+        .with_description("Sustain level after decay for held notes"),
+        ParameterDefinition::new(
+            SUB808_RELEASE,
+            "Release",
+            ParameterKind::continuous(0.05..=2.5, 0.45),
+        )
+        .with_unit("s")
+        .with_description("Release tail after note off"),
+        ParameterDefinition::new(
+            SUB808_PITCH_AMOUNT,
+            "Pitch Amt",
+            ParameterKind::continuous(0.0..=24.0, 12.0),
+        )
+        .with_unit("st")
+        .with_description("Initial downward pitch sweep amount"),
+        ParameterDefinition::new(
+            SUB808_PITCH_DECAY,
+            "Pitch Decay",
+            ParameterKind::continuous(0.05..=1.2, 0.35),
+        )
+        .with_unit("s")
+        .with_description("Time for the pitch sweep to settle"),
+        ParameterDefinition::new(
+            SUB808_TONE,
+            "Tone",
+            ParameterKind::continuous(0.0..=1.0, 0.55),
+        )
+        .with_description("Sets the low-pass filter cutoff"),
+        ParameterDefinition::new(
+            SUB808_DRIVE,
+            "Drive",
+            ParameterKind::continuous(0.0..=1.0, 0.25),
+        )
+        .with_description("Saturation intensity applied before filtering"),
+        ParameterDefinition::new(
+            SUB808_HARMONICS,
+            "Harmonics",
+            ParameterKind::continuous(0.0..=1.0, 0.15),
+        )
+        .with_description("Blend amount of the second harmonic for extra body"),
+    ])
+}
+
+pub struct Sub808Factory;
+
+impl PluginFactory for Sub808Factory {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new("harmoniq.sub808", "808 Sub Bass", "Harmoniq Labs")
+            .with_description("Punchy sine sub generator with pitch drop and tone shaping")
+    }
+
+    fn parameter_layout(&self) -> std::sync::Arc<ParameterLayout> {
+        std::sync::Arc::new(sub808_layout())
+    }
+
+    fn create(&self) -> Box<dyn NativePlugin> {
+        Box::new(Sub808::default())
+    }
+}
