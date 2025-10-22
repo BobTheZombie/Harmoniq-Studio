@@ -3,11 +3,13 @@
 use harmoniq_plugin_sdk::PluginModule;
 
 pub mod dynamics;
+pub mod editors;
 pub mod effects;
 pub mod generators;
 pub mod instruments;
 
 pub use dynamics::{GainPlugin, GainPluginFactory};
+pub use editors::{AudioClipMetrics, AudioEditorPlugin, AudioEditorPluginFactory};
 pub use effects::{
     AutoFilterFactory, AutoFilterPlugin, ChorusFactory, ChorusPlugin, CompressorFactory,
     CompressorPlugin, DelayFactory, DelayPlugin, DistortionFactory, DistortionPlugin,
@@ -30,6 +32,7 @@ pub fn builtin_module() -> PluginModule {
         .register_factory(Box::new(GainPluginFactory))
         .register_factory(Box::new(SineSynthFactory))
         .register_factory(Box::new(NoisePluginFactory))
+        .register_factory(Box::new(AudioEditorPluginFactory))
         .register_factory(Box::new(AnalogSynthFactory))
         .register_factory(Box::new(FmSynthFactory))
         .register_factory(Box::new(WavetableSynthFactory))

@@ -15,6 +15,7 @@ members = [
     "crates/harmoniq-plugin-bass",
     "crates/harmoniq-plugin-westcoast",
     "crates/harmoniq-plugin-sub808",
+    "crates/harmoniq-plugin-edison",
 ]
 resolver = "2"
 

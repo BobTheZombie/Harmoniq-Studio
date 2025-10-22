@@ -21,7 +21,9 @@ use harmoniq_engine::{
     AudioBuffer, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine,
     TransportState,
 };
-use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth, Sub808, WestCoastLead};
+use harmoniq_plugins::{
+    AudioClipMetrics, AudioEditorPlugin, GainPlugin, NoisePlugin, SineSynth, Sub808, WestCoastLead,
+};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use mp3lame_encoder::{
     self, Builder as Mp3Builder, FlushNoGap, InterleavedPcm, MonoPcm, Quality as Mp3Quality,
@@ -1596,6 +1598,378 @@ impl Sub808EditorState {
     }
 }
 
+struct AudioEditorState {
+    plugin: AudioEditorPlugin,
+    show: bool,
+    last_error: Option<String>,
+    status: Option<String>,
+    load_path: String,
+    save_path: String,
+    waveform_drag_start: Option<f32>,
+}
+
+impl AudioEditorState {
+    fn new(sample_rate: f32) -> Self {
+        let mut plugin = AudioEditorPlugin::default();
+        plugin.set_engine_sample_rate(sample_rate);
+        Self {
+            plugin,
+            show: false,
+            last_error: None,
+            status: None,
+            load_path: String::from("audio.wav"),
+            save_path: String::from("edited.wav"),
+            waveform_drag_start: None,
+        }
+    }
+
+    fn open(&mut self) {
+        self.show = true;
+    }
+
+    fn notify_success(&mut self, message: impl Into<String>) {
+        self.status = Some(message.into());
+        self.last_error = None;
+    }
+
+    fn report_error(&mut self, message: impl Into<String>) {
+        self.last_error = Some(message.into());
+        self.status = None;
+    }
+
+    fn draw(&mut self, ctx: &egui::Context, palette: &HarmoniqPalette, icons: &AppIcons) {
+        if !self.show {
+            return;
+        }
+        let mut open = self.show;
+        egui::Window::new("Edison Audio Editor")
+            .open(&mut open)
+            .resizable(true)
+            .min_size(Vec2::new(520.0, 420.0))
+            .default_width(680.0)
+            .show(ctx, |ui| self.draw_contents(ui, palette, icons));
+        self.show = open;
+    }
+
+    fn draw_contents(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette, icons: &AppIcons) {
+        ui.heading(RichText::new("Edison Audio Editor").color(palette.text_primary));
+        ui.label(
+            RichText::new("Capture, trim, and sculpt audio clips with Harmoniq's waveform editor.")
+                .color(palette.text_muted),
+        );
+        ui.add_space(12.0);
+
+        if let Some(status) = &self.status {
+            ui.label(RichText::new(status).color(palette.success));
+        }
+        if let Some(error) = &self.last_error {
+            ui.label(RichText::new(error).color(palette.warning));
+        }
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Open").color(palette.text_primary));
+            ui.add(egui::TextEdit::singleline(&mut self.load_path).desired_width(280.0));
+            let button = egui::Button::image_and_text(
+                egui::Image::from_texture(&icons.open).fit_to_exact_size(Vec2::splat(18.0)),
+                "Load",
+            );
+            if ui.add(button).clicked() {
+                if self.load_path.trim().is_empty() {
+                    self.report_error("Specify a file path to load");
+                } else {
+                    match self.plugin.load_audio(&self.load_path) {
+                        Ok(()) => {
+                            self.notify_success(format!("Loaded {}", self.load_path));
+                            if self.save_path.trim().is_empty() {
+                                self.save_path = self.load_path.clone();
+                            }
+                        }
+                        Err(err) => self.report_error(err.to_string()),
+                    }
+                }
+            }
+        });
+
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Export").color(palette.text_primary));
+            ui.add(egui::TextEdit::singleline(&mut self.save_path).desired_width(280.0));
+            let button = egui::Button::image_and_text(
+                egui::Image::from_texture(&icons.save).fit_to_exact_size(Vec2::splat(18.0)),
+                "Save WAV",
+            );
+            if ui.add(button).clicked() {
+                if self.save_path.trim().is_empty() {
+                    self.report_error("Specify a destination path before exporting");
+                } else {
+                    match self.plugin.export_wav(&self.save_path) {
+                        Ok(()) => self.notify_success(format!("Exported {}", self.save_path)),
+                        Err(err) => self.report_error(err.to_string()),
+                    }
+                }
+            }
+        });
+
+        if let Some(metrics) = self.plugin.clip_metrics() {
+            self.draw_metrics(ui, palette, metrics);
+        } else {
+            ui.label(
+                RichText::new("Load an audio file to enable editing controls.")
+                    .color(palette.text_muted),
+            );
+        }
+
+        ui.add_space(10.0);
+        self.draw_waveform(ui, palette);
+        ui.add_space(12.0);
+
+        if self.plugin.has_clip() {
+            self.draw_editor_controls(ui, palette, icons);
+        }
+    }
+
+    fn draw_metrics(
+        &self,
+        ui: &mut egui::Ui,
+        palette: &HarmoniqPalette,
+        metrics: AudioClipMetrics,
+    ) {
+        let peak_text = if metrics.peak <= f32::EPSILON {
+            "-∞ dBFS".to_string()
+        } else {
+            format!("{:.1} dBFS", 20.0 * metrics.peak.log10())
+        };
+        ui.label(
+            RichText::new(format!(
+                "{:.1} kHz • {} channels • {:.2} s ({} samples) • peak {}",
+                metrics.sample_rate / 1000.0,
+                metrics.channels,
+                metrics.length_seconds,
+                metrics.length_samples,
+                peak_text
+            ))
+            .color(palette.text_muted),
+        );
+        if let Some(path) = self.plugin.source_path() {
+            ui.label(
+                RichText::new(format!("Source: {}", path.display())).color(palette.text_muted),
+            );
+        }
+    }
+
+    fn draw_editor_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &HarmoniqPalette,
+        icons: &AppIcons,
+    ) {
+        if let Some((start, end)) = self.plugin.selection_seconds() {
+            let length = (end - start).max(0.0);
+            ui.label(
+                RichText::new(format!(
+                    "Selection: {:.3} – {:.3} s (Δ {:.3} s)",
+                    start, end, length
+                ))
+                .color(palette.text_primary),
+            );
+        } else {
+            ui.label(RichText::new("Selection: none").color(palette.text_muted));
+        }
+        ui.add_space(6.0);
+
+        ui.horizontal(|ui| {
+            let playing = self.plugin.is_playing();
+            let play_icon = if playing { &icons.pause } else { &icons.play };
+            let play_label = if playing { "Pause" } else { "Play" };
+            let button = egui::Button::image_and_text(
+                egui::Image::from_texture(play_icon).fit_to_exact_size(Vec2::splat(18.0)),
+                play_label,
+            );
+            if ui.add(button).clicked() {
+                if playing {
+                    self.plugin.stop_playback();
+                } else {
+                    let use_selection = self
+                        .plugin
+                        .selection_samples()
+                        .map(|(s, e)| e > s)
+                        .unwrap_or(false);
+                    self.plugin.start_playback(use_selection);
+                }
+            }
+
+            let stop_button = egui::Button::image_and_text(
+                egui::Image::from_texture(&icons.stop).fit_to_exact_size(Vec2::splat(18.0)),
+                "Stop",
+            );
+            if ui.add(stop_button).clicked() {
+                self.plugin.stop_playback();
+            }
+
+            if ui.button("Play selection").clicked() {
+                self.plugin.start_playback(true);
+            }
+            if ui.button("Play from start").clicked() {
+                self.plugin.start_playback(false);
+            }
+
+            let mut loop_enabled = self.plugin.loop_enabled();
+            if ui.checkbox(&mut loop_enabled, "Loop").changed() {
+                if let Err(err) = self.plugin.set_loop_enabled(loop_enabled) {
+                    self.report_error(err);
+                } else if loop_enabled {
+                    self.notify_success("Loop enabled");
+                } else {
+                    self.notify_success("Loop disabled");
+                }
+            }
+
+            let mut gain = self.plugin.output_gain();
+            if ui
+                .add(
+                    egui::DragValue::new(&mut gain)
+                        .clamp_range(0.0..=2.5)
+                        .speed(0.01)
+                        .prefix("Gain ")
+                        .suffix("x"),
+                )
+                .changed()
+            {
+                if let Err(err) = self.plugin.set_output_gain(gain) {
+                    self.report_error(err);
+                }
+            }
+        });
+
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(format!("Playhead: {:.3} s", self.plugin.playhead_seconds()))
+                .color(palette.text_muted),
+        );
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Clear selection").clicked() {
+                self.plugin.clear_selection();
+            }
+            if ui.button("Trim to selection").clicked() {
+                match self.plugin.apply_trim() {
+                    Ok(()) => self.notify_success("Trimmed selection"),
+                    Err(err) => self.report_error(err),
+                }
+            }
+            if ui.button("Normalize").clicked() {
+                self.plugin.apply_normalize();
+                self.notify_success("Normalized amplitude");
+            }
+            if ui.button("Reverse").clicked() {
+                self.plugin.apply_reverse();
+                self.notify_success("Reversed region");
+            }
+            if ui.button("Fade in").clicked() {
+                self.plugin.apply_fade_in();
+                self.notify_success("Applied fade in");
+            }
+            if ui.button("Fade out").clicked() {
+                self.plugin.apply_fade_out();
+                self.notify_success("Applied fade out");
+            }
+        });
+    }
+
+    fn draw_waveform(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette) {
+        let width = ui.available_width();
+        let desired = egui::vec2(width, 200.0);
+        let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, egui::Rounding::same(8.0), palette.panel_alt);
+        painter.rect_stroke(
+            rect,
+            egui::Rounding::same(8.0),
+            egui::Stroke::new(1.0, palette.toolbar_outline),
+        );
+
+        if !self.plugin.has_clip() {
+            painter.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                "Load an audio file to view the waveform",
+                FontId::proportional(16.0),
+                palette.text_muted,
+            );
+        } else {
+            let segments = rect.width().max(1.0) as usize;
+            let overview = self.plugin.waveform_overview(segments.max(1));
+            let mid_y = rect.center().y;
+            let amplitude = rect.height() * 0.5;
+            let stroke = egui::Stroke::new(1.0, palette.accent);
+            let total = overview.len().max(1) as f32;
+            for (index, (min, max)) in overview.iter().enumerate() {
+                let fraction = index as f32 / total;
+                let x = rect.left() + fraction * rect.width();
+                let y_min = mid_y - max.clamp(-1.0, 1.0) * amplitude;
+                let y_max = mid_y - min.clamp(-1.0, 1.0) * amplitude;
+                painter.line_segment([egui::pos2(x, y_min), egui::pos2(x, y_max)], stroke);
+            }
+
+            if let Some((start, end)) = self.plugin.selection_samples() {
+                let total_samples = self.plugin.clip_length_samples().max(1);
+                let left = rect.left() + (start as f32 / total_samples as f32) * rect.width();
+                let right = rect.left() + (end as f32 / total_samples as f32) * rect.width();
+                let selection_rect = egui::Rect::from_min_max(
+                    egui::pos2(left, rect.top()),
+                    egui::pos2(right, rect.bottom()),
+                );
+                painter.rect_filled(
+                    selection_rect,
+                    egui::Rounding::none(),
+                    palette.accent_soft.linear_multiply(0.45),
+                );
+            }
+
+            let play_fraction = self.plugin.playhead_fraction();
+            let play_x = rect.left() + play_fraction * rect.width();
+            painter.line_segment(
+                [
+                    egui::pos2(play_x, rect.top()),
+                    egui::pos2(play_x, rect.bottom()),
+                ],
+                egui::Stroke::new(1.5, palette.accent_alt),
+            );
+        }
+
+        if response.drag_started() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let fraction = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+                self.waveform_drag_start = Some(fraction);
+                self.plugin.set_selection_fraction(fraction, fraction);
+            }
+        }
+        if response.dragged() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                if let Some(start) = self.waveform_drag_start {
+                    let fraction = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+                    let (a, b) = if fraction >= start {
+                        (start, fraction)
+                    } else {
+                        (fraction, start)
+                    };
+                    self.plugin.set_selection_fraction(a, b);
+                }
+            }
+        }
+        if response.drag_stopped() {
+            self.waveform_drag_start = None;
+        }
+        if response.clicked() && !response.dragged() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let fraction = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
+                self.plugin.set_playhead_fraction(fraction);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct MixerConsolePluginState {
     show: bool,
@@ -1646,6 +2020,7 @@ struct HarmoniqStudioApp {
     audio_settings: AudioSettingsState,
     westcoast_editor: WestCoastEditorState,
     sub808_editor: Sub808EditorState,
+    audio_editor: AudioEditorState,
     mixer_console: MixerConsolePluginState,
     project_path: String,
     bounce_path: String,
@@ -1717,6 +2092,7 @@ impl HarmoniqStudioApp {
             audio_settings,
             westcoast_editor: WestCoastEditorState::new(config.sample_rate),
             sub808_editor: Sub808EditorState::new(config.sample_rate),
+            audio_editor: AudioEditorState::new(config.sample_rate),
             mixer_console: MixerConsolePluginState::default(),
             project_path: "project.hst".into(),
             bounce_path: "bounce.wav".into(),
@@ -2925,6 +3301,30 @@ impl HarmoniqStudioApp {
                             RichText::new("Dial in 808-style subs with pitch drop and drive")
                                 .color(palette.text_muted)
                                 .small(),
+                        );
+                    });
+
+                    ui.separator();
+
+                    ui.vertical(|ui| {
+                        self.section_label(ui, &self.icons.clip, "Edison Audio Editor");
+                        let editor_button = self.gradient_icon_button(
+                            ui,
+                            &self.icons.clip,
+                            "Open Editor",
+                            (palette.accent_alt, palette.accent_soft),
+                            self.audio_editor.show,
+                            Vec2::new(186.0, 44.0),
+                        );
+                        if editor_button.clicked() {
+                            self.audio_editor.open();
+                        }
+                        ui.label(
+                            RichText::new(
+                                "Detailed waveform editing with trim, fades, looping, and export",
+                            )
+                            .color(palette.text_muted)
+                            .small(),
                         );
                     });
 
@@ -4921,6 +5321,7 @@ impl App for HarmoniqStudioApp {
         self.draw_mixer_window(ctx, &palette);
         self.westcoast_editor.draw(ctx, &palette);
         self.sub808_editor.draw(ctx, &palette);
+        self.audio_editor.draw(ctx, &palette, &self.icons);
 
         if let Some(message) = self.status_message.clone() {
             let mut clear_message = false;
