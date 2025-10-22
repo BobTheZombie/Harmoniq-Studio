@@ -717,7 +717,7 @@ impl LayoutState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct WaveformPreview {
     path: PathBuf,
     samples: Vec<f32>,
@@ -2541,7 +2541,7 @@ impl AudioEditorState {
                 );
                 painter.rect_filled(
                     selection_rect,
-                    egui::Rounding::none(),
+                    egui::Rounding::ZERO,
                     palette.accent_soft.linear_multiply(0.45),
                 );
             }
@@ -2933,28 +2933,35 @@ impl HarmoniqStudioApp {
             return None;
         }
 
-        let (track_idx, instrument_name, pattern_length) = {
+        let tracks_len = self.tracks.len();
+        let (track_idx, instrument_name, pattern_length, existing_reference) = {
             let instrument = self.sequencer.instruments.get_mut(instrument_idx)?;
 
-            if instrument.mixer_track >= self.tracks.len() {
-                instrument.mixer_track = self.tracks.len() - 1;
+            if instrument.mixer_track >= tracks_len {
+                instrument.mixer_track = tracks_len - 1;
                 instrument.clip = None;
-            }
-
-            if let Some(reference) = instrument.clip {
-                if let Some(track) = self.tracks.get(reference.track_index) {
-                    if reference.clip_index < track.clips.len() {
-                        return Some(reference);
-                    }
-                }
             }
 
             (
                 instrument.mixer_track,
                 instrument.name.clone(),
                 instrument.pattern.total_length(),
+                instrument.clip,
             )
         };
+
+        if let Some(reference) = existing_reference {
+            let clip_valid = self
+                .tracks
+                .get(reference.track_index)
+                .is_some_and(|track| reference.clip_index < track.clips.len());
+            if clip_valid {
+                return Some(reference);
+            }
+            if let Some(instrument) = self.sequencer.instruments.get_mut(instrument_idx) {
+                instrument.clip = None;
+            }
+        }
 
         let existing_index = self.tracks.get(track_idx).and_then(|track| {
             track
@@ -3365,7 +3372,8 @@ impl HarmoniqStudioApp {
 
     fn add_track(&mut self) {
         self.next_track_index += 1;
-        self.tracks.push(Track::with_index(self.next_track_index));
+        let track_index = self.next_track_index;
+        self.tracks.push(Track::with_index(track_index));
     }
 
     fn new_project(&mut self) {
@@ -3638,16 +3646,11 @@ impl HarmoniqStudioApp {
         let file_name = path
             .file_name()
             .and_then(|stem| stem.to_str())
-            .unwrap_or("Sample");
+            .unwrap_or("Sample")
+            .to_string();
         let color = self.next_color();
-        match insert_sample_clip_on_track(
-            &mut self.tracks,
-            track_idx,
-            beat,
-            path,
-            self.tempo,
-            color,
-        ) {
+        let tempo = self.tempo;
+        match insert_sample_clip_on_track(&mut self.tracks, track_idx, beat, path, tempo, color) {
             Ok((clip_index, warning)) => {
                 self.next_clip_index += 1;
                 self.focus_clip(track_idx, clip_index);
@@ -3950,20 +3953,18 @@ impl HarmoniqStudioApp {
                                 .add(egui::DragValue::new(&mut numerator).clamp_range(1..=12))
                                 .changed()
                             {
-                                self.time_signature.set_from_tuple((
-                                    numerator.max(1) as u32,
-                                    self.time_signature.denominator,
-                                ));
+                                let denominator_value = self.time_signature.denominator;
+                                self.time_signature
+                                    .set_from_tuple((numerator.max(1) as u32, denominator_value));
                             }
                             ui.label("/");
                             if ui
                                 .add(egui::DragValue::new(&mut denominator).clamp_range(1..=16))
                                 .changed()
                             {
-                                self.time_signature.set_from_tuple((
-                                    self.time_signature.numerator,
-                                    denominator.max(1) as u32,
-                                ));
+                                let numerator_value = self.time_signature.numerator;
+                                self.time_signature
+                                    .set_from_tuple((numerator_value, denominator.max(1) as u32));
                             }
                         });
                     });
@@ -4039,8 +4040,8 @@ impl HarmoniqStudioApp {
     }
 
     fn draw_audio_settings(&mut self, ui: &mut egui::Ui) {
-        self.audio_settings
-            .update_active(self.engine_runner.realtime());
+        let realtime = self.engine_runner.realtime();
+        self.audio_settings.update_active(realtime);
         let palette = self.palette().clone();
         let mut backend_options: Vec<(AudioBackend, String)> = Vec::new();
         for (backend, label) in available_backends() {
@@ -4157,11 +4158,11 @@ impl HarmoniqStudioApp {
 
         match self.engine_runner.reconfigure_audio(runtime) {
             Ok(()) => {
-                self.audio_settings.sync_with_runtime(
-                    self.engine_runner.runtime_options(),
-                    self.engine_runner.realtime(),
-                );
-                if let Some(active) = self.engine_runner.realtime() {
+                let runtime_snapshot = self.engine_runner.runtime_options().clone();
+                let realtime = self.engine_runner.realtime();
+                self.audio_settings
+                    .sync_with_runtime(&runtime_snapshot, realtime);
+                if let Some(active) = realtime {
                     let backend_label = self
                         .audio_settings
                         .active_host_label
@@ -4634,6 +4635,8 @@ impl HarmoniqStudioApp {
                 let right_clicked = response.clicked_by(PointerButton::Secondary);
 
                 let mut cursor_y = timeline_rect.top() + row_gap;
+                let selected_track = self.selected_track;
+                let selected_clip = self.selected_clip;
                 for (track_idx, track) in self.tracks.iter_mut().enumerate() {
                     let track_header_rect = egui::Rect::from_min_max(
                         egui::pos2(header_column_rect.left(), cursor_y),
@@ -4643,7 +4646,7 @@ impl HarmoniqStudioApp {
                         egui::pos2(timeline_rect.left(), cursor_y),
                         egui::pos2(timeline_rect.right(), cursor_y + track_height),
                     );
-                    let is_selected = self.selected_track == Some(track_idx);
+                    let is_selected = selected_track == Some(track_idx);
 
                     let pointer_over_lane = dragging_sample
                         && pointer_pos
@@ -4769,7 +4772,7 @@ impl HarmoniqStudioApp {
                             egui::pos2(clip_start, clip_y),
                             egui::pos2(clip_start + clip_width, clip_y + clip_height),
                         );
-                        let clip_selected = self.selected_clip == Some((track_idx, clip_idx));
+                        let clip_selected = selected_clip == Some((track_idx, clip_idx));
                         let clip_hovered = pointer_pos
                             .map(|pos| clip_rect.contains(pos))
                             .unwrap_or(false);
@@ -5076,6 +5079,7 @@ impl HarmoniqStudioApp {
         ui.add_space(6.0);
 
         if let Some((track_idx, clip_idx)) = self.selected_clip {
+            let piano_roll = self.piano_roll.clone();
             if let Some(track) = self.tracks.get_mut(track_idx) {
                 let mut selected_note = self.piano_roll_selected_note;
                 let mut drag_state = self.piano_roll_drag.take();
@@ -5086,9 +5090,9 @@ impl HarmoniqStudioApp {
                         ui.allocate_painter(desired_size, egui::Sense::click_and_drag());
 
                     let rect = response.rect;
-                    let key_height = self.piano_roll.key_height;
-                    let pixels_per_beat = self.piano_roll.pixels_per_beat;
-                    let num_keys = self.piano_roll.key_range_len();
+                    let key_height = piano_roll.key_height;
+                    let pixels_per_beat = piano_roll.pixels_per_beat;
+                    let num_keys = piano_roll.key_range_len();
                     let pointer_primary_pressed = ui.input(|i| i.pointer.primary_pressed());
                     let pointer_primary_down = ui.input(|i| i.pointer.primary_down());
                     let pointer_primary_released = ui.input(|i| i.pointer.primary_released());
@@ -5122,10 +5126,10 @@ impl HarmoniqStudioApp {
 
                     let pointer_inside = pointer_pos.map_or(false, |pos| grid_rect.contains(pos));
                     let pointer_pitch =
-                        pointer_pos.and_then(|pos| self.piano_roll.y_to_pitch(grid_rect, pos.y));
+                        pointer_pos.and_then(|pos| piano_roll.y_to_pitch(grid_rect, pos.y));
 
-                    let clip_length = clip.length_beats.max(self.piano_roll.note_min_length());
-                    let min_length = self.piano_roll.note_min_length();
+                    let clip_length = clip.length_beats.max(piano_roll.note_min_length());
+                    let min_length = piano_roll.note_min_length();
 
                     painter.rect_filled(grid_rect, 6.0, palette.piano_background);
                     painter.rect_filled(keyboard_rect, 6.0, palette.panel_alt);
@@ -5137,11 +5141,9 @@ impl HarmoniqStudioApp {
                         );
                     }
 
-                    for pitch in (*self.piano_roll.key_range.start()
-                        ..=*self.piano_roll.key_range.end())
-                        .rev()
+                    for pitch in (*piano_roll.key_range.start()..=*piano_roll.key_range.end()).rev()
                     {
-                        let bottom = self.piano_roll.pitch_to_y(grid_rect, pitch);
+                        let bottom = piano_roll.pitch_to_y(grid_rect, pitch);
                         let top = bottom - key_height;
                         let lane_rect = egui::Rect::from_min_max(
                             egui::pos2(grid_rect.left(), top),
@@ -5236,8 +5238,8 @@ impl HarmoniqStudioApp {
                     }
 
                     if let Some(pitch_hover) = pointer_pitch {
-                        if self.piano_roll.is_pitch_visible(pitch_hover) {
-                            let bottom = self.piano_roll.pitch_to_y(grid_rect, pitch_hover);
+                        if piano_roll.is_pitch_visible(pitch_hover) {
+                            let bottom = piano_roll.pitch_to_y(grid_rect, pitch_hover);
                             let top = bottom - key_height;
                             let lane_rect = egui::Rect::from_min_max(
                                 egui::pos2(grid_rect.left(), top),
@@ -5259,12 +5261,12 @@ impl HarmoniqStudioApp {
                     let mut note_rects: Vec<(usize, egui::Rect)> = Vec::new();
                     let mut hovered_note: Option<(usize, egui::Rect)> = None;
                     for (index, note) in clip.notes.iter().enumerate() {
-                        if !self.piano_roll.is_pitch_visible(note.pitch) {
+                        if !piano_roll.is_pitch_visible(note.pitch) {
                             continue;
                         }
                         let x = grid_rect.left() + note.start_beats * pixels_per_beat;
                         let width = (note.length_beats * pixels_per_beat).max(10.0);
-                        let y = self.piano_roll.pitch_to_y(grid_rect, note.pitch);
+                        let y = piano_roll.pitch_to_y(grid_rect, note.pitch);
                         let note_rect = egui::Rect::from_min_size(
                             egui::pos2(x, y - key_height + 2.0),
                             egui::vec2(width, key_height - 4.0),
@@ -5319,21 +5321,21 @@ impl HarmoniqStudioApp {
                             if let Some(pointer) = pointer_pos {
                                 match drag.mode {
                                     PianoRollDragMode::Move => {
-                                        let mut new_start =
-                                            self.piano_roll.position_to_beat(grid_rect, pointer.x)
-                                                - drag.drag_offset_beats;
-                                        new_start = self.piano_roll.quantize_beat(new_start);
+                                        let mut new_start = piano_roll
+                                            .position_to_beat(grid_rect, pointer.x)
+                                            - drag.drag_offset_beats;
+                                        new_start = piano_roll.quantize_beat(new_start);
                                         let max_start = (clip_length - note.length_beats).max(0.0);
                                         note.start_beats = new_start.clamp(0.0, max_start);
                                         if let Some(pitch) =
-                                            self.piano_roll.y_to_pitch(grid_rect, pointer.y)
+                                            piano_roll.y_to_pitch(grid_rect, pointer.y)
                                         {
                                             note.pitch = pitch;
                                         }
                                     }
                                     PianoRollDragMode::ResizeStart => {
-                                        let mut new_start = self.piano_roll.quantize_beat(
-                                            self.piano_roll.position_to_beat(grid_rect, pointer.x),
+                                        let mut new_start = piano_roll.quantize_beat(
+                                            piano_roll.position_to_beat(grid_rect, pointer.x),
                                         );
                                         let max_start = (drag.initial_end - min_length)
                                             .max(0.0)
@@ -5347,8 +5349,8 @@ impl HarmoniqStudioApp {
                                         note.length_beats = new_length;
                                     }
                                     PianoRollDragMode::ResizeEnd | PianoRollDragMode::Create => {
-                                        let mut new_end = self.piano_roll.quantize_beat(
-                                            self.piano_roll.position_to_beat(grid_rect, pointer.x),
+                                        let mut new_end = piano_roll.quantize_beat(
+                                            piano_roll.position_to_beat(grid_rect, pointer.x),
                                         );
                                         let min_end = note.start_beats + min_length;
                                         let max_end = clip_length.max(min_end);
@@ -5397,7 +5399,7 @@ impl HarmoniqStudioApp {
                                 };
                                 if let Some(note) = clip.notes.get(note_index) {
                                     let pointer_beat =
-                                        self.piano_roll.position_to_beat(grid_rect, pointer.x);
+                                        piano_roll.position_to_beat(grid_rect, pointer.x);
                                     let drag_offset = pointer_beat - note.start_beats;
                                     drag_state = Some(PianoRollDragState {
                                         mode,
@@ -5411,15 +5413,13 @@ impl HarmoniqStudioApp {
                                 }
                             }
                         } else if let Some(pointer) = pointer_pos {
-                            let mut beat = self.piano_roll.quantize_beat(
-                                self.piano_roll.position_to_beat(grid_rect, pointer.x),
-                            );
+                            let mut beat = piano_roll
+                                .quantize_beat(piano_roll.position_to_beat(grid_rect, pointer.x));
                             let max_start = (clip_length - min_length).max(0.0);
                             beat = beat.clamp(0.0, max_start);
-                            let pitch = self
-                                .piano_roll
+                            let pitch = piano_roll
                                 .y_to_pitch(grid_rect, pointer.y)
-                                .unwrap_or(*self.piano_roll.key_range.end());
+                                .unwrap_or(*piano_roll.key_range.end());
                             let length = min_length;
                             clip.notes.push(Note::new(beat, length, pitch));
                             let note_index = clip.notes.len() - 1;
@@ -6108,24 +6108,23 @@ impl HarmoniqStudioApp {
     }
 
     fn update_engine_context(&mut self) {
-        if let Ok(mut ctx) = self.engine_context.lock() {
-            ctx.tempo = self.tempo;
-            ctx.time_signature = self.time_signature;
-            ctx.transport = self.transport_state;
-            ctx.pattern_mode = self.pattern_mode;
-            ctx.cpu_usage = self.estimate_cpu_usage();
-            ctx.clock = self.transport_clock;
-            ctx.master_meter = (
-                self.master_track.meter.left_level(),
-                self.master_track.meter.right_level(),
-            );
-            ctx.ensure_demo_plugins();
-            for (index, plugin) in ctx.plugins.iter_mut().enumerate() {
-                let phase = self.playback_position_beats + index as f32 * 0.37;
-                let dynamic = ((phase.sin() + 1.0) * 0.5 * 0.08).clamp(0.0, 0.25);
-                plugin.cpu = (ctx.cpu_usage * 0.4 + dynamic).clamp(0.02, 0.95);
-                plugin.latency_ms = 3.0 + index as f32 * 1.2;
-            }
+        let mut ctx = self.engine_context.lock();
+        ctx.tempo = self.tempo;
+        ctx.time_signature = self.time_signature;
+        ctx.transport = self.transport_state;
+        ctx.pattern_mode = self.pattern_mode;
+        ctx.cpu_usage = self.estimate_cpu_usage();
+        ctx.clock = self.transport_clock;
+        ctx.master_meter = (
+            self.master_track.meter.left_level(),
+            self.master_track.meter.right_level(),
+        );
+        ctx.ensure_demo_plugins();
+        for (index, plugin) in ctx.plugins.iter_mut().enumerate() {
+            let phase = self.playback_position_beats + index as f32 * 0.37;
+            let dynamic = ((phase.sin() + 1.0) * 0.5 * 0.08).clamp(0.0, 0.25);
+            plugin.cpu = (ctx.cpu_usage * 0.4 + dynamic).clamp(0.02, 0.95);
+            plugin.latency_ms = 3.0 + index as f32 * 1.2;
         }
     }
 
@@ -6249,16 +6248,16 @@ impl HarmoniqStudioApp {
         });
     }
 
-    fn load_waveform_preview(&mut self, path: &Path) -> Option<&WaveformPreview> {
+    fn load_waveform_preview(&mut self, path: &Path) -> Option<WaveformPreview> {
         if let Some(preview) = self.browser_panel.waveform_cache.get(path) {
-            return Some(preview);
+            return Some(preview.clone());
         }
         match generate_waveform_preview(path) {
             Ok(preview) => {
                 self.browser_panel
                     .waveform_cache
                     .insert(path.to_path_buf(), preview);
-                self.browser_panel.waveform_cache.get(path)
+                self.browser_panel.waveform_cache.get(path).cloned()
             }
             Err(err) => {
                 let message = err.to_string();
@@ -6300,7 +6299,7 @@ impl HarmoniqStudioApp {
         let mid_y = rect.center().y;
         let amplitude = rect.height() * 0.45;
         let mut x = rect.left();
-        let mut index = 0.0;
+        let mut index: f32 = 0.0;
         while x <= rect.right() {
             let idx = index.floor() as usize;
             let sample = preview.samples.get(idx).copied().unwrap_or(0.0);
@@ -6345,11 +6344,11 @@ impl HarmoniqStudioApp {
                                 .color(palette.warning)
                         };
                         let id = egui::Id::new(("browser_category", category.name.clone()));
-                        let mut header = egui::CollapsingHeader::new(label)
+                        let response = egui::CollapsingHeader::new(label)
                             .id_source(id)
-                            .default_open(category.expanded);
-                        header.show(ui, |ui| self.draw_browser_directory(ui, &category.path, 0));
-                        category.expanded = !header.fully_closed();
+                            .default_open(category.expanded)
+                            .show(ui, |ui| self.draw_browser_directory(ui, &category.path, 0));
+                        category.expanded = !response.fully_closed();
                         ui.add_space(4.0);
                     }
                 });
@@ -6370,7 +6369,7 @@ impl HarmoniqStudioApp {
                     .strong(),
                 );
                 if let Some(preview) = self.load_waveform_preview(&selected) {
-                    self.draw_waveform_preview(ui, preview, &palette);
+                    self.draw_waveform_preview(ui, &preview, &palette);
                 } else {
                     ui.label(
                         RichText::new("Waveform preview unavailable for this file")
@@ -6418,34 +6417,33 @@ impl HarmoniqStudioApp {
                 egui::ScrollArea::vertical()
                     .id_source("plugin_rack_scroll")
                     .show(ui, |ui| {
-                        if let Ok(mut engine_ctx) = self.engine_context.lock() {
-                            for plugin in &mut engine_ctx.plugins {
-                                if !self.plugin_rack.is_match(plugin) {
-                                    continue;
-                                }
-                                let id = plugin.id;
-                                let cpu_text = format!("{:>4.1}%", plugin.cpu * 100.0);
-                                let latency = format!("{:>4.1} ms", plugin.latency_ms);
-                                let mut label = format!("{} • {}", plugin.name, plugin.plugin_type);
-                                label.push_str(&format!(" | CPU {cpu_text} | Latency {latency}"));
-                                let selected = self.plugin_rack.selected_plugin == Some(id);
-                                let response = ui.selectable_label(selected, label);
-                                if response.clicked() {
-                                    self.plugin_rack.selected_plugin = Some(id);
-                                }
-                                if response.double_clicked() {
-                                    self.open_plugin_editor(plugin);
-                                }
-                                response.context_menu(|ui| {
-                                    if ui.checkbox(&mut plugin.bypassed, "Bypass").clicked() {
-                                        self.plugin_rack.queue_bypass(id, plugin.bypassed);
-                                    }
-                                    if ui.button("Remove").clicked() {
-                                        self.plugin_rack.queue_removal(id);
-                                        ui.close_menu();
-                                    }
-                                });
+                        let mut engine_ctx = self.engine_context.lock();
+                        for plugin in &mut engine_ctx.plugins {
+                            if !self.plugin_rack.is_match(plugin) {
+                                continue;
                             }
+                            let id = plugin.id;
+                            let cpu_text = format!("{:>4.1}%", plugin.cpu * 100.0);
+                            let latency = format!("{:>4.1} ms", plugin.latency_ms);
+                            let mut label = format!("{} • {}", plugin.name, plugin.plugin_type);
+                            label.push_str(&format!(" | CPU {cpu_text} | Latency {latency}"));
+                            let selected = self.plugin_rack.selected_plugin == Some(id);
+                            let response = ui.selectable_label(selected, label);
+                            if response.clicked() {
+                                self.plugin_rack.selected_plugin = Some(id);
+                            }
+                            if response.double_clicked() {
+                                self.open_plugin_editor(plugin);
+                            }
+                            response.context_menu(|ui| {
+                                if ui.checkbox(&mut plugin.bypassed, "Bypass").clicked() {
+                                    self.plugin_rack.queue_bypass(id, plugin.bypassed);
+                                }
+                                if ui.button("Remove").clicked() {
+                                    self.plugin_rack.queue_removal(id);
+                                    ui.close_menu();
+                                }
+                            });
                         }
                     });
             });
@@ -6545,19 +6543,18 @@ impl HarmoniqStudioApp {
         if removals.is_empty() && bypasses.is_empty() {
             return;
         }
-        if let Ok(mut engine_ctx) = self.engine_context.lock() {
-            for (id, bypassed) in bypasses {
-                if let Some(plugin) = engine_ctx.plugins.iter_mut().find(|p| p.id == id) {
-                    plugin.bypassed = bypassed;
-                    let state = if bypassed { "bypassed" } else { "active" };
-                    self.status_message = Some(format!("{} set to {state}", plugin.name));
-                }
+        let mut engine_ctx = self.engine_context.lock();
+        for (id, bypassed) in bypasses {
+            if let Some(plugin) = engine_ctx.plugins.iter_mut().find(|p| p.id == id) {
+                plugin.bypassed = bypassed;
+                let state = if bypassed { "bypassed" } else { "active" };
+                self.status_message = Some(format!("{} set to {state}", plugin.name));
             }
-            for id in removals {
-                if let Some(index) = engine_ctx.plugins.iter().position(|p| p.id == id) {
-                    let plugin = engine_ctx.plugins.remove(index);
-                    self.status_message = Some(format!("Removed {}", plugin.name));
-                }
+        }
+        for id in removals {
+            if let Some(index) = engine_ctx.plugins.iter().position(|p| p.id == id) {
+                let plugin = engine_ctx.plugins.remove(index);
+                self.status_message = Some(format!("Removed {}", plugin.name));
             }
         }
     }
@@ -6581,14 +6578,13 @@ impl HarmoniqStudioApp {
                         .size(14.0),
                 );
                 let edit_id = ui.make_persistent_id("command_palette_input");
-                let response = ui
-                    .add(
-                        egui::TextEdit::singleline(&mut self.command_palette.query)
-                            .desired_width(f32::INFINITY)
-                            .id(edit_id)
-                            .hint_text("Search commands..."),
-                    )
-                    .request_focus();
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut self.command_palette.query)
+                        .desired_width(f32::INFINITY)
+                        .id(edit_id)
+                        .hint_text("Search commands..."),
+                );
+                response.request_focus();
                 if response.changed() {
                     self.command_palette.selected = 0;
                 }
@@ -6710,9 +6706,7 @@ impl App for HarmoniqStudioApp {
                         .rounding(Rounding::same(16.0)),
                 )
                 .show(ctx, |ui| self.draw_browser_panel(ui));
-            if let Some(panel) = panel {
-                self.layout.set_browser_width(panel.response.rect.width());
-            }
+            self.layout.set_browser_width(panel.response.rect.width());
         }
         let sequencer_panel = egui::SidePanel::left("channel_rack")
             .resizable(true)
@@ -6726,10 +6720,8 @@ impl App for HarmoniqStudioApp {
                     .rounding(Rounding::same(18.0)),
             )
             .show(ctx, |ui| self.draw_sequencer(ui));
-        if let Some(panel) = sequencer_panel {
-            self.layout
-                .set_channel_rack_width(panel.response.rect.width());
-        }
+        self.layout
+            .set_channel_rack_width(sequencer_panel.response.rect.width());
 
         let mixer_panel = egui::SidePanel::right("mixer_panel")
             .resizable(true)
@@ -6743,9 +6735,8 @@ impl App for HarmoniqStudioApp {
                     .rounding(Rounding::same(18.0)),
             )
             .show(ctx, |ui| self.draw_mixer_panel(ui));
-        if let Some(panel) = mixer_panel {
-            self.layout.set_mixer_width(panel.response.rect.width());
-        }
+        self.layout
+            .set_mixer_width(mixer_panel.response.rect.width());
 
         if self.layout.persistence().piano_roll_visible {
             let piano_panel = egui::TopBottomPanel::bottom("piano_roll")
@@ -6759,10 +6750,8 @@ impl App for HarmoniqStudioApp {
                         .rounding(Rounding::same(18.0)),
                 )
                 .show(ctx, |ui| self.draw_piano_roll(ui));
-            if let Some(panel) = piano_panel {
-                self.layout
-                    .set_piano_roll_height(panel.response.rect.height());
-            }
+            self.layout
+                .set_piano_roll_height(piano_panel.response.rect.height());
         }
 
         egui::CentralPanel::default()
@@ -7805,7 +7794,7 @@ impl Default for PlaylistViewState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct PianoRollState {
     pixels_per_beat: f32,
     key_height: f32,
