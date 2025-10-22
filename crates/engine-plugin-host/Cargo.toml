@@ -1,0 +1,15 @@
+[package]
+name = "engine-plugin-host"
+version = "0.1.0"
+edition = "2021"
+description = "Dynamic Harmoniq plugin host."
+license = "GPL-3.0-or-later"
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+libloading = { workspace = true }
+engine-graph = { path = "../engine-graph" }
+engine-rt = { path = "../engine-rt" }
+harmoniq-plugin-sdk = { path = "../harmoniq-plugin-sdk" }

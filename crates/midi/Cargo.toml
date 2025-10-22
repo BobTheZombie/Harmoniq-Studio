@@ -1,11 +1,11 @@
 [package]
-name = "harmoniq-plugin-sdk"
+name = "midi"
 version = "0.1.0"
 edition = "2021"
-description = "Harmoniq plugin interface definitions."
+description = "MIDI event utilities for Harmoniq."
 license = "GPL-3.0-or-later"
 
 [dependencies]
 serde = { workspace = true }
-engine-graph = { path = "../engine-graph" }
 engine-rt = { path = "../engine-rt" }
+anyhow = { workspace = true }

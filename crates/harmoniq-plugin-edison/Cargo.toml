@@ -1,9 +1,0 @@
-[package]
-name = "harmoniq-plugin-edison"
-edition.workspace = true
-license.workspace = true
-version.workspace = true
-
-[dependencies]
-harmoniq-plugin-sdk = { path = "../harmoniq-plugin-sdk" }
-harmoniq-plugins = { path = "../harmoniq-plugins" }

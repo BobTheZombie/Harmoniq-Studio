@@ -1,0 +1,15 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2021"
+description = "Shared-memory Harmoniq sound server."
+license = "GPL-3.0-or-later"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+engine-core = { path = "../engine-core" }
+io-backends = { path = "../io-backends" }
+midi = { path = "../midi" }
+engine-rt = { path = "../engine-rt" }
+crossbeam = { workspace = true }

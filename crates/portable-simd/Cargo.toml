@@ -1,0 +1,8 @@
+[package]
+name = "portable-simd"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal portable SIMD fallback used by Harmoniq."
+license = "GPL-3.0-or-later"
+
+[dependencies]
