@@ -71,10 +71,31 @@ pub trait AudioProcessor: Send + Sync {
         matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
     }
 
+    /// Returns the processing latency in samples introduced by the processor.
+    ///
+    /// By default processors are assumed to be latency free. Implementations
+    /// that introduce look-ahead or oversampling should override this to
+    /// provide accurate delay compensation in the engine.
+    fn latency_samples(&self) -> usize {
+        0
+    }
+
     /// Allows processors to consume queued MIDI events. The default
     /// implementation ignores incoming data which keeps existing
     /// processors backwards compatible without any additional changes.
     fn process_midi(&mut self, _events: &[MidiEvent]) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// Receives automation changes with sample accurate timing information.
+    /// The engine guarantees that offsets never exceed the current audio block
+    /// length.
+    fn handle_automation_event(
+        &mut self,
+        _parameter: usize,
+        _value: f32,
+        _sample_offset: usize,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 }
