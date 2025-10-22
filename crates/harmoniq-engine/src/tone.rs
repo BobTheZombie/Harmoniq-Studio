@@ -11,6 +11,7 @@ pub struct ToneShaper {
     low_gain: f32,
     mid_gain: f32,
     high_gain: f32,
+    enabled: bool,
 }
 
 impl ToneShaper {
@@ -25,6 +26,7 @@ impl ToneShaper {
             low_gain: 1.12,
             mid_gain: 0.92,
             high_gain: 1.05,
+            enabled: false,
         };
 
         shaper.ensure_state_len(channels);
@@ -40,8 +42,27 @@ impl ToneShaper {
         }
     }
 
+    /// Enables or disables the tone shaping behaviour. When disabled the
+    /// shaper becomes a transparent pass-through and stored filter state is
+    /// cleared to avoid introducing artefacts when re-enabled.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        if !enabled {
+            for state in &mut self.low_state {
+                *state = 0.0;
+            }
+            for state in &mut self.high_state {
+                *state = 0.0;
+            }
+        }
+        self.enabled = enabled;
+    }
+
     /// Applies the tone-shaping curve to the provided buffer in-place.
     pub fn process(&mut self, buffer: &mut AudioBuffer) {
+        if !self.enabled {
+            return;
+        }
+
         let channels = buffer.channels().count();
         self.ensure_state_len(channels);
 
@@ -89,9 +110,10 @@ mod tests {
     }
 
     #[test]
-    fn boosts_low_content() {
+    fn boosts_low_content_when_enabled() {
         let config = BufferConfig::new(48_000.0, 128, crate::ChannelLayout::Stereo);
         let mut shaper = ToneShaper::new(&config);
+        shaper.set_enabled(true);
         let mut buffer = buffer_with_value(&config, 0.25);
         shaper.process(&mut buffer);
 
@@ -99,5 +121,17 @@ mod tests {
         // low gain factor applied to the constant signal.
         let left = buffer.as_slice()[0][127];
         assert!(left > 0.25, "expected low end boost");
+    }
+
+    #[test]
+    fn pass_through_when_disabled() {
+        let config = BufferConfig::new(48_000.0, 64, crate::ChannelLayout::Stereo);
+        let mut shaper = ToneShaper::new(&config);
+        let mut buffer = buffer_with_value(&config, 0.5);
+        shaper.process(&mut buffer);
+
+        for sample in buffer.iter() {
+            assert!((*sample - 0.5).abs() < f32::EPSILON);
+        }
     }
 }
