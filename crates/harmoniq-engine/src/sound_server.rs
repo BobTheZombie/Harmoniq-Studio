@@ -12,6 +12,9 @@ mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::{UltraLowLatencyOptions, UltraLowLatencyServer};
 
+#[cfg(target_os = "linux")]
+pub use linux::alsa_devices_available;
+
 #[cfg(not(target_os = "linux"))]
 #[derive(Debug, Clone)]
 pub struct UltraLowLatencyOptions;
