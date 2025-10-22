@@ -1,9 +1,10 @@
 use std::time::{Duration, Instant};
 
 use crossbeam_channel::{select, Sender};
-use harmoniq_app::mixer::rt_api::{
-    MixerEngineEndpoint, MixerMsg, MixerStateSnapshot, PanLaw, SEND_COUNT,
-};
+
+pub mod rt_api;
+
+use self::rt_api::{MixerEngineEndpoint, MixerMsg, MixerStateSnapshot, PanLaw, SEND_COUNT};
 
 const SNAPSHOT_RATE: Duration = Duration::from_millis(16);
 

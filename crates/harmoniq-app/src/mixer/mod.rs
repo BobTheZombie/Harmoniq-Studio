@@ -1,6 +1,7 @@
 pub mod model;
-pub mod rt_api;
 mod widgets;
+
+pub use harmoniq_engine::mixer::rt_api;
 
 use std::time::{Duration, Instant};
 
@@ -8,7 +9,7 @@ use egui::{self, vec2, Align, Color32, Layout, Margin, RichText, Sense};
 use widgets::{GainFader, MeterDisplay, PanKnob};
 
 use self::model::{ChannelView, MixerView, SendView};
-use self::rt_api::{MixerBus, MixerMsg, MixerStateSnapshot, PanLaw, SEND_COUNT};
+use rt_api::{MixerBus, MixerMsg, MixerStateSnapshot, PanLaw, SEND_COUNT};
 
 pub use model::{
     ChannelId, ChannelView as MixerChannelView, MixerIcon, MixerMetrics,

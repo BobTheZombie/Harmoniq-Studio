@@ -10,4 +10,3 @@ crossbeam-channel = { workspace = true }
 serde = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
-harmoniq-app = { path = "../harmoniq-app" }
