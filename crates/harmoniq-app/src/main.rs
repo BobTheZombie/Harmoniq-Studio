@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -717,10 +717,10 @@ fn run_headless(args: &Cli, runtime: AudioRuntimeOptions) -> anyhow::Result<()> 
                 let running = Arc::new(AtomicBool::new(true));
                 let running_clone = Arc::clone(&running);
                 ctrlc::set_handler(move || {
-                    running_clone.store(false, Ordering::SeqCst);
+                    running_clone.store(false, AtomicOrdering::SeqCst);
                 })?;
 
-                while running.load(Ordering::SeqCst) {
+                while running.load(AtomicOrdering::SeqCst) {
                     std::thread::sleep(Duration::from_millis(50));
                 }
             }
@@ -923,7 +923,7 @@ impl OfflineLoop {
         let engine_clone = Arc::clone(&engine);
         let handle = std::thread::spawn(move || {
             let mut buffer = AudioBuffer::from_config(config.clone());
-            while thread_running.load(Ordering::SeqCst) {
+            while thread_running.load(AtomicOrdering::SeqCst) {
                 {
                     let mut engine = engine_clone.lock();
                     if let Err(err) = engine.process_block(&mut buffer) {
@@ -940,7 +940,7 @@ impl OfflineLoop {
     }
 
     fn stop(&mut self) {
-        self.running.store(false, Ordering::SeqCst);
+        self.running.store(false, AtomicOrdering::SeqCst);
         if let Some(handle) = self.thread.take() {
             let _ = handle.join();
         }
@@ -1870,56 +1870,68 @@ impl HarmoniqStudioApp {
     }
 
     fn ensure_instrument_clip(&mut self, instrument_idx: usize) -> Option<ClipReference> {
-        let Some(instrument) = self.sequencer.instruments.get_mut(instrument_idx) else {
-            return None;
-        };
-
         if self.tracks.is_empty() {
-            instrument.clip = None;
+            if let Some(instrument) = self.sequencer.instruments.get_mut(instrument_idx) {
+                instrument.clip = None;
+            }
             return None;
         }
 
-        if instrument.mixer_track >= self.tracks.len() {
-            instrument.mixer_track = self.tracks.len() - 1;
-            instrument.clip = None;
-        }
+        let (track_idx, instrument_name, pattern_length) = {
+            let instrument = self.sequencer.instruments.get_mut(instrument_idx)?;
 
-        if let Some(reference) = instrument.clip {
-            if let Some(track) = self.tracks.get(reference.track_index) {
-                if reference.clip_index < track.clips.len() {
-                    return Some(reference);
+            if instrument.mixer_track >= self.tracks.len() {
+                instrument.mixer_track = self.tracks.len() - 1;
+                instrument.clip = None;
+            }
+
+            if let Some(reference) = instrument.clip {
+                if let Some(track) = self.tracks.get(reference.track_index) {
+                    if reference.clip_index < track.clips.len() {
+                        return Some(reference);
+                    }
                 }
             }
-        }
 
-        let track_idx = instrument.mixer_track;
-        let clip_index = {
+            (
+                instrument.mixer_track,
+                instrument.name.clone(),
+                instrument.pattern.total_length(),
+            )
+        };
+
+        let existing_index = self
+            .tracks
+            .get(track_idx)
+            .and_then(|track| {
+                track
+                    .clips
+                    .iter()
+                    .enumerate()
+                    .find(|(_, clip)| clip.name == instrument_name)
+                    .map(|(idx, _)| idx)
+            });
+
+        let clip_index = if let Some(idx) = existing_index {
+            idx
+        } else {
+            let color = self.next_color();
+            let mut clip = Clip::new(
+                instrument_name.clone(),
+                0.0,
+                pattern_length.max(4.0),
+                color,
+                Vec::new(),
+            );
+            clip.length_beats = clip.length_beats.max(pattern_length);
             let track = self.tracks.get_mut(track_idx)?;
-            if let Some((idx, _)) = track
-                .clips
-                .iter()
-                .enumerate()
-                .find(|(_, clip)| clip.name == instrument.name)
-            {
-                idx
-            } else {
-                let color = self.next_color();
-                let mut clip = Clip::new(
-                    instrument.name.clone(),
-                    0.0,
-                    instrument.pattern.total_length().max(4.0),
-                    color,
-                    Vec::new(),
-                );
-                clip.length_beats = clip.length_beats.max(instrument.pattern.total_length());
-                track.add_clip(clip);
-                track.clips.len() - 1
-            }
+            track.add_clip(clip);
+            track.clips.len() - 1
         };
 
         if let Some(track) = self.tracks.get_mut(track_idx) {
             if let Some(clip) = track.clips.get_mut(clip_index) {
-                clip.length_beats = clip.length_beats.max(instrument.pattern.total_length());
+                clip.length_beats = clip.length_beats.max(pattern_length);
             }
         }
 
@@ -1927,7 +1939,11 @@ impl HarmoniqStudioApp {
             track_index: track_idx,
             clip_index,
         };
-        instrument.clip = Some(reference);
+
+        if let Some(instrument) = self.sequencer.instruments.get_mut(instrument_idx) {
+            instrument.clip = Some(reference);
+        }
+
         Some(reference)
     }
 
@@ -1943,7 +1959,7 @@ impl HarmoniqStudioApp {
             .unwrap_or(0)
             .min(self.tracks.len().saturating_sub(1));
         let name = self.sequencer.next_name_for(plugin);
-        let mut instrument = SequencerInstrument::new(
+        let instrument = SequencerInstrument::new(
             self.sequencer.allocate_id(),
             name.clone(),
             plugin,
@@ -3175,7 +3191,7 @@ impl HarmoniqStudioApp {
             })
             .response;
 
-        header_response.on_hover_text(instrument.plugin.description());
+        let header_response = header_response.on_hover_text(instrument.plugin.description());
 
         header_response.context_menu(|ui| {
             if let Some(reference) = clip_reference {
