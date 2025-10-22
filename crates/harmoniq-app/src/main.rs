@@ -1595,6 +1595,29 @@ impl Sub808EditorState {
     }
 }
 
+#[derive(Clone, Copy)]
+struct MixerConsolePluginState {
+    show: bool,
+    default_size: Vec2,
+    min_size: Vec2,
+}
+
+impl Default for MixerConsolePluginState {
+    fn default() -> Self {
+        Self {
+            show: true,
+            default_size: Vec2::new(960.0, 420.0),
+            min_size: Vec2::new(640.0, 320.0),
+        }
+    }
+}
+
+impl MixerConsolePluginState {
+    fn open(&mut self) {
+        self.show = true;
+    }
+}
+
 struct HarmoniqStudioApp {
     theme: HarmoniqTheme,
     icons: AppIcons,
@@ -1621,6 +1644,7 @@ struct HarmoniqStudioApp {
     audio_settings: AudioSettingsState,
     westcoast_editor: WestCoastEditorState,
     sub808_editor: Sub808EditorState,
+    mixer_console: MixerConsolePluginState,
     project_path: String,
     bounce_path: String,
     bounce_length_beats: f32,
@@ -1690,6 +1714,7 @@ impl HarmoniqStudioApp {
             audio_settings,
             westcoast_editor: WestCoastEditorState::new(config.sample_rate),
             sub808_editor: Sub808EditorState::new(config.sample_rate),
+            mixer_console: MixerConsolePluginState::default(),
             project_path: "project.hst".into(),
             bounce_path: "bounce.wav".into(),
             bounce_length_beats: 16.0,
@@ -2553,6 +2578,28 @@ impl HarmoniqStudioApp {
                         {
                             self.bounce_project();
                         }
+                    });
+
+                    ui.separator();
+
+                    ui.vertical(|ui| {
+                        self.section_label(ui, &self.icons.track, "Mixer Console");
+                        let mixer_button = self.gradient_icon_button(
+                            ui,
+                            &self.icons.track,
+                            "Open Mixer",
+                            (palette.accent, palette.accent_soft),
+                            self.mixer_console.show,
+                            Vec2::new(186.0, 44.0),
+                        );
+                        if mixer_button.clicked() {
+                            self.mixer_console.open();
+                        }
+                        ui.label(
+                            RichText::new("Balance tracks, buses, and master levels")
+                                .color(palette.text_muted)
+                                .small(),
+                        );
                     });
 
                     ui.separator();
@@ -4230,7 +4277,7 @@ impl HarmoniqStudioApp {
         });
     }
 
-    fn draw_mixer(&mut self, ui: &mut egui::Ui) {
+    fn draw_mixer_console_contents(&mut self, ui: &mut egui::Ui) {
         self.update_mixer_visuals(ui.ctx());
         let palette = self.palette().clone();
         ui.horizontal(|ui| {
@@ -4256,7 +4303,7 @@ impl HarmoniqStudioApp {
         ui.add_space(6.0);
         let mut new_selection = None;
         let mut piano_roll_request = None;
-        egui::ScrollArea::horizontal()
+        egui::ScrollArea::both()
             .id_source("mixer_console_scroll")
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -4285,6 +4332,37 @@ impl HarmoniqStudioApp {
         if let Some(track_idx) = piano_roll_request {
             self.focus_piano_roll_on_track(track_idx);
         }
+    }
+
+    fn draw_mixer_window(&mut self, ctx: &egui::Context, palette: &HarmoniqPalette) {
+        let mut open = self.mixer_console.show;
+        let default_size = self.mixer_console.default_size;
+        let min_size = self.mixer_console.min_size;
+
+        if !open {
+            self.mixer_console.show = false;
+            return;
+        }
+
+        egui::Window::new("Mixer Console")
+            .open(&mut open)
+            .resizable(true)
+            .collapsible(false)
+            .default_size(default_size)
+            .min_size(min_size)
+            .show(ctx, |ui| {
+                ui.set_min_size(min_size);
+                egui::Frame::none()
+                    .fill(palette.panel)
+                    .stroke(Stroke::new(1.0, palette.toolbar_outline))
+                    .rounding(Rounding::same(18.0))
+                    .inner_margin(Margin::symmetric(18.0, 14.0))
+                    .show(ui, |ui| {
+                        self.draw_mixer_console_contents(ui);
+                    });
+            });
+
+        self.mixer_console.show = open;
     }
 }
 
@@ -4325,19 +4403,6 @@ impl App for HarmoniqStudioApp {
             )
             .show(ctx, |ui| self.draw_playlist(ui));
 
-        egui::TopBottomPanel::bottom("mixer")
-            .resizable(true)
-            .default_height(240.0)
-            .frame(
-                egui::Frame::none()
-                    .fill(palette.panel)
-                    .inner_margin(Margin::symmetric(18.0, 14.0))
-                    .outer_margin(Margin::symmetric(12.0, 10.0))
-                    .stroke(Stroke::new(1.0, palette.toolbar_outline))
-                    .rounding(Rounding::same(18.0)),
-            )
-            .show(ctx, |ui| self.draw_mixer(ui));
-
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
@@ -4348,6 +4413,7 @@ impl App for HarmoniqStudioApp {
             )
             .show(ctx, |ui| self.draw_piano_roll(ui));
 
+        self.draw_mixer_window(ctx, &palette);
         self.westcoast_editor.draw(ctx, &palette);
         self.sub808_editor.draw(ctx, &palette);
 
