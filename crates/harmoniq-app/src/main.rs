@@ -6678,18 +6678,6 @@ impl HarmoniqStudioApp {
                     let plugin = engine_ctx.plugins.remove(index);
                     self.status_message = Some(format!("Removed {}", plugin.name));
                 }
-        let mut engine_ctx = self.engine_context.lock();
-        for (id, bypassed) in bypasses {
-            if let Some(plugin) = engine_ctx.plugins.iter_mut().find(|p| p.id == id) {
-                plugin.bypassed = bypassed;
-                let state = if bypassed { "bypassed" } else { "active" };
-                self.status_message = Some(format!("{} set to {state}", plugin.name));
-            }
-        }
-        for id in removals {
-            if let Some(index) = engine_ctx.plugins.iter().position(|p| p.id == id) {
-                let plugin = engine_ctx.plugins.remove(index);
-                self.status_message = Some(format!("Removed {}", plugin.name));
             }
         }
     }
