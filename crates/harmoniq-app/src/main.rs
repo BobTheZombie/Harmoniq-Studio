@@ -2760,7 +2760,7 @@ impl HarmoniqStudioApp {
         let track_count = tracks.len();
         let master_track = MasterChannel::default();
 
-        let mut layout = LayoutState::load();
+        let layout = LayoutState::load();
         let resources_root = env::current_dir()
             .map(|path| path.join("resources"))
             .unwrap_or_else(|_| PathBuf::from("resources"));
@@ -2768,7 +2768,7 @@ impl HarmoniqStudioApp {
         let mut plugin_rack = PluginRackState::default();
         plugin_rack.visible = layout.persistence().plugin_rack_visible;
 
-        let mut external_plugins = ExternalPluginManager::new();
+        let external_plugins = ExternalPluginManager::new();
 
         let time_signature = TimeSignature::default();
         let mut context = EngineContext::new(initial_tempo, time_signature);
@@ -6734,19 +6734,25 @@ impl HarmoniqStudioApp {
                 self.external_plugins.unload(external_id);
             }
         }
-        let mut engine_ctx = self.engine_context.lock();
-        for (id, bypassed) in bypasses.drain(..) {
-            if let Some(plugin) = engine_ctx.plugins.iter_mut().find(|p| p.id == id) {
-                plugin.bypassed = bypassed;
-                let state = if bypassed { "bypassed" } else { "active" };
-                self.status_message = Some(format!("{} set to {state}", plugin.name));
+        let mut status_message: Option<String> = None;
+        {
+            let mut engine_ctx = self.engine_context.lock();
+            for (id, bypassed) in bypasses.drain(..) {
+                if let Some(plugin) = engine_ctx.plugins.iter_mut().find(|p| p.id == id) {
+                    plugin.bypassed = bypassed;
+                    let state = if bypassed { "bypassed" } else { "active" };
+                    status_message = Some(format!("{} set to {state}", plugin.name));
+                }
+            }
+            for id in removals.drain(..) {
+                if let Some(index) = engine_ctx.plugins.iter().position(|p| p.id == id) {
+                    let plugin = engine_ctx.plugins.remove(index);
+                    status_message = Some(format!("Removed {}", plugin.name));
+                }
             }
         }
-        for id in removals.drain(..) {
-            if let Some(index) = engine_ctx.plugins.iter().position(|p| p.id == id) {
-                let plugin = engine_ctx.plugins.remove(index);
-                self.status_message = Some(format!("Removed {}", plugin.name));
-            }
+        if let Some(message) = status_message {
+            self.status_message = Some(message);
         }
     }
 
