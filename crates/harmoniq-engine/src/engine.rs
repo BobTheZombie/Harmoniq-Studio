@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crossbeam::queue::ArrayQueue;
 use parking_lot::{Mutex, RwLock};
 use rayon::prelude::*;
-use ringbuf::{Consumer, HeapRb, Producer};
+use ringbuf::{HeapConsumer, HeapProducer, HeapRb};
 
 use crate::{
     graph::{self, GraphHandle},
@@ -250,7 +250,7 @@ pub struct AutomationEvent {
 
 #[derive(Clone)]
 pub struct AutomationSender {
-    producer: Arc<Mutex<Producer<AutomationEvent>>>,
+    producer: Arc<Mutex<HeapProducer<AutomationEvent>>>,
 }
 
 impl AutomationSender {
@@ -261,12 +261,15 @@ impl AutomationSender {
 }
 
 struct AutomationLane {
-    producer: Arc<Mutex<Producer<AutomationEvent>>>,
-    consumer: Consumer<AutomationEvent>,
+    producer: Arc<Mutex<HeapProducer<AutomationEvent>>>,
+    consumer: HeapConsumer<AutomationEvent>,
 }
 
 impl AutomationLane {
-    fn new(producer: Producer<AutomationEvent>, consumer: Consumer<AutomationEvent>) -> Self {
+    fn new(
+        producer: HeapProducer<AutomationEvent>,
+        consumer: HeapConsumer<AutomationEvent>,
+    ) -> Self {
         Self {
             producer: Arc::new(Mutex::new(producer)),
             consumer,
