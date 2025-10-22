@@ -256,7 +256,10 @@ impl HarmoniqEngine {
                     Ok(())
                 },
             )?;
+        }
 
+        {
+            let scratch_buffers = &mut self.scratch_buffers[..scratch_len];
             self.apply_delay_compensation(&plugin_ids, &latencies, scratch_buffers, max_latency);
         }
 
@@ -445,7 +448,7 @@ impl DelayCompensator {
             let mut read_pos = if write_pos >= delay {
                 write_pos - delay
             } else {
-                write_pos + capacity - delay;
+                write_pos + capacity - delay
             };
 
             for sample in channel.iter_mut() {
