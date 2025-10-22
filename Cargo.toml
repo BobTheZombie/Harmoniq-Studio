@@ -14,6 +14,8 @@ members = [
     "crates/harmoniq-plugin-sdk",
     "examples/minimal-host",
     "examples/multi-client-server",
+    "crates/harmoniq-app",
+    "crates/harmoniq-engine",
 ]
 resolver = "2"
 
