@@ -1,0 +1,17 @@
+[package]
+name = "minimal-host"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = []
+cpal = ["io-backends/cpal"]
+
+[dependencies]
+anyhow = { workspace = true }
+engine-core = { path = "../../crates/engine-core" }
+engine-graph = { path = "../../crates/engine-graph" }
+io-backends = { path = "../../crates/io-backends" }
+dsp = { path = "../../crates/dsp" }
+engine-rt = { path = "../../crates/engine-rt" }

@@ -1,21 +1,19 @@
 [workspace]
 members = [
-    "crates/harmoniq-engine",
-    "crates/harmoniq-app",
-    "crates/harmoniq-plugins",
+    "crates/engine-core",
+    "crates/engine-rt",
+    "crates/engine-graph",
+    "crates/engine-plugin-host",
+    "crates/io-backends",
+    "crates/server",
+    "crates/midi",
+    "crates/resample",
+    "crates/dsp",
+    "crates/simd",
+    "crates/portable-simd",
     "crates/harmoniq-plugin-sdk",
-    "crates/harmoniq-plugin-host",
-    "crates/harmoniq-plugin-analog",
-    "crates/harmoniq-plugin-fm",
-    "crates/harmoniq-plugin-wavetable",
-    "crates/harmoniq-plugin-sampler",
-    "crates/harmoniq-plugin-granular",
-    "crates/harmoniq-plugin-additive",
-    "crates/harmoniq-plugin-organ-piano",
-    "crates/harmoniq-plugin-bass",
-    "crates/harmoniq-plugin-westcoast",
-    "crates/harmoniq-plugin-sub808",
-    "crates/harmoniq-plugin-edison",
+    "examples/minimal-host",
+    "examples/multi-client-server",
 ]
 resolver = "2"
 
@@ -29,8 +27,13 @@ anyhow = "1.0"
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rand = "0.8"
-parking_lot = "0.12"
-
-[workspace.metadata]
-project-description = "Harmoniq Studio - a native, multi-platform digital audio workstation."
+crossbeam = "0.8"
+crossbeam-channel = "0.5"
+crossbeam-deque = "0.8"
+crossbeam-queue = "0.3"
+cpal = { version = "0.15", default-features = false }
+libloading = "0.8"
+log = "0.4"
+tracing = "0.1"
+"portable-simd" = { path = "crates/portable-simd" }
+smallvec = "1.13"

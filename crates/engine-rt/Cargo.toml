@@ -1,0 +1,16 @@
+[package]
+name = "engine-rt"
+version = "0.1.0"
+edition = "2021"
+description = "Real-time primitives for the Harmoniq audio engine."
+license = "GPL-3.0-or-later"
+
+[dependencies]
+serde = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+crossbeam = { workspace = true }
+crossbeam-channel = { workspace = true }
+crossbeam-queue = { workspace = true }
+tracing = { workspace = true }
+"portable-simd" = { workspace = true }

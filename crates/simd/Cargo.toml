@@ -1,0 +1,9 @@
+[package]
+name = "simd"
+version = "0.1.0"
+edition = "2021"
+description = "SIMD helper abstractions for Harmoniq."
+license = "GPL-3.0-or-later"
+
+[dependencies]
+"portable-simd" = { workspace = true }
