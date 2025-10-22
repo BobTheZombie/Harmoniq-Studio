@@ -252,6 +252,12 @@ fn build_stream(
             err_fn,
             None,
         )?),
+        SampleFormat::U8 => Ok(device.build_output_stream(
+            config,
+            move |output: &mut [u8], _| fill_from_queue(output, &queue, &running),
+            err_fn,
+            None,
+        )?),
         other => Err(anyhow!("unsupported sample format: {other:?}")),
     }
 }
