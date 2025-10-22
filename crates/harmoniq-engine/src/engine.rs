@@ -98,6 +98,13 @@ impl HarmoniqEngine {
         &self.config
     }
 
+    /// Enables or disables the built-in tone shaper. By default the engine
+    /// keeps the shaper bypassed so that the master bus remains sonically
+    /// neutral when no additional effects are loaded.
+    pub fn set_tone_shaper_enabled(&mut self, enabled: bool) {
+        self.tone_shaper.set_enabled(enabled);
+    }
+
     /// Returns a lightweight handle that can be shared with UI threads for
     /// submitting commands.
     pub fn command_queue(&self) -> EngineCommandQueue {
