@@ -7,7 +7,7 @@ use std::env;
 use std::path::Path;
 
 use anyhow::{anyhow, Context};
-use cpal::traits::{DeviceTrait, HostTrait};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, FromSample, SampleFormat, SizedSample, StreamConfig};
 use harmoniq_engine::{
     AudioBuffer, BufferConfig, ChannelLayout, EngineCommandQueue, HarmoniqEngine,
@@ -649,6 +649,10 @@ impl RealtimeAudio {
             )?,
             other => anyhow::bail!("unsupported output sample format: {other:?}"),
         };
+
+        stream
+            .play()
+            .context("failed to start audio output stream")?;
 
         Ok(StreamCreation {
             #[cfg(target_os = "linux")]
