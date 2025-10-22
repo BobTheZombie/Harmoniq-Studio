@@ -664,6 +664,13 @@ impl RealtimeAudio {
                 config.clone(),
                 err_fn,
             )?,
+            SampleFormat::U8 => Self::build_stream::<u8>(
+                &device,
+                stream_config,
+                Arc::clone(&engine),
+                config.clone(),
+                err_fn,
+            )?,
             other => anyhow::bail!("unsupported output sample format: {other:?}"),
         };
 
@@ -1209,6 +1216,17 @@ mod linux_asio {
                     device.build_output_stream(
                         &stream_config,
                         move |output: &mut [u16], _| {
+                            state.render_into(output, channels);
+                        },
+                        err_fn,
+                        None,
+                    )?
+                }
+                SampleFormat::U8 => {
+                    let mut state = CallbackState::new(Arc::clone(&engine), config.clone());
+                    device.build_output_stream(
+                        &stream_config,
+                        move |output: &mut [u8], _| {
                             state.render_into(output, channels);
                         },
                         err_fn,
