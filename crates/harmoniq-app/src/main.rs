@@ -1,17 +1,20 @@
 use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
+use std::env;
 use std::fs;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
 use clap::Parser;
 use eframe::egui::Margin;
 use eframe::egui::{
-    self, Align2, Color32, FontId, PointerButton, Rect, Rgba, RichText, Rounding, Sense, Stroke,
-    TextStyle, TextureOptions, Vec2,
+    self, Align2, Color32, CursorIcon, FontId, Key, KeyboardShortcut, Modifiers, PointerButton,
+    ProgressBar, Rect, Rgba, RichText, Rounding, Sense, Stroke, TextStyle, TextureOptions, Vec2,
 };
 use eframe::{App, CreationContext, NativeOptions};
 use egui_extras::{image::load_svg_bytes, install_image_loaders};
@@ -250,70 +253,70 @@ struct HarmoniqPalette {
 impl HarmoniqPalette {
     fn new() -> Self {
         Self {
-            background: Color32::from_rgb(12, 13, 16),
-            panel: Color32::from_rgb(20, 22, 26),
-            panel_alt: Color32::from_rgb(28, 30, 36),
-            toolbar: Color32::from_rgb(24, 26, 32),
-            toolbar_highlight: Color32::from_rgb(36, 38, 44),
-            toolbar_outline: Color32::from_rgb(70, 74, 84),
-            text_primary: Color32::from_rgb(238, 240, 244),
-            text_muted: Color32::from_rgb(156, 162, 176),
-            accent: Color32::from_rgb(255, 148, 12),
-            accent_alt: Color32::from_rgb(90, 204, 143),
-            accent_soft: Color32::from_rgb(255, 176, 94),
-            success: Color32::from_rgb(136, 218, 142),
-            warning: Color32::from_rgb(255, 102, 114),
-            track_header: Color32::from_rgb(36, 38, 46),
-            track_header_selected: Color32::from_rgb(46, 49, 58),
-            track_lane_overlay: Color32::from_rgba_unmultiplied(90, 204, 143, 40),
-            track_button_bg: Color32::from_rgb(40, 42, 48),
-            track_button_border: Color32::from_rgb(20, 22, 26),
-            automation_header: Color32::from_rgb(38, 41, 48),
-            automation_header_muted: Color32::from_rgb(32, 34, 40),
-            automation_lane_bg: Color32::from_rgb(26, 28, 34),
-            automation_lane_hidden_bg: Color32::from_rgb(22, 24, 30),
-            automation_point_border: Color32::from_rgb(24, 26, 32),
-            timeline_bg: Color32::from_rgb(18, 19, 24),
-            timeline_header: Color32::from_rgb(30, 32, 38),
-            timeline_border: Color32::from_rgb(68, 72, 82),
-            timeline_grid_primary: Color32::from_rgb(72, 78, 92),
-            timeline_grid_secondary: Color32::from_rgb(44, 48, 56),
-            ruler_text: Color32::from_rgb(190, 196, 210),
-            clip_text_primary: Color32::from_rgb(236, 238, 244),
-            clip_text_secondary: Color32::from_rgb(196, 202, 216),
-            clip_border_default: Color32::from_rgb(38, 40, 48),
-            clip_border_active: Color32::from_rgb(236, 238, 244),
-            clip_border_playing: Color32::from_rgb(255, 184, 94),
-            clip_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 90),
-            piano_background: Color32::from_rgb(18, 19, 24),
-            piano_grid_major: Color32::from_rgb(58, 62, 74),
-            piano_grid_minor: Color32::from_rgb(38, 40, 48),
-            piano_white: Color32::from_rgb(230, 234, 240),
-            piano_black: Color32::from_rgb(46, 48, 58),
-            meter_background: Color32::from_rgb(24, 26, 32),
-            meter_border: Color32::from_rgb(54, 56, 64),
-            meter_low: Color32::from_rgb(86, 208, 112),
-            meter_mid: Color32::from_rgb(238, 200, 94),
-            meter_high: Color32::from_rgb(255, 138, 74),
-            meter_peak: Color32::from_rgb(255, 80, 84),
-            meter_rms: Color32::from_rgb(255, 204, 120),
-            knob_base: Color32::from_rgb(42, 45, 52),
-            knob_ring: Color32::from_rgb(255, 150, 60),
-            knob_indicator: Color32::from_rgb(90, 204, 143),
-            knob_label: Color32::from_rgb(214, 218, 228),
-            mixer_strip_bg: Color32::from_rgb(30, 32, 38),
-            mixer_strip_selected: Color32::from_rgb(40, 42, 48),
-            mixer_strip_solo: Color32::from_rgb(42, 62, 52),
-            mixer_strip_muted: Color32::from_rgb(62, 40, 42),
-            mixer_strip_border: Color32::from_rgb(62, 64, 72),
-            mixer_strip_header: Color32::from_rgb(38, 40, 46),
-            mixer_strip_header_selected: Color32::from_rgb(48, 50, 58),
-            mixer_slot_bg: Color32::from_rgb(24, 26, 32),
-            mixer_slot_active: Color32::from_rgb(34, 36, 44),
-            mixer_slot_border: Color32::from_rgb(58, 62, 72),
-            mixer_toggle_active: Color32::from_rgb(255, 160, 54),
-            mixer_toggle_inactive: Color32::from_rgb(32, 34, 40),
-            mixer_toggle_text: Color32::from_rgb(230, 234, 240),
+            background: Color32::from_rgb(30, 30, 30),
+            panel: Color32::from_rgb(34, 34, 38),
+            panel_alt: Color32::from_rgb(42, 42, 48),
+            toolbar: Color32::from_rgb(36, 36, 42),
+            toolbar_highlight: Color32::from_rgb(52, 52, 60),
+            toolbar_outline: Color32::from_rgb(88, 88, 98),
+            text_primary: Color32::from_rgb(232, 232, 240),
+            text_muted: Color32::from_rgb(164, 164, 176),
+            accent: Color32::from_rgb(138, 43, 226),
+            accent_alt: Color32::from_rgb(166, 104, 239),
+            accent_soft: Color32::from_rgb(112, 72, 196),
+            success: Color32::from_rgb(82, 212, 164),
+            warning: Color32::from_rgb(255, 120, 130),
+            track_header: Color32::from_rgb(44, 44, 52),
+            track_header_selected: Color32::from_rgb(59, 47, 79),
+            track_lane_overlay: Color32::from_rgba_unmultiplied(138, 43, 226, 42),
+            track_button_bg: Color32::from_rgb(48, 48, 56),
+            track_button_border: Color32::from_rgb(32, 32, 38),
+            automation_header: Color32::from_rgb(46, 46, 54),
+            automation_header_muted: Color32::from_rgb(38, 38, 44),
+            automation_lane_bg: Color32::from_rgb(34, 34, 40),
+            automation_lane_hidden_bg: Color32::from_rgb(30, 30, 36),
+            automation_point_border: Color32::from_rgb(54, 54, 64),
+            timeline_bg: Color32::from_rgb(32, 32, 38),
+            timeline_header: Color32::from_rgb(40, 40, 48),
+            timeline_border: Color32::from_rgb(90, 90, 102),
+            timeline_grid_primary: Color32::from_rgb(94, 80, 126),
+            timeline_grid_secondary: Color32::from_rgb(58, 58, 72),
+            ruler_text: Color32::from_rgb(204, 204, 214),
+            clip_text_primary: Color32::from_rgb(236, 236, 246),
+            clip_text_secondary: Color32::from_rgb(190, 190, 204),
+            clip_border_default: Color32::from_rgb(68, 68, 80),
+            clip_border_active: Color32::from_rgb(138, 43, 226),
+            clip_border_playing: Color32::from_rgb(200, 140, 255),
+            clip_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 120),
+            piano_background: Color32::from_rgb(28, 28, 32),
+            piano_grid_major: Color32::from_rgb(70, 70, 82),
+            piano_grid_minor: Color32::from_rgb(50, 50, 60),
+            piano_white: Color32::from_rgb(242, 242, 248),
+            piano_black: Color32::from_rgb(64, 64, 74),
+            meter_background: Color32::from_rgb(36, 36, 42),
+            meter_border: Color32::from_rgb(64, 64, 76),
+            meter_low: Color32::from_rgb(94, 210, 170),
+            meter_mid: Color32::from_rgb(255, 200, 132),
+            meter_high: Color32::from_rgb(255, 150, 132),
+            meter_peak: Color32::from_rgb(255, 98, 118),
+            meter_rms: Color32::from_rgb(194, 166, 255),
+            knob_base: Color32::from_rgb(52, 52, 64),
+            knob_ring: Color32::from_rgb(138, 43, 226),
+            knob_indicator: Color32::from_rgb(166, 104, 239),
+            knob_label: Color32::from_rgb(210, 210, 220),
+            mixer_strip_bg: Color32::from_rgb(40, 40, 48),
+            mixer_strip_selected: Color32::from_rgb(62, 50, 80),
+            mixer_strip_solo: Color32::from_rgb(56, 88, 78),
+            mixer_strip_muted: Color32::from_rgb(86, 54, 68),
+            mixer_strip_border: Color32::from_rgb(90, 90, 104),
+            mixer_strip_header: Color32::from_rgb(48, 48, 58),
+            mixer_strip_header_selected: Color32::from_rgb(68, 56, 92),
+            mixer_slot_bg: Color32::from_rgb(36, 36, 44),
+            mixer_slot_active: Color32::from_rgb(52, 44, 70),
+            mixer_slot_border: Color32::from_rgb(82, 82, 96),
+            mixer_toggle_active: Color32::from_rgb(138, 43, 226),
+            mixer_toggle_inactive: Color32::from_rgb(40, 40, 48),
+            mixer_toggle_text: Color32::from_rgb(232, 232, 240),
         }
     }
 }
@@ -456,6 +459,536 @@ impl AppIcons {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct TimeSignature {
+    numerator: u32,
+    denominator: u32,
+}
+
+impl Default for TimeSignature {
+    fn default() -> Self {
+        Self {
+            numerator: 4,
+            denominator: 4,
+        }
+    }
+}
+
+impl TimeSignature {
+    fn as_tuple(&self) -> (u32, u32) {
+        (self.numerator, self.denominator)
+    }
+
+    fn set_from_tuple(&mut self, value: (u32, u32)) {
+        self.numerator = value.0.max(1);
+        self.denominator = value.1.max(1);
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+struct TransportClock {
+    bars: u32,
+    beats: u32,
+    ticks: u32,
+}
+
+impl TransportClock {
+    fn from_beats(position_beats: f32, signature: TimeSignature) -> Self {
+        let ticks_per_beat = 960u32;
+        let total_ticks = (position_beats.max(0.0) * ticks_per_beat as f32).round() as u32;
+        let ticks_per_bar = signature.numerator.max(1) * ticks_per_beat;
+        let bars = total_ticks / ticks_per_bar;
+        let bar_remainder = total_ticks % ticks_per_bar;
+        let beats = bar_remainder / ticks_per_beat;
+        let ticks = bar_remainder % ticks_per_beat;
+        Self {
+            bars: bars + 1,
+            beats: beats + 1,
+            ticks,
+        }
+    }
+
+    fn format(&self) -> String {
+        format!("{:02}:{:02}:{:03}", self.bars, self.beats, self.ticks)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PluginInstanceInfo {
+    id: usize,
+    name: String,
+    plugin_type: String,
+    cpu: f32,
+    latency_ms: f32,
+    bypassed: bool,
+    open: bool,
+}
+
+impl PluginInstanceInfo {
+    fn new(id: usize, name: impl Into<String>, plugin_type: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            plugin_type: plugin_type.into(),
+            cpu: 0.0,
+            latency_ms: 0.0,
+            bypassed: false,
+            open: false,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct EngineContext {
+    tempo: f32,
+    time_signature: TimeSignature,
+    transport: TransportState,
+    pattern_mode: bool,
+    cpu_usage: f32,
+    clock: TransportClock,
+    master_meter: (f32, f32),
+    plugins: Vec<PluginInstanceInfo>,
+    demo_plugins_seeded: bool,
+}
+
+impl EngineContext {
+    fn new(tempo: f32, time_signature: TimeSignature) -> Self {
+        Self {
+            tempo,
+            time_signature,
+            transport: TransportState::Stopped,
+            pattern_mode: true,
+            cpu_usage: 0.0,
+            clock: TransportClock::default(),
+            master_meter: (0.0, 0.0),
+            plugins: Vec::new(),
+            demo_plugins_seeded: false,
+        }
+    }
+
+    fn ensure_demo_plugins(&mut self) {
+        if !self.demo_plugins_seeded {
+            self.demo_plugins_seeded = true;
+            self.plugins = vec![
+                PluginInstanceInfo::new(0, "West Coast Lead", "Instrument"),
+                PluginInstanceInfo::new(1, "Sub 808", "Instrument"),
+                PluginInstanceInfo::new(2, "Harmoniq Edison", "Audio Editor"),
+                PluginInstanceInfo::new(3, "Parametric EQ", "Effect"),
+                PluginInstanceInfo::new(4, "Space Reverb", "Effect"),
+            ];
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LayoutPersistence {
+    browser_width: f32,
+    channel_rack_width: f32,
+    mixer_width: f32,
+    piano_roll_height: f32,
+    browser_visible: bool,
+    plugin_rack_visible: bool,
+    piano_roll_visible: bool,
+}
+
+impl Default for LayoutPersistence {
+    fn default() -> Self {
+        Self {
+            browser_width: 240.0,
+            channel_rack_width: 340.0,
+            mixer_width: 360.0,
+            piano_roll_height: 240.0,
+            browser_visible: true,
+            plugin_rack_visible: true,
+            piano_roll_visible: true,
+        }
+    }
+}
+
+struct LayoutState {
+    persistence: LayoutPersistence,
+    needs_save: bool,
+    last_saved: Instant,
+}
+
+impl LayoutState {
+    fn load() -> Self {
+        let path = Self::path();
+        let persistence = if path.exists() {
+            fs::read_to_string(&path)
+                .ok()
+                .and_then(|contents| serde_json::from_str(&contents).ok())
+                .unwrap_or_default()
+        } else {
+            LayoutPersistence::default()
+        };
+        Self {
+            persistence,
+            needs_save: false,
+            last_saved: Instant::now(),
+        }
+    }
+
+    fn path() -> PathBuf {
+        if let Ok(custom) = env::var("HARMONIQ_UI_LAYOUT_PATH") {
+            if !custom.trim().is_empty() {
+                return PathBuf::from(custom);
+            }
+        }
+        PathBuf::from("ui_layout.json")
+    }
+
+    fn persistence(&self) -> &LayoutPersistence {
+        &self.persistence
+    }
+
+    fn persistence_mut(&mut self) -> &mut LayoutPersistence {
+        self.needs_save = true;
+        &mut self.persistence
+    }
+
+    fn set_browser_width(&mut self, width: f32) {
+        if (self.persistence.browser_width - width).abs() > 0.5 {
+            self.persistence.browser_width = width.max(180.0);
+            self.needs_save = true;
+        }
+    }
+
+    fn set_channel_rack_width(&mut self, width: f32) {
+        if (self.persistence.channel_rack_width - width).abs() > 0.5 {
+            self.persistence.channel_rack_width = width.max(240.0);
+            self.needs_save = true;
+        }
+    }
+
+    fn set_mixer_width(&mut self, width: f32) {
+        if (self.persistence.mixer_width - width).abs() > 0.5 {
+            self.persistence.mixer_width = width.max(280.0);
+            self.needs_save = true;
+        }
+    }
+
+    fn set_piano_roll_height(&mut self, height: f32) {
+        if (self.persistence.piano_roll_height - height).abs() > 0.5 {
+            self.persistence.piano_roll_height = height.max(200.0);
+            self.needs_save = true;
+        }
+    }
+
+    fn set_browser_visible(&mut self, visible: bool) {
+        if self.persistence.browser_visible != visible {
+            self.persistence.browser_visible = visible;
+            self.needs_save = true;
+        }
+    }
+
+    fn set_plugin_rack_visible(&mut self, visible: bool) {
+        if self.persistence.plugin_rack_visible != visible {
+            self.persistence.plugin_rack_visible = visible;
+            self.needs_save = true;
+        }
+    }
+
+    fn set_piano_roll_visible(&mut self, visible: bool) {
+        if self.persistence.piano_roll_visible != visible {
+            self.persistence.piano_roll_visible = visible;
+            self.needs_save = true;
+        }
+    }
+
+    fn maybe_save(&mut self) {
+        if self.needs_save && self.last_saved.elapsed() > Duration::from_secs(2) {
+            if let Ok(serialised) = serde_json::to_string_pretty(&self.persistence) {
+                if fs::write(Self::path(), serialised).is_ok() {
+                    self.needs_save = false;
+                    self.last_saved = Instant::now();
+                }
+            }
+        }
+    }
+
+    fn flush(&mut self) {
+        if let Ok(serialised) = serde_json::to_string_pretty(&self.persistence) {
+            if fs::write(Self::path(), serialised).is_ok() {
+                self.needs_save = false;
+                self.last_saved = Instant::now();
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct WaveformPreview {
+    path: PathBuf,
+    samples: Vec<f32>,
+    sample_rate: u32,
+}
+
+impl WaveformPreview {
+    fn is_for(&self, other: &Path) -> bool {
+        self.path == other
+    }
+}
+
+#[derive(Debug)]
+struct BrowserCategory {
+    name: String,
+    path: PathBuf,
+    expanded: bool,
+}
+
+impl BrowserCategory {
+    fn new(name: impl Into<String>, path: PathBuf) -> Self {
+        Self {
+            name: name.into(),
+            path,
+            expanded: true,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct BrowserPanelState {
+    categories: Vec<BrowserCategory>,
+    filter: String,
+    favorites: HashSet<PathBuf>,
+    selected_file: Option<PathBuf>,
+    waveform_cache: HashMap<PathBuf, WaveformPreview>,
+    last_scan: Instant,
+}
+
+impl BrowserPanelState {
+    fn new(root: &Path) -> Self {
+        let samples = root.join("samples");
+        let instruments = root.join("instruments");
+        let presets = root.join("presets");
+        let plugins = root.join("plugins");
+        let projects = root.join("projects");
+        let categories = vec![
+            BrowserCategory::new("Samples", samples),
+            BrowserCategory::new("Instruments", instruments),
+            BrowserCategory::new("Presets", presets),
+            BrowserCategory::new("Plugins", plugins),
+            BrowserCategory::new("Projects", projects),
+        ];
+        Self {
+            categories,
+            filter: String::new(),
+            favorites: HashSet::new(),
+            selected_file: None,
+            waveform_cache: HashMap::new(),
+            last_scan: Instant::now(),
+        }
+    }
+
+    fn refresh(&mut self) {
+        if self.last_scan.elapsed() > Duration::from_secs(5) {
+            self.waveform_cache
+                .retain(|path, preview| preview.is_for(path));
+            self.last_scan = Instant::now();
+        }
+    }
+
+    fn toggle_favourite(&mut self, path: &Path) {
+        if !self.favorites.insert(path.to_path_buf()) {
+            self.favorites.remove(path);
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct PluginRackState {
+    visible: bool,
+    docked: bool,
+    filter: String,
+    selected_plugin: Option<usize>,
+    pending_removals: Vec<usize>,
+    pending_bypass: Vec<(usize, bool)>,
+}
+
+impl PluginRackState {
+    fn is_match(&self, plugin: &PluginInstanceInfo) -> bool {
+        if self.filter.trim().is_empty() {
+            true
+        } else {
+            let needle = self.filter.to_ascii_lowercase();
+            plugin.name.to_ascii_lowercase().contains(&needle)
+                || plugin.plugin_type.to_ascii_lowercase().contains(&needle)
+        }
+    }
+
+    fn queue_removal(&mut self, id: usize) {
+        if !self.pending_removals.contains(&id) {
+            self.pending_removals.push(id);
+        }
+    }
+
+    fn queue_bypass(&mut self, id: usize, bypassed: bool) {
+        if let Some(entry) = self
+            .pending_bypass
+            .iter_mut()
+            .find(|(pending_id, _)| *pending_id == id)
+        {
+            entry.1 = bypassed;
+        } else {
+            self.pending_bypass.push((id, bypassed));
+        }
+    }
+
+    fn take_pending(&mut self) -> (Vec<usize>, Vec<(usize, bool)>) {
+        (
+            std::mem::take(&mut self.pending_removals),
+            std::mem::take(&mut self.pending_bypass),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CommandAction {
+    TogglePianoRoll,
+    ToggleBrowser,
+    TogglePluginRack,
+    AddTrack,
+    AddInstrument,
+    SaveProject,
+    OpenProject,
+    BounceProject,
+    FocusMixer,
+    FocusPlaylist,
+    FocusChannelRack,
+    SetPatternMode,
+    SetSongMode,
+}
+
+#[derive(Debug, Clone)]
+struct CommandPaletteEntry {
+    id: &'static str,
+    label: &'static str,
+    action: CommandAction,
+}
+
+#[derive(Debug)]
+struct CommandPaletteState {
+    open: bool,
+    query: String,
+    selected: usize,
+    commands: Vec<CommandPaletteEntry>,
+}
+
+impl CommandPaletteState {
+    fn new() -> Self {
+        let commands = vec![
+            CommandPaletteEntry {
+                id: "toggle_piano_roll",
+                label: "Toggle Piano Roll",
+                action: CommandAction::TogglePianoRoll,
+            },
+            CommandPaletteEntry {
+                id: "toggle_browser",
+                label: "Toggle Browser",
+                action: CommandAction::ToggleBrowser,
+            },
+            CommandPaletteEntry {
+                id: "toggle_plugin_rack",
+                label: "Toggle Plugin Rack",
+                action: CommandAction::TogglePluginRack,
+            },
+            CommandPaletteEntry {
+                id: "add_track",
+                label: "Add New Track",
+                action: CommandAction::AddTrack,
+            },
+            CommandPaletteEntry {
+                id: "add_instrument",
+                label: "Add Instrument to Channel Rack",
+                action: CommandAction::AddInstrument,
+            },
+            CommandPaletteEntry {
+                id: "save_project",
+                label: "Save Project",
+                action: CommandAction::SaveProject,
+            },
+            CommandPaletteEntry {
+                id: "open_project",
+                label: "Open Project",
+                action: CommandAction::OpenProject,
+            },
+            CommandPaletteEntry {
+                id: "bounce_project",
+                label: "Render Bounce",
+                action: CommandAction::BounceProject,
+            },
+            CommandPaletteEntry {
+                id: "focus_mixer",
+                label: "Focus Mixer",
+                action: CommandAction::FocusMixer,
+            },
+            CommandPaletteEntry {
+                id: "focus_playlist",
+                label: "Focus Playlist",
+                action: CommandAction::FocusPlaylist,
+            },
+            CommandPaletteEntry {
+                id: "focus_channel_rack",
+                label: "Focus Channel Rack",
+                action: CommandAction::FocusChannelRack,
+            },
+            CommandPaletteEntry {
+                id: "pattern_mode",
+                label: "Switch to Pattern Mode",
+                action: CommandAction::SetPatternMode,
+            },
+            CommandPaletteEntry {
+                id: "song_mode",
+                label: "Switch to Song Mode",
+                action: CommandAction::SetSongMode,
+            },
+        ];
+        Self {
+            open: false,
+            query: String::new(),
+            selected: 0,
+            commands,
+        }
+    }
+
+    fn open(&mut self) {
+        self.open = true;
+        self.query.clear();
+        self.selected = 0;
+    }
+
+    fn close(&mut self) {
+        self.open = false;
+    }
+
+    fn filtered_indices(&self) -> Vec<usize> {
+        let needle = self.query.trim().to_ascii_lowercase();
+        self.commands
+            .iter()
+            .enumerate()
+            .filter(|(_, command)| {
+                if needle.is_empty() {
+                    true
+                } else {
+                    command.label.to_ascii_lowercase().contains(&needle)
+                }
+            })
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+enum DragPayload {
+    Sample(PathBuf),
+    PatternClip {
+        track_index: usize,
+        clip_index: usize,
+    },
+    Plugin(usize),
+}
+
 fn offline_bounce_to_file(
     output_path: impl AsRef<Path>,
     config: BufferConfig,
@@ -521,6 +1054,92 @@ fn offline_bounce_to_file(
     }
 
     Ok(path)
+}
+
+fn quantize_to_step(value: f32, step: f32) -> f32 {
+    if step <= f32::EPSILON {
+        value
+    } else {
+        (value / step).round() * step
+    }
+}
+
+fn calculate_sample_length_beats(path: &Path, tempo: f32) -> anyhow::Result<f32> {
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .ok_or_else(|| anyhow!("missing file extension"))?;
+
+    if !extension.eq_ignore_ascii_case("wav") {
+        anyhow::bail!("unsupported audio format: {extension}");
+    }
+
+    let reader = hound::WavReader::open(path)?;
+    let spec = reader.spec();
+    let channels = spec.channels.max(1) as f32;
+    let frames = reader.duration() as f32 / channels;
+    if spec.sample_rate == 0 {
+        anyhow::bail!("sample rate of zero in {extension} file");
+    }
+    let seconds = frames / spec.sample_rate as f32;
+    let beats = seconds * tempo.max(1.0) / 60.0;
+    Ok(beats.max(0.25))
+}
+
+fn insert_sample_clip_on_track(
+    tracks: &mut [Track],
+    track_idx: usize,
+    drop_beat: f32,
+    path: PathBuf,
+    tempo: f32,
+    color: Color32,
+) -> Result<(usize, Option<String>), String> {
+    if track_idx >= tracks.len() {
+        return Err(format!("Track index {track_idx} is out of range"));
+    }
+
+    let mut warning = None;
+    let length_beats = match calculate_sample_length_beats(&path, tempo) {
+        Ok(length) => length,
+        Err(err) => {
+            warning = Some(err.to_string());
+            4.0
+        }
+    };
+
+    let start = quantize_to_step(drop_beat.max(0.0), 0.25);
+    let name = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|stem| stem.to_string())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| "Sample".to_string());
+
+    let clip = Clip::from_sample(name, start, length_beats.max(0.25), color, path);
+    let index = tracks[track_idx].insert_clip_sorted(clip);
+    Ok((index, warning))
+}
+
+fn generate_waveform_preview(path: &Path) -> anyhow::Result<WaveformPreview> {
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .ok_or_else(|| anyhow!("missing file extension"))?;
+    if !extension.eq_ignore_ascii_case("wav") {
+        anyhow::bail!("unsupported audio format: {extension}");
+    }
+    let mut reader = hound::WavReader::open(path)?;
+    let spec = reader.spec();
+    let max_samples = (spec.sample_rate as usize).min(12_000);
+    let mut samples = Vec::with_capacity(max_samples);
+    for sample in reader.samples::<i16>().take(max_samples) {
+        samples.push(sample? as f32 / i16::MAX as f32);
+    }
+    Ok(WaveformPreview {
+        path: path.to_path_buf(),
+        samples,
+        sample_rate: spec.sample_rate,
+    })
 }
 
 fn write_wav_file(
@@ -1993,9 +2612,7 @@ impl MixerConsolePluginState {
     }
 }
 
-struct HarmoniqStudioApp {
-    theme: HarmoniqTheme,
-    icons: AppIcons,
+struct AppState {
     engine_runner: EngineRunner,
     command_queue: harmoniq_engine::EngineCommandQueue,
     typing_keyboard: TypingKeyboard,
@@ -2012,6 +2629,7 @@ struct HarmoniqStudioApp {
     next_color_index: usize,
     playlist: PlaylistViewState,
     sequencer: SequencerState,
+    focused_instrument: Option<usize>,
     piano_roll: PianoRollState,
     piano_roll_selected_note: Option<usize>,
     piano_roll_drag: Option<PianoRollDragState>,
@@ -2025,6 +2643,38 @@ struct HarmoniqStudioApp {
     project_path: String,
     bounce_path: String,
     bounce_length_beats: f32,
+    engine_context: Arc<Mutex<EngineContext>>,
+    time_signature: TimeSignature,
+    pattern_mode: bool,
+    loop_enabled: bool,
+    transport_clock: TransportClock,
+    playback_position_beats: f32,
+    last_transport_tick: Instant,
+    layout: LayoutState,
+    browser_panel: BrowserPanelState,
+    plugin_rack: PluginRackState,
+    command_palette: CommandPaletteState,
+    drag_payload: Option<DragPayload>,
+}
+
+struct HarmoniqStudioApp {
+    theme: HarmoniqTheme,
+    icons: AppIcons,
+    state: AppState,
+}
+
+impl Deref for HarmoniqStudioApp {
+    type Target = AppState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl DerefMut for HarmoniqStudioApp {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
 }
 
 impl HarmoniqStudioApp {
@@ -2065,9 +2715,20 @@ impl HarmoniqStudioApp {
         let track_count = tracks.len();
         let master_track = MasterChannel::default();
 
-        let mut app = Self {
-            theme,
-            icons,
+        let mut layout = LayoutState::load();
+        let resources_root = env::current_dir()
+            .map(|path| path.join("resources"))
+            .unwrap_or_else(|_| PathBuf::from("resources"));
+        let browser_panel = BrowserPanelState::new(&resources_root);
+        let mut plugin_rack = PluginRackState::default();
+        plugin_rack.visible = layout.persistence().plugin_rack_visible;
+
+        let time_signature = TimeSignature::default();
+        let mut context = EngineContext::new(initial_tempo, time_signature);
+        context.ensure_demo_plugins();
+        let engine_context = Arc::new(Mutex::new(context));
+
+        let state = AppState {
             engine_runner,
             command_queue,
             typing_keyboard: TypingKeyboard::default(),
@@ -2084,6 +2745,7 @@ impl HarmoniqStudioApp {
             next_color_index: 0,
             playlist: PlaylistViewState::default(),
             sequencer: SequencerState::default(),
+            focused_instrument: None,
             piano_roll: PianoRollState::default(),
             piano_roll_selected_note: None,
             piano_roll_drag: None,
@@ -2097,6 +2759,24 @@ impl HarmoniqStudioApp {
             project_path: "project.hst".into(),
             bounce_path: "bounce.wav".into(),
             bounce_length_beats: 16.0,
+            engine_context,
+            time_signature,
+            pattern_mode: true,
+            loop_enabled: false,
+            transport_clock: TransportClock::default(),
+            playback_position_beats: 0.0,
+            last_transport_tick: Instant::now(),
+            layout,
+            browser_panel,
+            plugin_rack,
+            command_palette: CommandPaletteState::new(),
+            drag_payload: None,
+        };
+
+        let mut app = Self {
+            theme,
+            icons,
+            state,
         };
 
         app.initialise_demo_clips();
@@ -2276,17 +2956,14 @@ impl HarmoniqStudioApp {
             )
         };
 
-        let existing_index = self
-            .tracks
-            .get(track_idx)
-            .and_then(|track| {
-                track
-                    .clips
-                    .iter()
-                    .enumerate()
-                    .find(|(_, clip)| clip.name == instrument_name)
-                    .map(|(idx, _)| idx)
-            });
+        let existing_index = self.tracks.get(track_idx).and_then(|track| {
+            track
+                .clips
+                .iter()
+                .enumerate()
+                .find(|(_, clip)| clip.name == instrument_name)
+                .map(|(idx, _)| idx)
+        });
 
         let clip_index = if let Some(idx) = existing_index {
             idx
@@ -2343,6 +3020,7 @@ impl HarmoniqStudioApp {
             plugin.default_pattern(),
         );
         let index = self.sequencer.push_instrument(instrument);
+        self.focused_instrument = Some(index);
         let reference = self.ensure_instrument_clip(index);
         if let Some(track) = self.tracks.get(track_idx) {
             self.status_message = Some(format!("Added {name} to {}", track.name));
@@ -2378,6 +3056,13 @@ impl HarmoniqStudioApp {
         if let Some(reference) = removed.clip {
             if self.selected_clip == Some((reference.track_index, reference.clip_index)) {
                 self.set_selected_clip(None);
+            }
+        }
+        if let Some(focused) = self.focused_instrument {
+            if focused == instrument_idx {
+                self.focused_instrument = None;
+            } else if focused > instrument_idx {
+                self.focused_instrument = Some(focused - 1);
             }
         }
         self.status_message = Some(format!("Removed {}", removed.name));
@@ -2653,6 +3338,7 @@ impl HarmoniqStudioApp {
     fn toggle_transport(&mut self) {
         self.transport_state = match self.transport_state {
             TransportState::Playing => TransportState::Stopped,
+            TransportState::Recording => TransportState::Playing,
             _ => TransportState::Playing,
         };
         self.send_command(EngineCommand::SetTransport(self.transport_state));
@@ -2663,6 +3349,8 @@ impl HarmoniqStudioApp {
         });
         if self.transport_state == TransportState::Stopped {
             self.stop_all_clips();
+        } else {
+            self.last_transport_tick = Instant::now();
         }
     }
 
@@ -2670,6 +3358,8 @@ impl HarmoniqStudioApp {
         self.transport_state = TransportState::Stopped;
         self.send_command(EngineCommand::SetTransport(self.transport_state));
         self.stop_all_clips();
+        self.playback_position_beats = 0.0;
+        self.transport_clock = TransportClock::from_beats(0.0, self.time_signature);
         self.status_message = Some("Transport stopped".into());
     }
 
@@ -2706,6 +3396,8 @@ impl HarmoniqStudioApp {
         self.last_error = None;
         self.project_path = "project.hst".into();
         self.refresh_sequencer_clips();
+        self.playback_position_beats = 0.0;
+        self.transport_clock = TransportClock::default();
     }
 
     fn stop_all_clips(&mut self) {
@@ -2931,6 +3623,95 @@ impl HarmoniqStudioApp {
         }
     }
 
+    fn insert_sample_clip(&mut self, track_idx: usize, beat: f32, path: PathBuf) {
+        if self.tracks.is_empty() {
+            self.last_error = Some("Create a track before dropping samples".into());
+            self.status_message = None;
+            return;
+        }
+        if track_idx >= self.tracks.len() {
+            self.last_error = Some(format!("Track {track_idx} is unavailable"));
+            self.status_message = None;
+            return;
+        }
+
+        let file_name = path
+            .file_name()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("Sample");
+        let color = self.next_color();
+        match insert_sample_clip_on_track(
+            &mut self.tracks,
+            track_idx,
+            beat,
+            path,
+            self.tempo,
+            color,
+        ) {
+            Ok((clip_index, warning)) => {
+                self.next_clip_index += 1;
+                self.focus_clip(track_idx, clip_index);
+                let track_name = self.tracks[track_idx].name.clone();
+                self.status_message = Some(format!("Added '{file_name}' to {track_name}"));
+                if let Some(warning) = warning {
+                    self.last_error = Some(format!(
+                        "Unable to analyse sample length for '{file_name}': {warning}. Using default length."
+                    ));
+                } else {
+                    self.last_error = None;
+                }
+            }
+            Err(err) => {
+                self.last_error = Some(err);
+                self.status_message = None;
+            }
+        }
+    }
+
+    fn insert_sample_instrument(&mut self, path: PathBuf) {
+        if self.tracks.is_empty() {
+            self.last_error = Some("Create a track before adding instruments".into());
+            self.status_message = None;
+            return;
+        }
+
+        let track_idx = self
+            .selected_track
+            .unwrap_or(0)
+            .min(self.tracks.len().saturating_sub(1));
+        let track_name = self.tracks[track_idx].name.clone();
+        let instrument_name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| stem.to_string())
+            .filter(|stem| !stem.is_empty())
+            .unwrap_or_else(|| "Sampler".to_string());
+
+        let mut instrument = SequencerInstrument::new(
+            self.sequencer.allocate_id(),
+            instrument_name.clone(),
+            InstrumentPlugin::Sampler,
+            track_idx,
+            InstrumentPlugin::Sampler.default_pattern(),
+        );
+        instrument.sample_path = Some(path);
+        let index = self.sequencer.push_instrument(instrument);
+        self.focused_instrument = Some(index);
+        match self.ensure_instrument_clip(index) {
+            Some(_) => {
+                self.status_message =
+                    Some(format!("Added sampler '{instrument_name}' to {track_name}"));
+                self.last_error = None;
+            }
+            None => {
+                self.status_message = Some(format!(
+                    "Sampler '{instrument_name}' added to {track_name}, clip pending"
+                ));
+                self.last_error = Some("Unable to create clip for new sampler".into());
+            }
+        }
+    }
+
     fn add_automation_lane_to_selected_track(&mut self) {
         let Some(track_idx) = self.selected_track else {
             self.last_error = Some("Select a track before adding automation".into());
@@ -3079,29 +3860,28 @@ impl HarmoniqStudioApp {
         egui::Frame::none()
             .fill(palette.toolbar)
             .stroke(Stroke::new(1.0, palette.toolbar_outline))
-            .rounding(Rounding::same(20.0))
-            .inner_margin(Margin::symmetric(20.0, 16.0))
-            .outer_margin(Margin::symmetric(4.0, 0.0))
+            .rounding(Rounding::same(18.0))
+            .inner_margin(Margin::symmetric(20.0, 14.0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ui.horizontal_wrapped(|ui| {
+                ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(16.0, 12.0);
 
                     let playing = matches!(self.transport_state, TransportState::Playing);
+                    let recording = matches!(self.transport_state, TransportState::Recording);
                     let play_icon = if playing {
                         &self.icons.pause
                     } else {
                         &self.icons.play
                     };
-                    let play_label = if playing { "Pause" } else { "Play" };
                     if self
                         .gradient_icon_button(
                             ui,
                             play_icon,
-                            play_label,
-                            (palette.accent, palette.accent_soft),
+                            if playing { "Pause" } else { "Play" },
+                            (palette.accent, palette.accent_alt),
                             playing,
-                            Vec2::new(150.0, 48.0),
+                            Vec2::new(132.0, 44.0),
                         )
                         .clicked()
                     {
@@ -3115,17 +3895,44 @@ impl HarmoniqStudioApp {
                             "Stop",
                             (palette.warning, palette.accent_soft),
                             matches!(self.transport_state, TransportState::Stopped),
-                            Vec2::new(120.0, 48.0),
+                            Vec2::new(112.0, 44.0),
                         )
                         .clicked()
                     {
                         self.stop_transport();
                     }
 
+                    let record_response = ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Rec").color(palette.text_primary).size(16.0),
+                            )
+                            .fill(if recording {
+                                palette.warning.gamma_multiply(0.35)
+                            } else {
+                                palette.panel_alt
+                            })
+                            .min_size(Vec2::new(92.0, 44.0)),
+                        )
+                        .on_hover_text("Arm the transport for recording");
+                    if record_response.clicked() {
+                        self.transport_state = if recording {
+                            TransportState::Playing
+                        } else {
+                            TransportState::Recording
+                        };
+                        self.send_command(EngineCommand::SetTransport(self.transport_state));
+                    }
+
+                    let mut loop_toggle = self.loop_enabled;
+                    if ui.toggle_value(&mut loop_toggle, "Loop").clicked() {
+                        self.loop_enabled = loop_toggle;
+                    }
+
                     ui.separator();
 
                     ui.vertical(|ui| {
-                        self.section_label(ui, &self.icons.tempo, "Tempo");
+                        self.section_label(ui, &self.icons.tempo, "Tempo & Meter");
                         let tempo_response = ui.add(
                             egui::DragValue::new(&mut self.tempo)
                                 .clamp_range(40.0..=220.0)
@@ -3135,205 +3942,98 @@ impl HarmoniqStudioApp {
                         if tempo_response.changed() {
                             self.send_command(EngineCommand::SetTempo(self.tempo));
                         }
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Time Sig").color(palette.text_muted));
+                            let mut numerator = self.time_signature.numerator as i32;
+                            let mut denominator = self.time_signature.denominator as i32;
+                            if ui
+                                .add(egui::DragValue::new(&mut numerator).clamp_range(1..=12))
+                                .changed()
+                            {
+                                self.time_signature.set_from_tuple((
+                                    numerator.max(1) as u32,
+                                    self.time_signature.denominator,
+                                ));
+                            }
+                            ui.label("/");
+                            if ui
+                                .add(egui::DragValue::new(&mut denominator).clamp_range(1..=16))
+                                .changed()
+                            {
+                                self.time_signature.set_from_tuple((
+                                    self.time_signature.numerator,
+                                    denominator.max(1) as u32,
+                                ));
+                            }
+                        });
                     });
 
                     ui.separator();
 
                     ui.vertical(|ui| {
-                        self.section_label(ui, &self.icons.open, "Project");
-                        Self::tinted_frame(&palette, ui, palette.panel_alt, |ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.project_path)
-                                    .desired_width(220.0)
-                                    .hint_text("my_project.hst"),
+                        ui.label(RichText::new("Mode").color(palette.text_muted));
+                        ui.horizontal(|ui| {
+                            let pattern_selected = self.pattern_mode;
+                            if ui.selectable_label(pattern_selected, "Pattern").clicked() {
+                                self.pattern_mode = true;
+                            }
+                            if ui.selectable_label(!pattern_selected, "Song").clicked() {
+                                self.pattern_mode = false;
+                            }
+                        });
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(self.transport_clock.format())
+                                .monospace()
+                                .size(20.0)
+                                .color(palette.text_primary),
+                        );
+                        ui.label(
+                            RichText::new("Bars:Beats:Ticks")
+                                .color(palette.text_muted)
+                                .size(11.0),
+                        );
+                    });
+
+                    ui.separator();
+
+                    let cpu_usage = self.estimate_cpu_usage();
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Audio Engine").color(palette.text_muted));
+                        ui.add(
+                            ProgressBar::new(cpu_usage)
+                                .text(format!("CPU {:>4.1}%", cpu_usage * 100.0)),
+                        );
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Master").color(palette.text_muted));
+                            Self::draw_meter(
+                                ui,
+                                &self.master_track.meter,
+                                &palette,
+                                Vec2::new(38.0, 80.0),
                             );
                         });
-                        ui.horizontal(|ui| {
-                            if self
-                                .gradient_icon_button(
-                                    ui,
-                                    &self.icons.open,
-                                    "Open",
-                                    (palette.accent_alt, palette.toolbar_highlight),
-                                    false,
-                                    Vec2::new(124.0, 40.0),
-                                )
-                                .clicked()
-                            {
-                                self.open_project();
-                            }
-                            if self
-                                .gradient_icon_button(
-                                    ui,
-                                    &self.icons.save,
-                                    "Save",
-                                    (palette.accent, palette.accent_alt),
-                                    false,
-                                    Vec2::new(124.0, 40.0),
-                                )
-                                .clicked()
-                            {
-                                self.save_project();
-                            }
-                        });
-                    });
-
-                    ui.separator();
-
-                    self.draw_audio_settings(ui);
-
-                    ui.separator();
-
-                    ui.vertical(|ui| {
-                        self.section_label(ui, &self.icons.bounce, "Offline Bounce");
-                        Self::tinted_frame(&palette, ui, palette.panel_alt, |ui| {
-                            ui.vertical(|ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.bounce_path)
-                                        .desired_width(220.0)
-                                        .hint_text("bounce.wav"),
-                                );
-                                ui.add_space(6.0);
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        RichText::new("Length")
-                                            .color(palette.text_muted)
-                                            .small()
-                                            .strong(),
-                                    );
-                                    ui.add_space(8.0);
-                                    ui.add(
-                                        egui::DragValue::new(&mut self.bounce_length_beats)
-                                            .clamp_range(1.0..=256.0)
-                                            .speed(1.0)
-                                            .suffix(" beats"),
-                                    );
-                                });
-                            });
-                        });
-                        if self
-                            .gradient_icon_button(
-                                ui,
-                                &self.icons.bounce,
-                                "Render Bounce",
-                                (palette.success, palette.accent_alt),
-                                false,
-                                Vec2::new(186.0, 44.0),
-                            )
-                            .clicked()
-                        {
-                            self.bounce_project();
-                        }
                     });
 
                     ui.separator();
 
                     ui.vertical(|ui| {
-                        self.section_label(ui, &self.icons.track, "Mixer Console");
-                        let mixer_button = self.gradient_icon_button(
-                            ui,
-                            &self.icons.track,
-                            "Open Mixer",
-                            (palette.accent, palette.accent_soft),
-                            self.mixer_console.show,
-                            Vec2::new(186.0, 44.0),
-                        );
-                        if mixer_button.clicked() {
-                            self.mixer_console.open();
+                        ui.label(RichText::new("Panels").color(palette.text_muted));
+                        let mut browser = self.layout.persistence().browser_visible;
+                        if ui.checkbox(&mut browser, "Browser").clicked() {
+                            self.layout.set_browser_visible(browser);
                         }
-                        ui.label(
-                            RichText::new("Balance tracks, buses, and master levels")
-                                .color(palette.text_muted)
-                                .small(),
-                        );
-                    });
-
-                    ui.separator();
-
-                    ui.vertical(|ui| {
-                        self.section_label(ui, &self.icons.track, "West Coast Lead");
-                        let editor_button = self.gradient_icon_button(
-                            ui,
-                            &self.icons.track,
-                            "Open Editor",
-                            (palette.accent_alt, palette.accent_soft),
-                            self.westcoast_editor.show,
-                            Vec2::new(186.0, 44.0),
-                        );
-                        if editor_button.clicked() {
-                            self.westcoast_editor.open();
+                        let mut piano_roll = self.layout.persistence().piano_roll_visible;
+                        if ui.checkbox(&mut piano_roll, "Piano Roll").clicked() {
+                            self.layout.set_piano_roll_visible(piano_roll);
                         }
-                        editor_button.context_menu(|ui| {
-                            if ui.button("Open Piano Roll").clicked() {
-                                self.focus_piano_roll_on_track(0);
-                                ui.close_menu();
-                            }
-                        });
-                        ui.label(
-                            RichText::new("Shape the sine lead's timbre and modulation")
-                                .color(palette.text_muted)
-                                .small(),
-                        );
-                    });
-
-                    ui.separator();
-
-                    ui.vertical(|ui| {
-                        self.section_label(ui, &self.icons.track, "808 Sub Bass");
-                        let editor_button = self.gradient_icon_button(
-                            ui,
-                            &self.icons.track,
-                            "Open Editor",
-                            (palette.accent, palette.accent_soft),
-                            self.sub808_editor.show,
-                            Vec2::new(186.0, 44.0),
-                        );
-                        if editor_button.clicked() {
-                            self.sub808_editor.open();
+                        let mut plugin_rack = self.plugin_rack.visible;
+                        if ui.checkbox(&mut plugin_rack, "Plugin Rack").clicked() {
+                            self.plugin_rack.visible = plugin_rack;
+                            self.layout.set_plugin_rack_visible(plugin_rack);
                         }
-                        editor_button.context_menu(|ui| {
-                            if ui.button("Open Piano Roll").clicked() {
-                                self.focus_piano_roll_on_track(2);
-                                ui.close_menu();
-                            }
-                        });
-                        ui.label(
-                            RichText::new("Dial in 808-style subs with pitch drop and drive")
-                                .color(palette.text_muted)
-                                .small(),
-                        );
                     });
-
-                    ui.separator();
-
-                    ui.vertical(|ui| {
-                        self.section_label(ui, &self.icons.clip, "Edison Audio Editor");
-                        let editor_button = self.gradient_icon_button(
-                            ui,
-                            &self.icons.clip,
-                            "Open Editor",
-                            (palette.accent_alt, palette.accent_soft),
-                            self.audio_editor.show,
-                            Vec2::new(186.0, 44.0),
-                        );
-                        if editor_button.clicked() {
-                            self.audio_editor.open();
-                        }
-                        ui.label(
-                            RichText::new(
-                                "Detailed waveform editing with trim, fades, looping, and export",
-                            )
-                            .color(palette.text_muted)
-                            .small(),
-                        );
-                    });
-
-                    ui.add_space(16.0);
-                    ui.label(
-                        RichText::new("Signature: 4 / 4")
-                            .color(palette.text_muted)
-                            .strong(),
-                    );
                 });
             });
     }
@@ -3487,6 +4187,9 @@ impl HarmoniqStudioApp {
 
     fn draw_sequencer(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette().clone();
+        let pointer_pos = ui.input(|i| i.pointer.hover_pos());
+        let pointer_released = ui.input(|i| i.pointer.button_released(PointerButton::Primary));
+        let dragging_sample = matches!(self.drag_payload, Some(DragPayload::Sample(_)));
         self.section_label(ui, &self.icons.track, "Channel Rack");
         ui.add_space(10.0);
 
@@ -3504,7 +4207,12 @@ impl HarmoniqStudioApp {
             });
         } else {
             for index in 0..self.sequencer.instruments.len() {
-                Self::tinted_frame(&palette, ui, palette.panel_alt, |ui| {
+                let fill = if self.focused_instrument == Some(index) {
+                    palette.panel_alt.gamma_multiply(1.12)
+                } else {
+                    palette.panel_alt
+                };
+                Self::tinted_frame(&palette, ui, fill, |ui| {
                     self.draw_sequencer_instrument(ui, index);
                 });
                 ui.add_space(8.0);
@@ -3529,6 +4237,31 @@ impl HarmoniqStudioApp {
                 self.refresh_sequencer_clips();
             }
         });
+
+        let drop_rect = ui.min_rect();
+        if dragging_sample {
+            if let Some(pos) = pointer_pos {
+                if drop_rect.contains(pos) {
+                    ui.painter().rect_stroke(
+                        drop_rect.expand(6.0),
+                        12.0,
+                        Stroke::new(2.0, palette.accent_alt.gamma_multiply(0.7)),
+                    );
+                }
+            }
+        }
+
+        if pointer_released {
+            if let Some(DragPayload::Sample(path)) = self.drag_payload.take() {
+                if pointer_pos.map_or(false, |pos| drop_rect.contains(pos)) {
+                    self.insert_sample_instrument(path);
+                } else {
+                    self.status_message = Some(
+                        "Drag samples onto the channel rack to create sampler channels".into(),
+                    );
+                }
+            }
+        }
     }
 
     fn draw_sequencer_instrument(&mut self, ui: &mut egui::Ui, instrument_idx: usize) {
@@ -3592,6 +4325,10 @@ impl HarmoniqStudioApp {
             .response;
 
         let header_response = header_response.on_hover_text(instrument.plugin.description());
+
+        if header_response.clicked() {
+            self.focused_instrument = Some(instrument_idx);
+        }
 
         header_response.context_menu(|ui| {
             if let Some(reference) = clip_reference {
@@ -3661,6 +4398,7 @@ impl HarmoniqStudioApp {
                         Self::sequencer_step_widget(ui, active, accent, &palette, step % 4 == 0);
                     if response.clicked() {
                         self.toggle_instrument_step(instrument_idx, step, !active);
+                        self.focused_instrument = Some(instrument_idx);
                     }
                     response.on_hover_text(format!("Step {}", step + 1));
                 }
@@ -3819,6 +4557,14 @@ impl HarmoniqStudioApp {
                     rect.max,
                 );
 
+                let pointer_hover = ui.input(|i| i.pointer.hover_pos());
+                let pointer_pos = response.interact_pointer_pos().or(pointer_hover);
+                let pointer_released =
+                    ui.input(|i| i.pointer.button_released(PointerButton::Primary));
+                let dragging_sample = matches!(self.drag_payload, Some(DragPayload::Sample(_)));
+                let mut drop_target: Option<(usize, f32)> = None;
+                let mut drop_indicator: Option<(f32, f32, f32)> = None;
+
                 painter.rect_filled(rect, 10.0, palette.timeline_bg);
                 painter.rect_stroke(rect, 10.0, Stroke::new(1.0, palette.timeline_border));
                 painter.rect_filled(header_column_rect, 10.0, palette.track_header);
@@ -3861,7 +4607,28 @@ impl HarmoniqStudioApp {
                     }
                 }
 
-                let pointer_pos = response.interact_pointer_pos();
+                let playhead_x =
+                    header_column_rect.right() + self.playback_position_beats * pixels_per_beat;
+                if playhead_x >= timeline_rect.left() && playhead_x <= timeline_rect.right() {
+                    painter.line_segment(
+                        [
+                            egui::pos2(playhead_x, ruler_rect.bottom()),
+                            egui::pos2(playhead_x, timeline_rect.bottom()),
+                        ],
+                        Stroke::new(2.0, palette.accent_alt),
+                    );
+                }
+                if self.loop_enabled {
+                    let loop_end = self.bounce_length_beats.max(4.0);
+                    let loop_start_x = header_column_rect.right();
+                    let loop_end_x = header_column_rect.right() + loop_end * pixels_per_beat;
+                    let loop_rect = egui::Rect::from_min_max(
+                        egui::pos2(loop_start_x, ruler_rect.bottom() - 6.0),
+                        egui::pos2(loop_end_x, ruler_rect.bottom()),
+                    );
+                    painter.rect_filled(loop_rect, 3.0, palette.accent_alt.gamma_multiply(0.2));
+                }
+
                 let clicked = response.clicked_by(PointerButton::Primary);
                 let double_clicked = response.double_clicked_by(PointerButton::Primary);
                 let right_clicked = response.clicked_by(PointerButton::Secondary);
@@ -3878,7 +4645,21 @@ impl HarmoniqStudioApp {
                     );
                     let is_selected = self.selected_track == Some(track_idx);
 
-                    let header_fill = if is_selected {
+                    let pointer_over_lane = dragging_sample
+                        && pointer_pos
+                            .map(|pos| track_lane_rect.contains(pos))
+                            .unwrap_or(false);
+                    if pointer_over_lane {
+                        if let Some(pos) = pointer_pos {
+                            drop_target = Some((track_idx, pos.x));
+                            drop_indicator =
+                                Some((pos.x, track_lane_rect.top(), track_lane_rect.bottom()));
+                        }
+                    }
+
+                    let header_fill = if pointer_over_lane {
+                        palette.track_header_selected
+                    } else if is_selected {
                         palette.track_header_selected
                     } else {
                         palette.track_header
@@ -3892,6 +4673,13 @@ impl HarmoniqStudioApp {
 
                     if is_selected {
                         painter.rect_filled(track_lane_rect, 0.0, palette.track_lane_overlay);
+                    }
+                    if pointer_over_lane {
+                        painter.rect_stroke(
+                            track_lane_rect,
+                            0.0,
+                            Stroke::new(1.5, palette.accent_alt.gamma_multiply(0.65)),
+                        );
                     }
 
                     painter.text(
@@ -4025,6 +4813,15 @@ impl HarmoniqStudioApp {
                             FontId::proportional(11.0),
                             palette.clip_text_secondary,
                         );
+                        if clip.is_sample() {
+                            painter.text(
+                                egui::pos2(clip_rect.left() + 10.0, clip_rect.bottom() - 8.0),
+                                Align2::LEFT_BOTTOM,
+                                "Audio",
+                                FontId::proportional(11.0),
+                                palette.text_muted,
+                            );
+                        }
                         if clip.launch_state.is_playing() {
                             painter.text(
                                 egui::pos2(clip_rect.left() + 10.0, clip_rect.top() + 6.0),
@@ -4229,6 +5026,29 @@ impl HarmoniqStudioApp {
                         }
 
                         cursor_y += automation_height + row_gap;
+                    }
+                }
+
+                if dragging_sample {
+                    if let Some((x, top, bottom)) = drop_indicator {
+                        let clamped_x = x.clamp(timeline_rect.left(), timeline_rect.right());
+                        painter.line_segment(
+                            [egui::pos2(clamped_x, top), egui::pos2(clamped_x, bottom)],
+                            Stroke::new(2.0, palette.accent_soft.gamma_multiply(0.9)),
+                        );
+                    }
+                }
+
+                if pointer_released {
+                    if let Some(DragPayload::Sample(path)) = self.drag_payload.take() {
+                        if let Some((track_idx, drop_x)) = drop_target {
+                            let beat = ((drop_x - timeline_rect.left()) / pixels_per_beat).max(0.0);
+                            self.insert_sample_clip(track_idx, beat, path);
+                        } else {
+                            self.status_message = Some(
+                                "Drag samples onto a playlist lane to create audio clips".into(),
+                            );
+                        }
                     }
                 }
             });
@@ -5256,11 +6076,610 @@ impl HarmoniqStudioApp {
 
         self.mixer_console.show = open;
     }
+
+    fn update_transport_clock(&mut self, ctx: &egui::Context) {
+        let delta = ctx.input(|input| input.stable_dt).max(0.0);
+        if matches!(
+            self.transport_state,
+            TransportState::Playing | TransportState::Recording
+        ) {
+            let beats_per_second = (self.tempo.max(1.0)) / 60.0;
+            self.playback_position_beats += beats_per_second * delta;
+            if self.loop_enabled && self.bounce_length_beats > 0.0 {
+                let loop_length = self.bounce_length_beats.max(4.0);
+                while self.playback_position_beats >= loop_length {
+                    self.playback_position_beats -= loop_length;
+                }
+            }
+        }
+        self.transport_clock =
+            TransportClock::from_beats(self.playback_position_beats, self.time_signature);
+    }
+
+    fn estimate_cpu_usage(&self) -> f32 {
+        let track_load = self.tracks.len() as f32 * 0.005;
+        let instrument_load = self.sequencer.instruments.len() as f32 * 0.01;
+        let transport_load = if matches!(self.transport_state, TransportState::Playing) {
+            0.08
+        } else {
+            0.0
+        };
+        (0.12 + track_load + instrument_load + transport_load).clamp(0.05, 0.95)
+    }
+
+    fn update_engine_context(&mut self) {
+        if let Ok(mut ctx) = self.engine_context.lock() {
+            ctx.tempo = self.tempo;
+            ctx.time_signature = self.time_signature;
+            ctx.transport = self.transport_state;
+            ctx.pattern_mode = self.pattern_mode;
+            ctx.cpu_usage = self.estimate_cpu_usage();
+            ctx.clock = self.transport_clock;
+            ctx.master_meter = (
+                self.master_track.meter.left_level(),
+                self.master_track.meter.right_level(),
+            );
+            ctx.ensure_demo_plugins();
+            for (index, plugin) in ctx.plugins.iter_mut().enumerate() {
+                let phase = self.playback_position_beats + index as f32 * 0.37;
+                let dynamic = ((phase.sin() + 1.0) * 0.5 * 0.08).clamp(0.0, 0.25);
+                plugin.cpu = (ctx.cpu_usage * 0.4 + dynamic).clamp(0.02, 0.95);
+                plugin.latency_ms = 3.0 + index as f32 * 1.2;
+            }
+        }
+    }
+
+    fn browser_filter_matches(&self, path: &Path) -> bool {
+        let filter = self.browser_panel.filter.trim();
+        if filter.is_empty() {
+            return true;
+        }
+        let needle = filter.to_ascii_lowercase();
+        self.browser_filter_matches_recursive(path, &needle, 0)
+    }
+
+    fn browser_filter_matches_recursive(&self, path: &Path, needle: &str, depth: usize) -> bool {
+        let name_matches = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_ascii_lowercase().contains(needle))
+            .unwrap_or(false);
+        if name_matches {
+            return true;
+        }
+        if path.is_dir() && depth < 6 {
+            if let Ok(read_dir) = fs::read_dir(path) {
+                for entry in read_dir.flatten() {
+                    if self.browser_filter_matches_recursive(&entry.path(), needle, depth + 1) {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn draw_browser_directory(&mut self, ui: &mut egui::Ui, path: &Path, depth: usize) {
+        if depth > 2 {
+            return;
+        }
+
+        let Ok(read_dir) = fs::read_dir(path) else {
+            if depth == 0 {
+                ui.label(
+                    RichText::new("Directory unavailable")
+                        .color(self.palette().warning)
+                        .italics(),
+                );
+            }
+            return;
+        };
+
+        let mut entries: Vec<PathBuf> = read_dir
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .collect();
+        entries.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+
+        for entry in entries {
+            if entry.is_dir() {
+                if !self.browser_filter_matches(&entry) && !self.browser_panel.filter.is_empty() {
+                    continue;
+                }
+                let label = entry
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("Unnamed Folder")
+                    .to_string();
+                let header_id = egui::Id::new(("browser_dir", entry.clone()));
+                egui::CollapsingHeader::new(label)
+                    .id_source(header_id)
+                    .default_open(depth == 0)
+                    .show(ui, |ui| self.draw_browser_directory(ui, &entry, depth + 1));
+            } else {
+                self.draw_browser_file(ui, &entry);
+            }
+        }
+    }
+
+    fn draw_browser_file(&mut self, ui: &mut egui::Ui, path: &Path) {
+        if !self.browser_filter_matches(path) {
+            return;
+        }
+        let palette = self.palette().clone();
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("Unnamed")
+            .to_string();
+        let is_selected = self
+            .browser_panel
+            .selected_file
+            .as_ref()
+            .map(|selected| selected == path)
+            .unwrap_or(false);
+        let is_favourite = self.browser_panel.favorites.contains(path);
+        let label = if is_favourite {
+            RichText::new(format!("★ {file_name}")).color(palette.accent)
+        } else {
+            RichText::new(file_name.clone()).color(palette.text_primary)
+        };
+        let response = ui.selectable_label(is_selected, label);
+        if response.clicked() {
+            self.browser_panel.selected_file = Some(path.to_path_buf());
+        }
+        if response.double_clicked() {
+            self.status_message = Some(format!("Loaded {}", file_name));
+        }
+        if response.drag_started() {
+            self.drag_payload = Some(DragPayload::Sample(path.to_path_buf()));
+            ui.output_mut(|out| out.cursor_icon = CursorIcon::Grabbing);
+        }
+        response.context_menu(|ui| {
+            let mut is_favourite = is_favourite;
+            if ui.checkbox(&mut is_favourite, "Favourite").changed() {
+                self.browser_panel.toggle_favourite(path);
+            }
+            if ui.button("Reveal").clicked() {
+                self.status_message = Some(format!(
+                    "Reveal not available in sandbox: {}",
+                    path.display()
+                ));
+                ui.close_menu();
+            }
+        });
+    }
+
+    fn load_waveform_preview(&mut self, path: &Path) -> Option<&WaveformPreview> {
+        if let Some(preview) = self.browser_panel.waveform_cache.get(path) {
+            return Some(preview);
+        }
+        match generate_waveform_preview(path) {
+            Ok(preview) => {
+                self.browser_panel
+                    .waveform_cache
+                    .insert(path.to_path_buf(), preview);
+                self.browser_panel.waveform_cache.get(path)
+            }
+            Err(err) => {
+                let message = err.to_string();
+                if !message.contains("unsupported audio format") {
+                    self.last_error = Some(format!("Waveform preview error: {message}"));
+                }
+                None
+            }
+        }
+    }
+
+    fn draw_waveform_preview(
+        &mut self,
+        ui: &mut egui::Ui,
+        preview: &WaveformPreview,
+        palette: &HarmoniqPalette,
+    ) {
+        let available = ui.available_width().max(160.0);
+        let desired = egui::vec2(available, 120.0);
+        let (rect, _) = ui.allocate_exact_size(desired, Sense::hover());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 8.0, palette.panel_alt);
+        painter.rect_stroke(rect, 8.0, Stroke::new(1.0, palette.toolbar_outline));
+
+        if preview.samples.is_empty() {
+            painter.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                "No waveform",
+                FontId::proportional(12.0),
+                palette.text_muted,
+            );
+            return;
+        }
+
+        let sample_count = preview.samples.len();
+        let step = (sample_count as f32 / rect.width().max(1.0)).max(1.0);
+        let mut points = Vec::with_capacity(rect.width().ceil() as usize);
+        let mid_y = rect.center().y;
+        let amplitude = rect.height() * 0.45;
+        let mut x = rect.left();
+        let mut index = 0.0;
+        while x <= rect.right() {
+            let idx = index.floor() as usize;
+            let sample = preview.samples.get(idx).copied().unwrap_or(0.0);
+            let y = mid_y - sample * amplitude;
+            points.push(egui::pos2(x, y));
+            x += 1.0;
+            index += step;
+        }
+        painter.add(egui::Shape::line(points, Stroke::new(1.6, palette.accent)));
+        painter.text(
+            egui::pos2(rect.left() + 8.0, rect.top() + 10.0),
+            Align2::LEFT_TOP,
+            format!("{:0.1} kHz", preview.sample_rate as f32 / 1000.0),
+            FontId::proportional(11.0),
+            palette.text_muted,
+        );
+    }
+
+    fn draw_browser_panel(&mut self, ui: &mut egui::Ui) {
+        self.browser_panel.refresh();
+        let palette = self.palette().clone();
+        ui.vertical(|ui| {
+            ui.heading(RichText::new("Browser").color(palette.text_primary));
+            ui.add_space(6.0);
+            let filter_response = ui.add(
+                egui::TextEdit::singleline(&mut self.browser_panel.filter)
+                    .desired_width(f32::INFINITY)
+                    .hint_text("Search samples, instruments, presets..."),
+            );
+            if filter_response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                self.command_palette.open();
+            }
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical()
+                .id_source("browser_scroll")
+                .show(ui, |ui| {
+                    for category in &mut self.browser_panel.categories {
+                        let label = if category.path.exists() {
+                            RichText::new(&category.name).color(palette.text_primary)
+                        } else {
+                            RichText::new(format!("{} (missing)", category.name))
+                                .color(palette.warning)
+                        };
+                        let id = egui::Id::new(("browser_category", category.name.clone()));
+                        let mut header = egui::CollapsingHeader::new(label)
+                            .id_source(id)
+                            .default_open(category.expanded);
+                        header.show(ui, |ui| self.draw_browser_directory(ui, &category.path, 0));
+                        category.expanded = !header.fully_closed();
+                        ui.add_space(4.0);
+                    }
+                });
+
+            if let Some(selected) = self.browser_panel.selected_file.clone() {
+                ui.add_space(8.0);
+                ui.separator();
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(format!(
+                        "Selection: {}",
+                        selected
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("Unknown")
+                    ))
+                    .color(palette.text_primary)
+                    .strong(),
+                );
+                if let Some(preview) = self.load_waveform_preview(&selected) {
+                    self.draw_waveform_preview(ui, preview, &palette);
+                } else {
+                    ui.label(
+                        RichText::new("Waveform preview unavailable for this file")
+                            .color(palette.text_muted),
+                    );
+                }
+            }
+        });
+    }
+
+    fn draw_mixer_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading(
+            RichText::new("Mixer")
+                .color(self.palette().text_primary)
+                .size(18.0)
+                .strong(),
+        );
+        ui.add_space(6.0);
+        self.draw_mixer_console_contents(ui);
+    }
+
+    fn draw_plugin_rack(&mut self, ctx: &egui::Context) {
+        if !self.plugin_rack.visible {
+            return;
+        }
+        let mut open = self.plugin_rack.visible;
+        egui::Window::new("Plugin Rack")
+            .open(&mut open)
+            .resizable(true)
+            .default_width(420.0)
+            .default_pos(egui::pos2(1020.0, 120.0))
+            .show(ctx, |ui| {
+                let palette = self.palette().clone();
+                ui.horizontal(|ui| {
+                    ui.heading(RichText::new("Loaded Plugins").color(palette.text_primary));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.plugin_rack.filter)
+                                .hint_text("Filter")
+                                .desired_width(160.0),
+                        );
+                    });
+                });
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical()
+                    .id_source("plugin_rack_scroll")
+                    .show(ui, |ui| {
+                        if let Ok(mut engine_ctx) = self.engine_context.lock() {
+                            for plugin in &mut engine_ctx.plugins {
+                                if !self.plugin_rack.is_match(plugin) {
+                                    continue;
+                                }
+                                let id = plugin.id;
+                                let cpu_text = format!("{:>4.1}%", plugin.cpu * 100.0);
+                                let latency = format!("{:>4.1} ms", plugin.latency_ms);
+                                let mut label = format!("{} • {}", plugin.name, plugin.plugin_type);
+                                label.push_str(&format!(" | CPU {cpu_text} | Latency {latency}"));
+                                let selected = self.plugin_rack.selected_plugin == Some(id);
+                                let response = ui.selectable_label(selected, label);
+                                if response.clicked() {
+                                    self.plugin_rack.selected_plugin = Some(id);
+                                }
+                                if response.double_clicked() {
+                                    self.open_plugin_editor(plugin);
+                                }
+                                response.context_menu(|ui| {
+                                    if ui.checkbox(&mut plugin.bypassed, "Bypass").clicked() {
+                                        self.plugin_rack.queue_bypass(id, plugin.bypassed);
+                                    }
+                                    if ui.button("Remove").clicked() {
+                                        self.plugin_rack.queue_removal(id);
+                                        ui.close_menu();
+                                    }
+                                });
+                            }
+                        }
+                    });
+            });
+        self.plugin_rack.visible = open;
+        self.layout.set_plugin_rack_visible(open);
+        self.process_plugin_actions();
+    }
+
+    fn open_plugin_editor(&mut self, plugin: &PluginInstanceInfo) {
+        match plugin.name.as_str() {
+            "West Coast Lead" => self.westcoast_editor.open(),
+            "Sub 808" => self.sub808_editor.open(),
+            "Harmoniq Edison" => self.audio_editor.open(),
+            _ => {
+                self.status_message = Some(format!("Open editor for {}", plugin.name));
+            }
+        }
+    }
+
+    fn execute_command(&mut self, action: CommandAction) {
+        match action {
+            CommandAction::TogglePianoRoll => {
+                let visible = !self.layout.persistence().piano_roll_visible;
+                self.layout.set_piano_roll_visible(visible);
+            }
+            CommandAction::ToggleBrowser => {
+                let visible = !self.layout.persistence().browser_visible;
+                self.layout.set_browser_visible(visible);
+            }
+            CommandAction::TogglePluginRack => {
+                self.plugin_rack.visible = !self.plugin_rack.visible;
+                self.layout
+                    .set_plugin_rack_visible(self.plugin_rack.visible);
+            }
+            CommandAction::AddTrack => self.add_track(),
+            CommandAction::AddInstrument => {
+                self.add_sequencer_instrument(InstrumentPlugin::WestCoastLead)
+            }
+            CommandAction::SaveProject => self.save_project(),
+            CommandAction::OpenProject => self.open_project(),
+            CommandAction::BounceProject => self.bounce_project(),
+            CommandAction::FocusMixer => self.mixer_console.open(),
+            CommandAction::FocusPlaylist => self.focus_playlist_panel(),
+            CommandAction::FocusChannelRack => self.focus_channel_rack_panel(),
+            CommandAction::SetPatternMode => self.pattern_mode = true,
+            CommandAction::SetSongMode => self.pattern_mode = false,
+        }
+    }
+
+    fn focus_playlist_panel(&mut self) {
+        if self.tracks.is_empty() {
+            self.status_message = Some("No tracks available in the playlist".into());
+            self.set_selected_clip(None);
+            return;
+        }
+        let track_idx = self
+            .selected_track
+            .unwrap_or(0)
+            .min(self.tracks.len().saturating_sub(1));
+        self.selected_track = Some(track_idx);
+        if self.tracks[track_idx].clips.is_empty() {
+            self.set_selected_clip(None);
+            self.status_message = Some(format!(
+                "Playlist focused on {}",
+                self.tracks[track_idx].name
+            ));
+        } else {
+            self.focus_clip(track_idx, 0);
+            self.status_message = Some(format!(
+                "Playlist focused on {}",
+                self.tracks[track_idx].name
+            ));
+        }
+    }
+
+    fn focus_channel_rack_panel(&mut self) {
+        if self.sequencer.instruments.is_empty() {
+            self.status_message = Some("Add an instrument to focus the channel rack".into());
+            return;
+        }
+        let instrument_idx = self
+            .focused_instrument
+            .unwrap_or(0)
+            .min(self.sequencer.instruments.len().saturating_sub(1));
+        self.focused_instrument = Some(instrument_idx);
+        let instrument = self.sequencer.instruments[instrument_idx].clone();
+        if let Some(reference) = instrument.clip {
+            if reference.track_index < self.tracks.len() {
+                self.focus_clip(reference.track_index, reference.clip_index);
+            }
+        }
+        self.status_message = Some(format!("Channel rack focused on {}", instrument.name));
+    }
+
+    fn process_plugin_actions(&mut self) {
+        let (removals, bypasses) = self.plugin_rack.take_pending();
+        if removals.is_empty() && bypasses.is_empty() {
+            return;
+        }
+        if let Ok(mut engine_ctx) = self.engine_context.lock() {
+            for (id, bypassed) in bypasses {
+                if let Some(plugin) = engine_ctx.plugins.iter_mut().find(|p| p.id == id) {
+                    plugin.bypassed = bypassed;
+                    let state = if bypassed { "bypassed" } else { "active" };
+                    self.status_message = Some(format!("{} set to {state}", plugin.name));
+                }
+            }
+            for id in removals {
+                if let Some(index) = engine_ctx.plugins.iter().position(|p| p.id == id) {
+                    let plugin = engine_ctx.plugins.remove(index);
+                    self.status_message = Some(format!("Removed {}", plugin.name));
+                }
+            }
+        }
+    }
+
+    fn draw_command_palette(&mut self, ctx: &egui::Context) {
+        if !self.command_palette.open {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Command Palette")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(Align2::CENTER_CENTER, Vec2::ZERO)
+            .fixed_size(Vec2::new(420.0, 360.0))
+            .open(&mut open)
+            .show(ctx, |ui| {
+                let palette = self.palette().clone();
+                ui.label(
+                    RichText::new("Type a command")
+                        .color(palette.text_muted)
+                        .size(14.0),
+                );
+                let edit_id = ui.make_persistent_id("command_palette_input");
+                let response = ui
+                    .add(
+                        egui::TextEdit::singleline(&mut self.command_palette.query)
+                            .desired_width(f32::INFINITY)
+                            .id(edit_id)
+                            .hint_text("Search commands..."),
+                    )
+                    .request_focus();
+                if response.changed() {
+                    self.command_palette.selected = 0;
+                }
+
+                ui.add_space(8.0);
+                let filtered = self.command_palette.filtered_indices();
+                let mut chosen: Option<CommandAction> = None;
+                egui::ScrollArea::vertical()
+                    .max_height(240.0)
+                    .show(ui, |ui| {
+                        for (row, command_index) in filtered.iter().enumerate() {
+                            let command = &self.command_palette.commands[*command_index];
+                            let selected = self.command_palette.selected == row;
+                            let label = if selected {
+                                RichText::new(command.label).color(palette.accent)
+                            } else {
+                                RichText::new(command.label).color(palette.text_primary)
+                            };
+                            let response = ui.selectable_label(selected, label);
+                            if response.clicked() {
+                                chosen = Some(command.action);
+                            }
+                            if response.hovered() {
+                                self.command_palette.selected = row;
+                            }
+                            if response.double_clicked() {
+                                chosen = Some(command.action);
+                            }
+                        }
+                    });
+                if filtered.is_empty() {
+                    ui.label(RichText::new("No matches").color(palette.text_muted));
+                }
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Enter").color(palette.text_muted).monospace());
+                    ui.label(RichText::new("to execute, Esc to cancel").color(palette.text_muted));
+                });
+
+                let mut select_index = self.command_palette.selected as isize;
+                let total = filtered.len() as isize;
+                if ctx.input(|i| i.key_pressed(Key::ArrowDown)) && total > 0 {
+                    select_index = (select_index + 1).clamp(0, total - 1);
+                    self.command_palette.selected = select_index as usize;
+                }
+                if ctx.input(|i| i.key_pressed(Key::ArrowUp)) && total > 0 {
+                    select_index = (select_index - 1).clamp(0, total - 1);
+                    self.command_palette.selected = select_index as usize;
+                }
+                if ctx.input(|i| i.key_pressed(Key::Enter)) && total > 0 {
+                    let idx = filtered
+                        .get(self.command_palette.selected)
+                        .copied()
+                        .and_then(|index| self.command_palette.commands.get(index))
+                        .map(|command| command.action);
+                    chosen = idx;
+                }
+                if ctx.input(|i| i.key_pressed(Key::Escape)) {
+                    self.command_palette.close();
+                }
+                if let Some(action) = chosen {
+                    self.execute_command(action);
+                    self.command_palette.close();
+                }
+            });
+        if !open {
+            self.command_palette.close();
+        }
+    }
 }
 
 impl App for HarmoniqStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let palette = self.palette().clone();
+
+        self.update_transport_clock(ctx);
+        self.update_engine_context();
+
+        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::CTRL, Key::P)))
+            || ctx.input_mut(|i| {
+                i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::P))
+            })
+        {
+            self.command_palette.open();
+        }
+
+        let keyboard_events = self.typing_keyboard.collect_midi_events(ctx);
+        if !keyboard_events.is_empty() {
+            self.send_command(EngineCommand::SubmitMidi(keyboard_events));
+        }
 
         egui::TopBottomPanel::top("main_menu")
             .frame(
@@ -5269,10 +6688,6 @@ impl App for HarmoniqStudioApp {
                     .outer_margin(Margin::symmetric(12.0, 4.0)),
             )
             .show(ctx, |ui| self.draw_main_menu(ui));
-        let keyboard_events = self.typing_keyboard.collect_midi_events(ctx);
-        if !keyboard_events.is_empty() {
-            self.send_command(EngineCommand::SubmitMidi(keyboard_events));
-        }
 
         egui::TopBottomPanel::top("transport")
             .frame(
@@ -5282,9 +6697,26 @@ impl App for HarmoniqStudioApp {
             )
             .show(ctx, |ui| self.draw_transport_toolbar(ui));
 
-        egui::SidePanel::left("sequencer")
+        if self.layout.persistence().browser_visible {
+            let panel = egui::SidePanel::left("browser_panel")
+                .resizable(true)
+                .default_width(self.layout.persistence().browser_width)
+                .frame(
+                    egui::Frame::none()
+                        .fill(palette.panel)
+                        .inner_margin(Margin::symmetric(16.0, 14.0))
+                        .outer_margin(Margin::symmetric(12.0, 8.0))
+                        .stroke(Stroke::new(1.0, palette.toolbar_outline))
+                        .rounding(Rounding::same(16.0)),
+                )
+                .show(ctx, |ui| self.draw_browser_panel(ui));
+            if let Some(panel) = panel {
+                self.layout.set_browser_width(panel.response.rect.width());
+            }
+        }
+        let sequencer_panel = egui::SidePanel::left("channel_rack")
             .resizable(true)
-            .default_width(260.0)
+            .default_width(self.layout.persistence().channel_rack_width)
             .frame(
                 egui::Frame::none()
                     .fill(palette.panel)
@@ -5294,10 +6726,14 @@ impl App for HarmoniqStudioApp {
                     .rounding(Rounding::same(18.0)),
             )
             .show(ctx, |ui| self.draw_sequencer(ui));
+        if let Some(panel) = sequencer_panel {
+            self.layout
+                .set_channel_rack_width(panel.response.rect.width());
+        }
 
-        egui::SidePanel::left("playlist")
+        let mixer_panel = egui::SidePanel::right("mixer_panel")
             .resizable(true)
-            .default_width(280.0)
+            .default_width(self.layout.persistence().mixer_width)
             .frame(
                 egui::Frame::none()
                     .fill(palette.panel)
@@ -5306,7 +6742,28 @@ impl App for HarmoniqStudioApp {
                     .stroke(Stroke::new(1.0, palette.toolbar_outline))
                     .rounding(Rounding::same(18.0)),
             )
-            .show(ctx, |ui| self.draw_playlist(ui));
+            .show(ctx, |ui| self.draw_mixer_panel(ui));
+        if let Some(panel) = mixer_panel {
+            self.layout.set_mixer_width(panel.response.rect.width());
+        }
+
+        if self.layout.persistence().piano_roll_visible {
+            let piano_panel = egui::TopBottomPanel::bottom("piano_roll")
+                .resizable(true)
+                .default_height(self.layout.persistence().piano_roll_height)
+                .frame(
+                    egui::Frame::none()
+                        .fill(palette.panel)
+                        .inner_margin(Margin::symmetric(18.0, 16.0))
+                        .stroke(Stroke::new(1.0, palette.toolbar_outline))
+                        .rounding(Rounding::same(18.0)),
+                )
+                .show(ctx, |ui| self.draw_piano_roll(ui));
+            if let Some(panel) = piano_panel {
+                self.layout
+                    .set_piano_roll_height(panel.response.rect.height());
+            }
+        }
 
         egui::CentralPanel::default()
             .frame(
@@ -5316,13 +6773,17 @@ impl App for HarmoniqStudioApp {
                     .stroke(Stroke::new(1.0, palette.toolbar_outline))
                     .rounding(Rounding::same(20.0)),
             )
-            .show(ctx, |ui| self.draw_piano_roll(ui));
+            .show(ctx, |ui| self.draw_playlist(ui));
 
-        self.draw_mixer_window(ctx, &palette);
+        self.draw_plugin_rack(ctx);
         self.westcoast_editor.draw(ctx, &palette);
         self.sub808_editor.draw(ctx, &palette);
         self.audio_editor.draw(ctx, &palette, &self.icons);
-
+        if ctx.input(|i| i.pointer.button_released(PointerButton::Primary))
+            && self.drag_payload.is_some()
+        {
+            self.drag_payload = None;
+        }
         if let Some(message) = self.status_message.clone() {
             let mut clear_message = false;
             egui::Window::new("Status")
@@ -5361,6 +6822,9 @@ impl App for HarmoniqStudioApp {
                     ui.label(RichText::new(error).color(palette.warning));
                 });
         }
+
+        self.draw_command_palette(ctx);
+        self.layout.maybe_save();
     }
 }
 
@@ -5397,6 +6861,28 @@ impl Track {
 
     fn add_clip(&mut self, clip: Clip) {
         self.clips.push(clip);
+    }
+
+    fn insert_clip_sorted(&mut self, clip: Clip) -> usize {
+        let key_name = clip.name.clone();
+        let key_start = clip.start_beat;
+        let key_source = clip.source_path.clone();
+        self.clips.push(clip);
+        self.clips.sort_by(|a, b| {
+            a.start_beat
+                .partial_cmp(&b.start_beat)
+                .unwrap_or(Ordering::Equal)
+        });
+        self.clips
+            .iter()
+            .enumerate()
+            .find(|(_, clip)| {
+                clip.name == key_name
+                    && (clip.start_beat - key_start).abs() <= f32::EPSILON * 4.0
+                    && clip.source_path == key_source
+            })
+            .map(|(idx, _)| idx)
+            .unwrap_or_else(|| self.clips.len().saturating_sub(1))
     }
 
     fn add_automation_lane(&mut self, lane: AutomationLane) {
@@ -5652,6 +7138,8 @@ struct ProjectClip {
     length_beats: f32,
     color: RgbaColor,
     notes: Vec<Note>,
+    #[serde(default)]
+    source_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5755,6 +7243,7 @@ impl ProjectClip {
             length_beats: clip.length_beats,
             color: clip.color.into(),
             notes: clip.notes.clone(),
+            source_path: clip.source_path.clone(),
         }
     }
 
@@ -5766,6 +7255,7 @@ impl ProjectClip {
             color: self.color.into(),
             notes: self.notes,
             launch_state: ClipLaunchState::Stopped,
+            source_path: self.source_path,
         }
     }
 }
@@ -5990,6 +7480,7 @@ struct Clip {
     color: Color32,
     notes: Vec<Note>,
     launch_state: ClipLaunchState,
+    source_path: Option<PathBuf>,
 }
 
 impl Clip {
@@ -6007,7 +7498,30 @@ impl Clip {
             color,
             notes,
             launch_state: ClipLaunchState::Stopped,
+            source_path: None,
         }
+    }
+
+    fn from_sample(
+        name: impl Into<String>,
+        start_beat: f32,
+        length_beats: f32,
+        color: Color32,
+        source_path: PathBuf,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            start_beat,
+            length_beats,
+            color,
+            notes: Vec::new(),
+            launch_state: ClipLaunchState::Stopped,
+            source_path: Some(source_path),
+        }
+    }
+
+    fn is_sample(&self) -> bool {
+        self.source_path.is_some()
     }
 }
 
@@ -6111,6 +7625,7 @@ enum InstrumentPlugin {
     WestCoastLead,
     Sub808,
     NoiseDrums,
+    Sampler,
 }
 
 impl InstrumentPlugin {
@@ -6120,6 +7635,7 @@ impl InstrumentPlugin {
             InstrumentPlugin::WestCoastLead,
             InstrumentPlugin::Sub808,
             InstrumentPlugin::NoiseDrums,
+            InstrumentPlugin::Sampler,
         ]
     }
 
@@ -6129,6 +7645,7 @@ impl InstrumentPlugin {
             InstrumentPlugin::WestCoastLead => "West Coast Lead",
             InstrumentPlugin::Sub808 => "Sub 808",
             InstrumentPlugin::NoiseDrums => "Noise Drums",
+            InstrumentPlugin::Sampler => "Sampler",
         }
     }
 
@@ -6138,6 +7655,7 @@ impl InstrumentPlugin {
             InstrumentPlugin::WestCoastLead => "Folded sine lead with LPG and modulation",
             InstrumentPlugin::Sub808 => "Punchy sub-bass generator with transient shaping",
             InstrumentPlugin::NoiseDrums => "Noise-based percussion generator for quick grooves",
+            InstrumentPlugin::Sampler => "Trigger one-shot samples directly from the channel rack",
         }
     }
 
@@ -6147,6 +7665,7 @@ impl InstrumentPlugin {
             InstrumentPlugin::WestCoastLead => 76,
             InstrumentPlugin::Sub808 => 36,
             InstrumentPlugin::NoiseDrums => 38,
+            InstrumentPlugin::Sampler => 60,
         }
     }
 
@@ -6160,6 +7679,7 @@ impl InstrumentPlugin {
             InstrumentPlugin::WestCoastLead => palette.accent,
             InstrumentPlugin::Sub808 => palette.accent_soft,
             InstrumentPlugin::NoiseDrums => palette.accent.gamma_multiply(0.85),
+            InstrumentPlugin::Sampler => palette.accent_alt.gamma_multiply(0.9),
         }
     }
 }
@@ -6207,6 +7727,7 @@ struct SequencerInstrument {
     mixer_track: usize,
     pattern: SequencerPattern,
     clip: Option<ClipReference>,
+    sample_path: Option<PathBuf>,
 }
 
 impl SequencerInstrument {
@@ -6224,6 +7745,7 @@ impl SequencerInstrument {
             mixer_track,
             pattern,
             clip: None,
+            sample_path: None,
         }
     }
 }
@@ -6373,4 +7895,72 @@ struct PianoRollDragState {
     initial_length: f32,
     initial_end: f32,
     initial_pitch: u8,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::Color32;
+    use tempfile::tempdir;
+
+    #[test]
+    fn layout_persistence_roundtrip() {
+        let dir = tempdir().expect("temp dir");
+        let layout_path = dir.path().join("layout.json");
+        std::env::set_var("HARMONIQ_UI_LAYOUT_PATH", layout_path.to_str().unwrap());
+
+        let mut layout = LayoutState::load();
+        layout.set_browser_width(360.0);
+        layout.set_piano_roll_visible(false);
+        layout.flush();
+
+        let reloaded = LayoutState::load();
+        std::env::remove_var("HARMONIQ_UI_LAYOUT_PATH");
+
+        assert!((reloaded.persistence().browser_width - 360.0).abs() < 1e-3);
+        assert!(!reloaded.persistence().piano_roll_visible);
+    }
+
+    #[test]
+    fn waveform_preview_rejects_non_wav() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("sample.txt");
+        std::fs::write(&path, b"not audio").expect("write");
+
+        let result = generate_waveform_preview(&path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn insert_sample_clip_places_clip_on_track() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("clip.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).expect("writer");
+        for _ in 0..48_000 {
+            writer.write_sample(0i16).expect("sample");
+        }
+        writer.finalize().expect("finalize");
+
+        let mut tracks = vec![Track::new("Track 01")];
+        let color = Color32::from_rgb(128, 64, 192);
+        let (index, warning) =
+            insert_sample_clip_on_track(&mut tracks, 0, 3.2, path.clone(), 120.0, color)
+                .expect("clip insertion");
+
+        assert!(warning.is_none());
+        let clip = &tracks[0].clips[index];
+        assert!(clip.is_sample());
+        assert!(clip
+            .source_path
+            .as_ref()
+            .is_some_and(|stored| stored == &path));
+        assert!((clip.start_beat - 3.25).abs() < 1e-3);
+        assert!((clip.length_beats - 2.0).abs() < 0.01);
+    }
 }
