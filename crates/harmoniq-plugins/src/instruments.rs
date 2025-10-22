@@ -878,6 +878,10 @@ impl SampleBuffer {
             self.channels.resize(count, Vec::new());
         }
     }
+
+    pub fn into_channels(self) -> (u32, Vec<Vec<f32>>) {
+        (self.sample_rate, self.channels)
+    }
 }
 
 fn hint_for_path(path: Option<&Path>) -> Hint {
