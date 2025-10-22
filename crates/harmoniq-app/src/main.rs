@@ -601,7 +601,12 @@ impl EngineContext {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LayoutPersistence {
     browser_width: f32,
-    channel_rack_width: f32,
+    #[serde(
+        default = "LayoutPersistence::default_sequencer_height",
+        alias = "channel_rack_width"
+    )]
+    sequencer_height: f32,
+    #[serde(default = "LayoutPersistence::default_mixer_width")]
     mixer_width: f32,
     piano_roll_height: f32,
     browser_visible: bool,
@@ -609,12 +614,22 @@ struct LayoutPersistence {
     piano_roll_visible: bool,
 }
 
+impl LayoutPersistence {
+    fn default_sequencer_height() -> f32 {
+        340.0
+    }
+
+    fn default_mixer_width() -> f32 {
+        360.0
+    }
+}
+
 impl Default for LayoutPersistence {
     fn default() -> Self {
         Self {
             browser_width: 240.0,
-            channel_rack_width: 340.0,
-            mixer_width: 360.0,
+            sequencer_height: Self::default_sequencer_height(),
+            mixer_width: Self::default_mixer_width(),
             piano_roll_height: 240.0,
             browser_visible: true,
             plugin_rack_visible: true,
@@ -672,9 +687,13 @@ impl LayoutState {
         }
     }
 
-    fn set_channel_rack_width(&mut self, width: f32) {
-        if (self.persistence.channel_rack_width - width).abs() > 0.5 {
-            self.persistence.channel_rack_width = width.max(240.0);
+    fn sequencer_height(&self) -> f32 {
+        self.persistence.sequencer_height
+    }
+
+    fn set_sequencer_height(&mut self, height: f32) {
+        if (self.persistence.sequencer_height - height).abs() > 0.5 {
+            self.persistence.sequencer_height = height.max(220.0);
             self.needs_save = true;
         }
     }
@@ -2643,7 +2662,7 @@ struct MixerConsolePluginState {
 impl Default for MixerConsolePluginState {
     fn default() -> Self {
         Self {
-            show: true,
+            show: false,
             default_size: Vec2::new(960.0, 420.0),
             min_size: Vec2::new(640.0, 320.0),
         }
@@ -2677,6 +2696,7 @@ struct AppState {
     piano_roll: PianoRollState,
     piano_roll_selected_note: Option<usize>,
     piano_roll_drag: Option<PianoRollDragState>,
+    sequencer_resize_start: Option<f32>,
     last_error: Option<String>,
     status_message: Option<String>,
     audio_settings: AudioSettingsState,
@@ -2796,6 +2816,7 @@ impl HarmoniqStudioApp {
             piano_roll: PianoRollState::default(),
             piano_roll_selected_note: None,
             piano_roll_drag: None,
+            sequencer_resize_start: None,
             last_error: None,
             status_message: startup_status,
             audio_settings,
@@ -3796,13 +3817,35 @@ impl HarmoniqStudioApp {
         }
     }
 
+    fn add_effect_to_selected_track(&mut self, effect: EffectType) {
+        const MAX_INSERT_SLOTS: usize = 6;
+        let Some(track_idx) = self.selected_track else {
+            self.last_error = Some("Select a track before adding an effect".into());
+            self.status_message = None;
+            return;
+        };
+
+        if let Some(track) = self.tracks.get_mut(track_idx) {
+            if track.effects.len() >= MAX_INSERT_SLOTS {
+                self.last_error = Some(format!("{} has no available insert slots", track.name));
+                self.status_message = None;
+                return;
+            }
+
+            track.effects.push(MixerEffect::new(effect));
+            self.status_message =
+                Some(format!("Added {} to {}", effect.display_name(), track.name));
+            self.last_error = None;
+        }
+    }
+
     fn draw_main_menu(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette().clone();
         egui::Frame::none()
             .fill(palette.toolbar)
             .stroke(Stroke::new(1.0, palette.toolbar_outline))
-            .rounding(Rounding::same(18.0))
-            .inner_margin(Margin::symmetric(16.0, 8.0))
+            .rounding(Rounding::same(14.0))
+            .inner_margin(Margin::symmetric(12.0, 6.0))
             .show(ui, |ui| {
                 egui::menu::bar(ui, |ui| {
                     ui.menu_button("File", |ui| {
@@ -3911,12 +3954,12 @@ impl HarmoniqStudioApp {
         egui::Frame::none()
             .fill(palette.toolbar)
             .stroke(Stroke::new(1.0, palette.toolbar_outline))
-            .rounding(Rounding::same(18.0))
-            .inner_margin(Margin::symmetric(20.0, 14.0))
+            .rounding(Rounding::same(14.0))
+            .inner_margin(Margin::symmetric(12.0, 10.0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(16.0, 12.0);
+                    ui.spacing_mut().item_spacing = egui::vec2(12.0, 8.0);
 
                     let playing = matches!(self.transport_state, TransportState::Playing);
                     let recording = matches!(self.transport_state, TransportState::Recording);
@@ -3932,7 +3975,7 @@ impl HarmoniqStudioApp {
                             if playing { "Pause" } else { "Play" },
                             (palette.accent, palette.accent_alt),
                             playing,
-                            Vec2::new(132.0, 44.0),
+                            Vec2::new(112.0, 36.0),
                         )
                         .clicked()
                     {
@@ -3946,7 +3989,7 @@ impl HarmoniqStudioApp {
                             "Stop",
                             (palette.warning, palette.accent_soft),
                             matches!(self.transport_state, TransportState::Stopped),
-                            Vec2::new(112.0, 44.0),
+                            Vec2::new(96.0, 36.0),
                         )
                         .clicked()
                     {
@@ -3963,7 +4006,7 @@ impl HarmoniqStudioApp {
                             } else {
                                 palette.panel_alt
                             })
-                            .min_size(Vec2::new(92.0, 44.0)),
+                            .min_size(Vec2::new(82.0, 36.0)),
                         )
                         .on_hover_text("Arm the transport for recording");
                     if record_response.clicked() {
@@ -4034,7 +4077,7 @@ impl HarmoniqStudioApp {
                         ui.label(
                             RichText::new(self.transport_clock.format())
                                 .monospace()
-                                .size(20.0)
+                                .size(18.0)
                                 .color(palette.text_primary),
                         );
                         ui.label(
@@ -4068,6 +4111,59 @@ impl HarmoniqStudioApp {
                     ui.separator();
 
                     ui.vertical(|ui| {
+                        self.section_label(ui, &self.icons.settings, "Plugins");
+                        ui.add_space(2.0);
+                        ui.menu_button(RichText::new("Manage").color(palette.text_primary), |ui| {
+                            ui.menu_button("Add Instrument", |ui| {
+                                for plugin in InstrumentPlugin::all() {
+                                    if ui
+                                        .button(plugin.display_name())
+                                        .on_hover_text(plugin.description())
+                                        .clicked()
+                                    {
+                                        self.add_sequencer_instrument(*plugin);
+                                        ui.close_menu();
+                                    }
+                                }
+                            });
+                            ui.menu_button("Add Effect", |ui| {
+                                if self.selected_track.is_none() {
+                                    ui.label(
+                                        RichText::new("Select a track to target")
+                                            .color(palette.text_muted)
+                                            .small(),
+                                    );
+                                    ui.separator();
+                                }
+                                for effect in EffectType::all() {
+                                    if ui.button(effect.display_name()).clicked() {
+                                        self.add_effect_to_selected_track(*effect);
+                                        ui.close_menu();
+                                    }
+                                }
+                            });
+                            ui.separator();
+                            let rack_label = if self.plugin_rack.visible {
+                                "Hide Plugin Rack"
+                            } else {
+                                "Show Plugin Rack"
+                            };
+                            if ui.button(rack_label).clicked() {
+                                self.plugin_rack.visible = !self.plugin_rack.visible;
+                                let visible = self.plugin_rack.visible;
+                                self.layout.set_plugin_rack_visible(visible);
+                                ui.close_menu();
+                            }
+                            if ui.button("Open Mixer Console").clicked() {
+                                self.mixer_console.open();
+                                ui.close_menu();
+                            }
+                        });
+                    });
+
+                    ui.separator();
+
+                    ui.vertical(|ui| {
                         ui.label(RichText::new("Panels").color(palette.text_muted));
                         let mut browser = self.layout.persistence().browser_visible;
                         if ui.checkbox(&mut browser, "Browser").clicked() {
@@ -4076,11 +4172,6 @@ impl HarmoniqStudioApp {
                         let mut piano_roll = self.layout.persistence().piano_roll_visible;
                         if ui.checkbox(&mut piano_roll, "Piano Roll").clicked() {
                             self.layout.set_piano_roll_visible(piano_roll);
-                        }
-                        let mut plugin_rack = self.plugin_rack.visible;
-                        if ui.checkbox(&mut plugin_rack, "Plugin Rack").clicked() {
-                            self.plugin_rack.visible = plugin_rack;
-                            self.layout.set_plugin_rack_visible(plugin_rack);
                         }
                     });
                 });
@@ -6118,19 +6209,20 @@ impl HarmoniqStudioApp {
 
     fn draw_mixer_window(&mut self, ctx: &egui::Context, palette: &HarmoniqPalette) {
         let mut open = self.mixer_console.show;
-        let default_size = self.mixer_console.default_size;
         let min_size = self.mixer_console.min_size;
+        let default_width = self.layout.persistence().mixer_width.max(min_size.x);
+        let default_height = self.mixer_console.default_size.y.max(min_size.y);
 
         if !open {
             self.mixer_console.show = false;
             return;
         }
 
-        egui::Window::new("Mixer Console")
+        if let Some(window) = egui::Window::new("Mixer Console")
             .open(&mut open)
             .resizable(true)
             .collapsible(false)
-            .default_size(default_size)
+            .default_size(Vec2::new(default_width, default_height))
             .min_size(min_size)
             .show(ctx, |ui| {
                 ui.set_min_size(min_size);
@@ -6138,11 +6230,18 @@ impl HarmoniqStudioApp {
                     .fill(palette.panel)
                     .stroke(Stroke::new(1.0, palette.toolbar_outline))
                     .rounding(Rounding::same(18.0))
-                    .inner_margin(Margin::symmetric(18.0, 14.0))
+                    .inner_margin(Margin::symmetric(16.0, 12.0))
                     .show(ui, |ui| {
                         self.draw_mixer_console_contents(ui);
                     });
-            });
+            })
+        {
+            let rect = window.response.rect;
+            self.layout.set_mixer_width(rect.width());
+            let size = rect.size();
+            self.mixer_console.default_size =
+                Vec2::new(size.x.max(min_size.x), size.y.max(min_size.y));
+        }
 
         self.mixer_console.show = open;
     }
@@ -6496,17 +6595,6 @@ impl HarmoniqStudioApp {
                 }
             }
         });
-    }
-
-    fn draw_mixer_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading(
-            RichText::new("Mixer")
-                .color(self.palette().text_primary)
-                .size(18.0)
-                .strong(),
-        );
-        ui.add_space(6.0);
-        self.draw_mixer_console_contents(ui);
     }
 
     fn draw_plugin_rack(&mut self, ctx: &egui::Context) {
@@ -6878,7 +6966,7 @@ impl App for HarmoniqStudioApp {
             .frame(
                 egui::Frame::none()
                     .fill(palette.background)
-                    .outer_margin(Margin::symmetric(12.0, 4.0)),
+                    .outer_margin(Margin::symmetric(6.0, 2.0)),
             )
             .show(ctx, |ui| self.draw_main_menu(ui));
 
@@ -6886,7 +6974,7 @@ impl App for HarmoniqStudioApp {
             .frame(
                 egui::Frame::none()
                     .fill(palette.background)
-                    .outer_margin(Margin::symmetric(12.0, 10.0)),
+                    .outer_margin(Margin::symmetric(6.0, 4.0)),
             )
             .show(ctx, |ui| self.draw_transport_toolbar(ui));
 
@@ -6897,44 +6985,14 @@ impl App for HarmoniqStudioApp {
                 .frame(
                     egui::Frame::none()
                         .fill(palette.panel)
-                        .inner_margin(Margin::symmetric(16.0, 14.0))
-                        .outer_margin(Margin::symmetric(12.0, 8.0))
+                        .inner_margin(Margin::symmetric(14.0, 12.0))
+                        .outer_margin(Margin::symmetric(6.0, 4.0))
                         .stroke(Stroke::new(1.0, palette.toolbar_outline))
                         .rounding(Rounding::same(16.0)),
                 )
                 .show(ctx, |ui| self.draw_browser_panel(ui));
             self.layout.set_browser_width(panel.response.rect.width());
         }
-        let sequencer_panel = egui::SidePanel::left("channel_rack")
-            .resizable(true)
-            .default_width(self.layout.persistence().channel_rack_width)
-            .frame(
-                egui::Frame::none()
-                    .fill(palette.panel)
-                    .inner_margin(Margin::symmetric(18.0, 16.0))
-                    .outer_margin(Margin::symmetric(12.0, 8.0))
-                    .stroke(Stroke::new(1.0, palette.toolbar_outline))
-                    .rounding(Rounding::same(18.0)),
-            )
-            .show(ctx, |ui| self.draw_sequencer(ui));
-        self.layout
-            .set_channel_rack_width(sequencer_panel.response.rect.width());
-
-        let mixer_panel = egui::SidePanel::right("mixer_panel")
-            .resizable(true)
-            .default_width(self.layout.persistence().mixer_width)
-            .frame(
-                egui::Frame::none()
-                    .fill(palette.panel)
-                    .inner_margin(Margin::symmetric(18.0, 16.0))
-                    .outer_margin(Margin::symmetric(12.0, 8.0))
-                    .stroke(Stroke::new(1.0, palette.toolbar_outline))
-                    .rounding(Rounding::same(18.0)),
-            )
-            .show(ctx, |ui| self.draw_mixer_panel(ui));
-        self.layout
-            .set_mixer_width(mixer_panel.response.rect.width());
-
         if self.layout.persistence().piano_roll_visible {
             let piano_panel = egui::TopBottomPanel::bottom("piano_roll")
                 .resizable(true)
@@ -6942,7 +7000,7 @@ impl App for HarmoniqStudioApp {
                 .frame(
                     egui::Frame::none()
                         .fill(palette.panel)
-                        .inner_margin(Margin::symmetric(18.0, 16.0))
+                        .inner_margin(Margin::symmetric(14.0, 12.0))
                         .stroke(Stroke::new(1.0, palette.toolbar_outline))
                         .rounding(Rounding::same(18.0)),
                 )
@@ -6955,11 +7013,73 @@ impl App for HarmoniqStudioApp {
             .frame(
                 egui::Frame::none()
                     .fill(palette.panel)
-                    .inner_margin(Margin::symmetric(18.0, 16.0))
+                    .inner_margin(Margin::symmetric(14.0, 12.0))
                     .stroke(Stroke::new(1.0, palette.toolbar_outline))
-                    .rounding(Rounding::same(20.0)),
+                    .rounding(Rounding::same(18.0)),
             )
-            .show(ctx, |ui| self.draw_playlist(ui));
+            .show(ctx, |ui| {
+                let available_width = ui.available_width();
+                let total_height = ui.available_height();
+                let min_sequencer = 220.0;
+                let min_playlist = 220.0;
+                let handle_height = 6.0;
+                let gutter = handle_height + 6.0;
+                let max_sequencer = (total_height - min_playlist - gutter).max(min_sequencer);
+                let stored_height = self.layout.sequencer_height();
+                let mut sequencer_height = stored_height.clamp(min_sequencer, max_sequencer);
+
+                let sequencer_area = ui.allocate_ui_with_layout(
+                    Vec2::new(available_width, sequencer_height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_source("sequencer_scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| self.draw_sequencer(ui));
+                    },
+                );
+                sequencer_height = sequencer_area
+                    .response
+                    .rect
+                    .height()
+                    .clamp(min_sequencer, max_sequencer);
+
+                let (handle_rect, handle_response_raw) = ui
+                    .allocate_exact_size(Vec2::new(available_width, handle_height), Sense::drag());
+                let handle_response =
+                    handle_response_raw.on_hover_cursor(CursorIcon::ResizeVertical);
+                let handle_color = if handle_response.dragged() || handle_response.hovered() {
+                    palette.toolbar_outline.gamma_multiply(0.8)
+                } else {
+                    palette.toolbar_outline.gamma_multiply(0.45)
+                };
+                ui.painter_at(handle_rect)
+                    .rect_filled(handle_rect, 3.0, handle_color);
+
+                if handle_response.drag_started() {
+                    self.sequencer_resize_start = Some(sequencer_height);
+                }
+                if handle_response.dragged() {
+                    let start = self.sequencer_resize_start.unwrap_or(sequencer_height);
+                    let target = (start + handle_response.drag_delta().y)
+                        .clamp(min_sequencer, max_sequencer);
+                    self.layout.set_sequencer_height(target);
+                } else {
+                    self.layout.set_sequencer_height(sequencer_height);
+                    self.sequencer_resize_start = None;
+                }
+
+                ui.add_space(6.0);
+
+                let playlist_size = ui.available_size();
+                ui.allocate_ui_with_layout(
+                    playlist_size,
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| self.draw_playlist(ui),
+                );
+            });
+
+        self.draw_mixer_window(ctx, &palette);
 
         self.draw_plugin_rack(ctx);
         self.draw_external_plugin_editors(ctx);
