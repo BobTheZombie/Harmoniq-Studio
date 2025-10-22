@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use petgraph::stable_graph::{NodeIndex, StableDiGraph};
 
@@ -134,16 +135,149 @@ impl GraphBuilder {
 /// Simple stereo mixer that sums node outputs into the master buffer.
 pub(crate) fn mixdown(handle: &GraphHandle, master: &mut AudioBuffer, sources: &[AudioBuffer]) {
     master.clear();
+
+    let mix_impl = *MIX_IMPLEMENTATION.get_or_init(detect_mix_impl);
+    let master_channels = master.as_mut_slice();
+    let channel_count = master_channels.len();
+
     for (index, node) in handle.plugin_nodes.iter().enumerate() {
         let gain = handle.gain_for(*node);
+        if gain == 0.0 {
+            continue;
+        }
+
         if let Some(source) = sources.get(index) {
-            for (target_channel, source_channel) in master.channels_mut().zip(source.channels()) {
-                for (target_sample, source_sample) in
-                    target_channel.iter_mut().zip(source_channel.iter())
-                {
-                    *target_sample += source_sample * gain;
-                }
+            let source_channels = source.as_slice();
+            let limit = channel_count.min(source_channels.len());
+
+            for channel_index in 0..limit {
+                mix_channel_with_impl(
+                    master_channels[channel_index].as_mut_slice(),
+                    source_channels[channel_index].as_slice(),
+                    gain,
+                    mix_impl,
+                );
             }
         }
+    }
+}
+
+#[derive(Copy, Clone)]
+enum MixImplementation {
+    Scalar,
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    Avx2,
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    Avx512,
+}
+
+static MIX_IMPLEMENTATION: OnceLock<MixImplementation> = OnceLock::new();
+
+fn detect_mix_impl() -> MixImplementation {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if std::is_x86_feature_detected!("avx512f") {
+            return MixImplementation::Avx512;
+        }
+        if std::is_x86_feature_detected!("avx2") {
+            return MixImplementation::Avx2;
+        }
+    }
+
+    MixImplementation::Scalar
+}
+
+#[inline(always)]
+fn mix_channel_with_impl(
+    target: &mut [f32],
+    source: &[f32],
+    gain: f32,
+    implementation: MixImplementation,
+) {
+    if gain == 0.0 {
+        return;
+    }
+
+    let len = target.len().min(source.len());
+    if len == 0 {
+        return;
+    }
+
+    let (target_prefix, _) = target.split_at_mut(len);
+    let source_prefix = &source[..len];
+
+    match implementation {
+        MixImplementation::Scalar => mix_channel_scalar(target_prefix, source_prefix, gain),
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        MixImplementation::Avx2 => unsafe { mix_channel_avx2(target_prefix, source_prefix, gain) },
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        MixImplementation::Avx512 => unsafe {
+            mix_channel_avx512(target_prefix, source_prefix, gain)
+        },
+    }
+}
+
+#[inline(always)]
+fn mix_channel_scalar(target: &mut [f32], source: &[f32], gain: f32) {
+    for (dst, src) in target.iter_mut().zip(source.iter()) {
+        *dst = src.mul_add(gain, *dst);
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+unsafe fn mix_channel_avx2(target: &mut [f32], source: &[f32], gain: f32) {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    let len = target.len();
+    let ptr_target = target.as_mut_ptr();
+    let ptr_source = source.as_ptr();
+    let gain_vec = _mm256_set1_ps(gain);
+
+    let mut offset = 0usize;
+    while offset + 8 <= len {
+        let src = _mm256_loadu_ps(ptr_source.add(offset));
+        let dst = _mm256_loadu_ps(ptr_target.add(offset));
+        let sum = _mm256_add_ps(dst, _mm256_mul_ps(src, gain_vec));
+        _mm256_storeu_ps(ptr_target.add(offset), sum);
+        offset += 8;
+    }
+
+    let remainder = len - offset;
+    if remainder > 0 {
+        let target_tail = std::slice::from_raw_parts_mut(ptr_target.add(offset), remainder);
+        let source_tail = std::slice::from_raw_parts(ptr_source.add(offset), remainder);
+        mix_channel_scalar(target_tail, source_tail, gain);
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+unsafe fn mix_channel_avx512(target: &mut [f32], source: &[f32], gain: f32) {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    let len = target.len();
+    let ptr_target = target.as_mut_ptr();
+    let ptr_source = source.as_ptr();
+    let gain_vec = _mm512_set1_ps(gain);
+
+    let mut offset = 0usize;
+    while offset + 16 <= len {
+        let src = _mm512_loadu_ps(ptr_source.add(offset));
+        let dst = _mm512_loadu_ps(ptr_target.add(offset));
+        let sum = _mm512_add_ps(dst, _mm512_mul_ps(src, gain_vec));
+        _mm512_storeu_ps(ptr_target.add(offset), sum);
+        offset += 16;
+    }
+
+    let remainder = len - offset;
+    if remainder > 0 {
+        let target_tail = std::slice::from_raw_parts_mut(ptr_target.add(offset), remainder);
+        let source_tail = std::slice::from_raw_parts(ptr_source.add(offset), remainder);
+        mix_channel_scalar(target_tail, source_tail, gain);
     }
 }

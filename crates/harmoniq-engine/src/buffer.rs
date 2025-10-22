@@ -84,6 +84,10 @@ impl AudioBuffer {
     pub fn as_slice(&self) -> &[Vec<f32>] {
         &self.channels
     }
+
+    pub fn as_mut_slice(&mut self) -> &mut [Vec<f32>] {
+        &mut self.channels
+    }
 }
 
 impl Default for AudioBuffer {

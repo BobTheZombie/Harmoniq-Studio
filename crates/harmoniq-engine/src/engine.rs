@@ -442,14 +442,25 @@ impl DelayCompensator {
             }
 
             let mut write_pos = self.write_positions[channel_index] % capacity;
+            let mut read_pos = if write_pos >= delay {
+                write_pos - delay
+            } else {
+                write_pos + capacity - delay;
+            };
+
             for sample in channel.iter_mut() {
-                let read_pos = (write_pos + capacity - delay) % capacity;
                 let delayed = storage[read_pos];
                 storage[write_pos] = *sample;
                 *sample = delayed;
+
                 write_pos += 1;
                 if write_pos == capacity {
                     write_pos = 0;
+                }
+
+                read_pos += 1;
+                if read_pos == capacity {
+                    read_pos = 0;
                 }
             }
             self.write_positions[channel_index] = write_pos;
