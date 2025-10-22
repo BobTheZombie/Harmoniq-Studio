@@ -24,7 +24,7 @@ use crate::midi::{open_midi_input, MidiConnection};
 pub enum AudioBackend {
     Auto,
     Alsa,
-    Jack,
+    Harmoniq,
     PulseAudio,
     PipeWire,
     Asio,
@@ -47,16 +47,7 @@ impl AudioBackend {
                     None
                 }
             }
-            AudioBackend::Jack => {
-                #[cfg(target_os = "linux")]
-                {
-                    Some(cpal::HostId::Jack)
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    None
-                }
-            }
+            AudioBackend::Harmoniq => None,
             AudioBackend::PulseAudio => {
                 #[cfg(target_os = "linux")]
                 {
@@ -123,8 +114,6 @@ impl AudioBackend {
                     Some(Self::Alsa)
                 }
             }
-            #[cfg(target_os = "linux")]
-            cpal::HostId::Jack => Some(Self::Jack),
             #[cfg(target_os = "windows")]
             cpal::HostId::Asio => Some(Self::Asio),
             #[cfg(target_os = "windows")]
@@ -141,7 +130,7 @@ impl fmt::Display for AudioBackend {
         let name = match self {
             AudioBackend::Auto => "auto",
             AudioBackend::Alsa => "ALSA",
-            AudioBackend::Jack => "JACK",
+            AudioBackend::Harmoniq => "Harmoniq Ultra",
             AudioBackend::PulseAudio => "PulseAudio",
             AudioBackend::PipeWire => "PipeWire",
             AudioBackend::Asio => "ASIO",
@@ -186,7 +175,6 @@ fn is_pulseaudio_active() -> bool {
 fn linux_host_prefix(host: cpal::HostId) -> String {
     #[allow(unreachable_patterns)]
     match host {
-        cpal::HostId::Jack => "jack".to_string(),
         cpal::HostId::Alsa => "alsa".to_string(),
         other => other.name().to_ascii_lowercase(),
     }
@@ -201,9 +189,7 @@ fn linux_device_identifier(host: cpal::HostId, name: &str) -> String {
 fn parse_linux_device_selector(selector: &str) -> Option<(cpal::HostId, &str)> {
     let (prefix, rest) = selector.split_once("::")?;
     let host_id = match prefix {
-        "jack" => cpal::HostId::Jack,
         "alsa" | "pipewire" | "pulseaudio" => cpal::HostId::Alsa,
-        other if other.eq_ignore_ascii_case("jack") => cpal::HostId::Jack,
         other
             if other.eq_ignore_ascii_case("alsa")
                 || other.eq_ignore_ascii_case("pipewire")
@@ -219,7 +205,6 @@ fn parse_linux_device_selector(selector: &str) -> Option<(cpal::HostId, &str)> {
 #[cfg(target_os = "linux")]
 fn sanitize_device_for_backend(backend: AudioBackend, selection: Option<&str>) -> Option<String> {
     let host_id = match backend {
-        AudioBackend::Jack => Some(cpal::HostId::Jack),
         AudioBackend::PulseAudio | AudioBackend::PipeWire | AudioBackend::Alsa => {
             Some(cpal::HostId::Alsa)
         }
@@ -249,11 +234,8 @@ fn sanitize_asio_selector(selection: Option<&str>) -> (Option<cpal::HostId>, Opt
                 (Some(host), Some(linux_device_identifier(host, name)))
             } else {
                 let host = select_default_linux_asio_host();
-                if let Some(host) = host {
-                    (Some(host), Some(linux_device_identifier(host, selector)))
-                } else {
-                    (None, None)
-                }
+                host.map(|host| (Some(host), Some(linux_device_identifier(host, selector))))
+                    .unwrap_or((None, None))
             }
         }
         _ => (select_default_linux_asio_host(), None),
@@ -263,9 +245,7 @@ fn sanitize_asio_selector(selection: Option<&str>) -> (Option<cpal::HostId>, Opt
 #[cfg(target_os = "linux")]
 fn select_default_linux_asio_host() -> Option<cpal::HostId> {
     let available = cpal::available_hosts();
-    if available.contains(&cpal::HostId::Jack) {
-        Some(cpal::HostId::Jack)
-    } else if available.contains(&cpal::HostId::Alsa) {
+    if available.contains(&cpal::HostId::Alsa) {
         Some(cpal::HostId::Alsa)
     } else {
         None
@@ -278,12 +258,8 @@ fn linux_backend_label(backend: AudioBackend, host_id: Option<cpal::HostId>) -> 
         AudioBackend::PipeWire => "PipeWire (via ALSA)".to_string(),
         AudioBackend::PulseAudio => "PulseAudio (via ALSA)".to_string(),
         AudioBackend::Alsa => "ALSA".to_string(),
-        AudioBackend::Jack => "JACK".to_string(),
-        AudioBackend::Asio => match host_id {
-            Some(cpal::HostId::Jack) => "Linux ASIO (JACK)".to_string(),
-            Some(cpal::HostId::Alsa) => "Linux ASIO (ALSA)".to_string(),
-            _ => "Linux ASIO".to_string(),
-        },
+        AudioBackend::Harmoniq => "Harmoniq Ultra".to_string(),
+        AudioBackend::Asio => "Linux ASIO (ALSA)".to_string(),
         other => other.to_string(),
     }
 }
@@ -348,6 +324,7 @@ pub struct RealtimeAudio {
 enum StreamBackend {
     Cpal(cpal::Stream),
     LinuxAsio(LinuxAsioDriver),
+    Ultra(harmoniq_engine::sound_server::UltraLowLatencyServer),
 }
 
 struct StreamCreation {
@@ -428,45 +405,16 @@ impl RealtimeAudio {
             #[cfg(target_os = "linux")]
             {
                 let mut candidates: Vec<AudioBackend> = Vec::new();
-                let selection_host = options
-                    .output_device
-                    .as_deref()
-                    .and_then(|sel| parse_linux_device_selector(sel).map(|(host, _)| host));
-
-                if let Some(host) = selection_host {
-                    #[allow(unreachable_patterns)]
-                    match host {
-                        cpal::HostId::Jack => {
-                            Self::push_unique_backend(&mut candidates, AudioBackend::Jack);
-                        }
-                        cpal::HostId::Alsa => {
-                            if is_pipewire_active() {
-                                Self::push_unique_backend(&mut candidates, AudioBackend::PipeWire);
-                            }
-                            if is_pulseaudio_active() {
-                                Self::push_unique_backend(
-                                    &mut candidates,
-                                    AudioBackend::PulseAudio,
-                                );
-                            }
-                            Self::push_unique_backend(&mut candidates, AudioBackend::Alsa);
-                        }
-                        _ => {}
-                    }
-                }
-
                 let available = cpal::available_hosts();
                 let has_alsa = available.contains(&cpal::HostId::Alsa);
-                let has_jack = available.contains(&cpal::HostId::Jack);
+
+                Self::push_unique_backend(&mut candidates, AudioBackend::Harmoniq);
 
                 if has_alsa && is_pulseaudio_active() {
                     Self::push_unique_backend(&mut candidates, AudioBackend::PulseAudio);
                 }
                 if has_alsa && is_pipewire_active() {
                     Self::push_unique_backend(&mut candidates, AudioBackend::PipeWire);
-                }
-                if has_jack {
-                    Self::push_unique_backend(&mut candidates, AudioBackend::Jack);
                 }
                 if has_alsa {
                     Self::push_unique_backend(&mut candidates, AudioBackend::Alsa);
@@ -538,14 +486,28 @@ impl RealtimeAudio {
                     host_label,
                 })
             }
-            AudioBackend::PulseAudio
-            | AudioBackend::PipeWire
-            | AudioBackend::Alsa
-            | AudioBackend::Jack => {
-                let host_id = match backend {
-                    AudioBackend::Jack => cpal::HostId::Jack,
-                    _ => cpal::HostId::Alsa,
-                };
+            AudioBackend::Harmoniq => {
+                let device = options
+                    .output_device
+                    .clone()
+                    .or_else(|| Some("default".to_string()));
+                let server = harmoniq_engine::sound_server::UltraLowLatencyServer::start(
+                    Arc::clone(&engine),
+                    config.clone(),
+                    harmoniq_engine::sound_server::UltraLowLatencyOptions::default()
+                        .with_device(device.clone()),
+                )?;
+                let device_name = device.unwrap_or_else(|| server.device_name().to_string());
+                Ok(StreamCreation {
+                    stream: StreamBackend::Ultra(server),
+                    backend: AudioBackend::Harmoniq,
+                    device_name,
+                    device_id: None,
+                    host_label: Some("Harmoniq Ultra".to_string()),
+                })
+            }
+            AudioBackend::PulseAudio | AudioBackend::PipeWire | AudioBackend::Alsa => {
+                let host_id = cpal::HostId::Alsa;
                 if !cpal::available_hosts().contains(&host_id) {
                     anyhow::bail!("backend {backend} is not available on this system");
                 }
@@ -868,7 +830,7 @@ fn device_identifier_for_backend(
     #[cfg(target_os = "linux")]
     {
         match backend {
-            AudioBackend::Jack => linux_device_identifier(cpal::HostId::Jack, name),
+            AudioBackend::Harmoniq => format!("harmoniq::{name}"),
             AudioBackend::PulseAudio | AudioBackend::PipeWire | AudioBackend::Alsa => {
                 linux_device_identifier(cpal::HostId::Alsa, name)
             }
@@ -903,6 +865,18 @@ pub fn available_backends() -> Vec<(AudioBackend, String)> {
 
     #[cfg(target_os = "linux")]
     {
+        if hosts
+            .iter()
+            .all(|(backend, _)| *backend != AudioBackend::Harmoniq)
+        {
+            hosts.insert(
+                1,
+                (
+                    AudioBackend::Harmoniq,
+                    "Harmoniq Ultra (custom ALSA server)".to_string(),
+                ),
+            );
+        }
         if hosts
             .iter()
             .all(|(backend, _)| *backend != AudioBackend::PulseAudio)
@@ -992,13 +966,6 @@ fn linux_available_output_devices(backend: AudioBackend) -> anyhow::Result<Vec<O
     let mut devices = Vec::new();
     match backend {
         AudioBackend::Asio => {
-            if let Ok(host) = cpal::host_from_id(cpal::HostId::Jack) {
-                devices.extend(enumerate_linux_devices(
-                    &host,
-                    AudioBackend::Asio,
-                    cpal::HostId::Jack,
-                ));
-            }
             if let Ok(host) = cpal::host_from_id(cpal::HostId::Alsa) {
                 for device in enumerate_linux_devices(&host, AudioBackend::Asio, cpal::HostId::Alsa)
                 {
@@ -1012,9 +979,20 @@ fn linux_available_output_devices(backend: AudioBackend) -> anyhow::Result<Vec<O
             let host = cpal::host_from_id(cpal::HostId::Alsa)?;
             devices.extend(enumerate_linux_devices(&host, backend, cpal::HostId::Alsa));
         }
-        AudioBackend::Jack => {
-            let host = cpal::host_from_id(cpal::HostId::Jack)?;
-            devices.extend(enumerate_linux_devices(&host, backend, cpal::HostId::Jack));
+        AudioBackend::Harmoniq => {
+            if let Ok(host) = cpal::host_from_id(cpal::HostId::Alsa) {
+                devices.extend(enumerate_linux_devices(
+                    &host,
+                    AudioBackend::Harmoniq,
+                    cpal::HostId::Alsa,
+                ));
+            }
+            if devices.is_empty() {
+                devices.push(OutputDeviceInfo {
+                    id: "harmoniq::default".to_string(),
+                    label: "ALSA default".to_string(),
+                });
+            }
         }
         AudioBackend::Auto => {
             let host = cpal::default_host();
@@ -1241,11 +1219,9 @@ mod linux_asio {
                 }
             }
         }
-        for candidate in [cpal::HostId::Jack, cpal::HostId::Alsa] {
-            if available.contains(&candidate) {
-                if let Ok(host) = cpal::host_from_id(candidate) {
-                    return Ok((host, candidate));
-                }
+        if available.contains(&cpal::HostId::Alsa) {
+            if let Ok(host) = cpal::host_from_id(cpal::HostId::Alsa) {
+                return Ok((host, cpal::HostId::Alsa));
             }
         }
         let host = cpal::default_host();

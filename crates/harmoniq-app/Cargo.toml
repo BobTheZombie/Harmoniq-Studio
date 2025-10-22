@@ -23,7 +23,7 @@ flacenc = { version = "0.5", default-features = false }
 mp3lame-encoder = { version = "0.2", features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-cpal = { version = "0.16", features = ["jack"] }
+cpal = "0.16"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 cpal = { version = "0.16", features = ["asio"] }

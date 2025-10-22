@@ -8,6 +8,7 @@ pub mod buffer;
 pub mod engine;
 pub mod graph;
 pub mod plugin;
+pub mod sound_server;
 pub mod time;
 mod tone;
 
