@@ -57,7 +57,6 @@ impl HostedPlugin {
     }
 }
 
-#[derive(Debug)]
 pub struct ExternalPluginManager {
     host: UnifiedPluginHost,
     catalog: Vec<DiscoveredPlugin>,
@@ -66,7 +65,7 @@ pub struct ExternalPluginManager {
 
 impl ExternalPluginManager {
     pub fn new() -> Self {
-        let mut host = UnifiedPluginHost::new();
+        let host = UnifiedPluginHost::new();
         let catalog = host.discovered_plugins().to_vec();
         Self {
             host,
@@ -123,11 +122,11 @@ impl ExternalPluginManager {
         }
     }
 
-    pub fn parameters(&mut self, id: PluginId) -> Option<&mut [PluginParam]> {
+    pub fn parameters(&mut self, id: PluginId) -> Option<Vec<PluginParam>> {
         let plugin = self.loaded.get_mut(&id)?;
         self.host.activate(id);
         plugin.parameters = self.host.get_parameters();
-        Some(plugin.parameters.as_mut_slice())
+        Some(plugin.parameters.clone())
     }
 
     pub fn set_parameter(&mut self, id: PluginId, index: usize, value: f32) {
