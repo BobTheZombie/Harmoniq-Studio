@@ -1,0 +1,21 @@
+[package]
+name = "harmoniq-plugin-host"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[dependencies]
+anyhow.workspace = true
+crossbeam-channel = "0.5"
+dirs = "5.0"
+egui = { version = "0.27", default-features = false, features = ["bytemuck"] }
+egui_glow = { version = "0.27", default-features = false }
+libloading = "0.8"
+parking_lot.workspace = true
+raw-window-handle = "0.6"
+serde = { workspace = true, optional = true }
+thiserror.workspace = true

@@ -1,38 +1,58 @@
-use engine_graph::automation::ParameterId;
-use engine_graph::AudioNode;
+//! Harmoniq Plugin SDK
+//! ====================
+//!
+//! Convenience utilities and abstractions for building Harmoniq-native
+//! instruments and effects. The SDK builds on top of [`harmoniq_engine`]'s
+//! [`AudioProcessor`](harmoniq_engine::AudioProcessor) trait and provides
+//! helpers for describing plugin metadata, parameters, and module
+//! registration.
 
-pub const ENTRY_SYMBOL: &str = "harmoniq_plugin_entry";
+mod parameters;
+mod registry;
 
-#[derive(Clone, Debug)]
-pub struct PluginDescriptor {
-    pub name: &'static str,
-    pub vendor: &'static str,
-    pub version: &'static str,
+pub use parameters::{
+    ContinuousParameterOptions, ParameterDefinition, ParameterId, ParameterKind, ParameterLayout,
+    ParameterSet, ParameterValue, PluginParameterError,
+};
+pub use registry::{NativePlugin, PluginExport, PluginFactory, PluginModule};
+
+/// Common imports for plugin authors implementing Harmoniq-native processors.
+pub mod prelude {
+    pub use crate::{
+        ContinuousParameterOptions, NativePlugin, ParameterDefinition, ParameterId, ParameterKind,
+        ParameterLayout, ParameterSet, ParameterValue, PluginExport, PluginFactory, PluginModule,
+    };
+    pub use harmoniq_engine::{
+        AudioBuffer, AudioProcessor, BufferConfig, ChannelLayout, MidiEvent, MidiProcessor,
+        PluginDescriptor,
+    };
 }
 
-#[derive(Clone, Debug)]
-pub struct PluginParameterDescriptor {
-    pub id: ParameterId,
-    pub name: &'static str,
-    pub min: f32,
-    pub max: f32,
-    pub default: f32,
-}
-
-pub trait PluginInstance: Send {
-    fn descriptor(&self) -> &PluginDescriptor;
-    fn parameters(&self) -> &[PluginParameterDescriptor];
-    fn node(&mut self) -> &mut dyn AudioNode;
-}
-
-pub trait PluginFactory: Send + Sync {
-    fn descriptor(&self) -> &PluginDescriptor;
-    fn create(&self) -> Box<dyn PluginInstance>;
-}
-
-#[allow(improper_ctypes_definitions)]
-pub type PluginEntry = unsafe extern "C" fn() -> *mut dyn PluginFactory;
-
-pub unsafe fn take_factory(entry: PluginEntry) -> Box<dyn PluginFactory> {
-    Box::from_raw(entry())
+/// Declare the plugin entry point for a dynamic Harmoniq plugin module.
+///
+/// The macro expects one or more expressions that evaluate to types
+/// implementing [`PluginFactory`]. Each factory will be registered within the
+/// exported [`PluginModule`].
+///
+/// # Example
+///
+/// ```ignore
+/// use harmoniq_plugin_sdk::{declare_harmoniq_plugins, PluginFactory, PluginModule};
+///
+/// struct MyFactory;
+///
+/// impl PluginFactory for MyFactory { /* ... */ }
+///
+/// declare_harmoniq_plugins!(MyFactory);
+/// ```
+#[macro_export]
+macro_rules! declare_harmoniq_plugins {
+    ($($factory:expr),+ $(,)?) => {
+        #[no_mangle]
+        pub extern "C" fn harmoniq_plugin_entrypoint() -> $crate::PluginExport {
+            let mut module = $crate::PluginModule::new();
+            $(module.register_factory(Box::new($factory));)+
+            $crate::PluginExport::new(module)
+        }
+    };
 }
