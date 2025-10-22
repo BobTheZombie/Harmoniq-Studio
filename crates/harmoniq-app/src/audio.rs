@@ -253,7 +253,7 @@ fn select_default_linux_asio_host() -> Option<cpal::HostId> {
 }
 
 #[cfg(target_os = "linux")]
-fn linux_backend_label(backend: AudioBackend, host_id: Option<cpal::HostId>) -> String {
+fn linux_backend_label(backend: AudioBackend, _host_id: Option<cpal::HostId>) -> String {
     match backend {
         AudioBackend::PipeWire => "PipeWire (via ALSA)".to_string(),
         AudioBackend::PulseAudio => "PulseAudio (via ALSA)".to_string(),
@@ -963,7 +963,7 @@ fn collect_device_info(host: &cpal::Host) -> Vec<OutputDeviceInfo> {
 
 #[cfg(target_os = "linux")]
 fn linux_available_output_devices(backend: AudioBackend) -> anyhow::Result<Vec<OutputDeviceInfo>> {
-    let mut devices = Vec::new();
+    let mut devices: Vec<OutputDeviceInfo> = Vec::new();
     match backend {
         AudioBackend::Asio => {
             if let Ok(host) = cpal::host_from_id(cpal::HostId::Alsa) {
