@@ -9,6 +9,8 @@ use std::path::Path;
 use anyhow::{anyhow, Context};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, FromSample, SampleFormat, SizedSample, StreamConfig};
+#[cfg(target_os = "linux")]
+use harmoniq_engine::sound_server::alsa_devices_available;
 use harmoniq_engine::{
     AudioBuffer, BufferConfig, ChannelLayout, EngineCommandQueue, HarmoniqEngine,
 };
@@ -244,6 +246,9 @@ fn sanitize_asio_selector(selection: Option<&str>) -> (Option<cpal::HostId>, Opt
 
 #[cfg(target_os = "linux")]
 fn select_default_linux_asio_host() -> Option<cpal::HostId> {
+    if !alsa_devices_available() {
+        return None;
+    }
     let available = cpal::available_hosts();
     if available.contains(&cpal::HostId::Alsa) {
         Some(cpal::HostId::Alsa)
@@ -407,22 +412,25 @@ impl RealtimeAudio {
                 let mut candidates: Vec<AudioBackend> = Vec::new();
                 let available = cpal::available_hosts();
                 let has_alsa = available.contains(&cpal::HostId::Alsa);
+                let has_native_audio = alsa_devices_available();
 
-                Self::push_unique_backend(&mut candidates, AudioBackend::Harmoniq);
+                if has_native_audio {
+                    Self::push_unique_backend(&mut candidates, AudioBackend::Harmoniq);
+                }
 
-                if has_alsa && is_pulseaudio_active() {
+                if has_native_audio && has_alsa && is_pulseaudio_active() {
                     Self::push_unique_backend(&mut candidates, AudioBackend::PulseAudio);
                 }
-                if has_alsa && is_pipewire_active() {
+                if has_native_audio && has_alsa && is_pipewire_active() {
                     Self::push_unique_backend(&mut candidates, AudioBackend::PipeWire);
                 }
-                if has_alsa {
+                if has_native_audio && has_alsa {
                     Self::push_unique_backend(&mut candidates, AudioBackend::Alsa);
                 }
-                if select_default_linux_asio_host().is_some() {
+                if has_native_audio && select_default_linux_asio_host().is_some() {
                     Self::push_unique_backend(&mut candidates, AudioBackend::Asio);
                 }
-                if has_alsa {
+                if has_native_audio && has_alsa {
                     Self::push_unique_backend(&mut candidates, AudioBackend::PulseAudio);
                     Self::push_unique_backend(&mut candidates, AudioBackend::PipeWire);
                 }
@@ -463,6 +471,9 @@ impl RealtimeAudio {
     ) -> anyhow::Result<StreamCreation> {
         match backend {
             AudioBackend::Asio => {
+                if !alsa_devices_available() {
+                    anyhow::bail!("no ALSA-compatible audio devices detected");
+                }
                 let (host_hint, selector) =
                     sanitize_asio_selector(options.output_device.as_deref());
                 let driver = LinuxAsioDriver::start(
@@ -487,6 +498,9 @@ impl RealtimeAudio {
                 })
             }
             AudioBackend::Harmoniq => {
+                if !alsa_devices_available() {
+                    anyhow::bail!("no ALSA-compatible audio devices detected");
+                }
                 let device = options
                     .output_device
                     .clone()
@@ -507,6 +521,9 @@ impl RealtimeAudio {
                 })
             }
             AudioBackend::PulseAudio | AudioBackend::PipeWire | AudioBackend::Alsa => {
+                if !alsa_devices_available() {
+                    anyhow::bail!("no ALSA-compatible audio devices detected");
+                }
                 let host_id = cpal::HostId::Alsa;
                 if !cpal::available_hosts().contains(&host_id) {
                     anyhow::bail!("backend {backend} is not available on this system");
@@ -869,44 +886,46 @@ pub fn available_backends() -> Vec<(AudioBackend, String)> {
 
     #[cfg(target_os = "linux")]
     {
-        if hosts
-            .iter()
-            .all(|(backend, _)| *backend != AudioBackend::Harmoniq)
-        {
-            hosts.insert(
-                1,
-                (
-                    AudioBackend::Harmoniq,
-                    "Harmoniq Ultra (custom ALSA server)".to_string(),
-                ),
-            );
-        }
-        if hosts
-            .iter()
-            .all(|(backend, _)| *backend != AudioBackend::PulseAudio)
-        {
-            hosts.push((
-                AudioBackend::PulseAudio,
-                "PulseAudio (via ALSA compatibility)".to_string(),
-            ));
-        }
-        if hosts
-            .iter()
-            .all(|(backend, _)| *backend != AudioBackend::PipeWire)
-        {
-            hosts.push((
-                AudioBackend::PipeWire,
-                "PipeWire (via ALSA compatibility)".to_string(),
-            ));
-        }
-        if hosts
-            .iter()
-            .all(|(backend, _)| *backend != AudioBackend::Asio)
-        {
-            hosts.push((
-                AudioBackend::Asio,
-                "Harmoniq ASIO (ultra low latency)".to_string(),
-            ));
+        if alsa_devices_available() {
+            if hosts
+                .iter()
+                .all(|(backend, _)| *backend != AudioBackend::Harmoniq)
+            {
+                hosts.insert(
+                    1,
+                    (
+                        AudioBackend::Harmoniq,
+                        "Harmoniq Ultra (custom ALSA server)".to_string(),
+                    ),
+                );
+            }
+            if hosts
+                .iter()
+                .all(|(backend, _)| *backend != AudioBackend::PulseAudio)
+            {
+                hosts.push((
+                    AudioBackend::PulseAudio,
+                    "PulseAudio (via ALSA compatibility)".to_string(),
+                ));
+            }
+            if hosts
+                .iter()
+                .all(|(backend, _)| *backend != AudioBackend::PipeWire)
+            {
+                hosts.push((
+                    AudioBackend::PipeWire,
+                    "PipeWire (via ALSA compatibility)".to_string(),
+                ));
+            }
+            if hosts
+                .iter()
+                .all(|(backend, _)| *backend != AudioBackend::Asio)
+            {
+                hosts.push((
+                    AudioBackend::Asio,
+                    "Harmoniq ASIO (ultra low latency)".to_string(),
+                ));
+            }
         }
     }
 
@@ -970,6 +989,9 @@ fn linux_available_output_devices(backend: AudioBackend) -> anyhow::Result<Vec<O
     let mut devices: Vec<OutputDeviceInfo> = Vec::new();
     match backend {
         AudioBackend::Asio => {
+            if !alsa_devices_available() {
+                return Ok(devices);
+            }
             if let Ok(host) = cpal::host_from_id(cpal::HostId::Alsa) {
                 for device in enumerate_linux_devices(&host, AudioBackend::Asio, cpal::HostId::Alsa)
                 {
@@ -980,10 +1002,20 @@ fn linux_available_output_devices(backend: AudioBackend) -> anyhow::Result<Vec<O
             }
         }
         AudioBackend::PipeWire | AudioBackend::PulseAudio | AudioBackend::Alsa => {
+            if !alsa_devices_available() {
+                return Ok(devices);
+            }
             let host = cpal::host_from_id(cpal::HostId::Alsa)?;
             devices.extend(enumerate_linux_devices(&host, backend, cpal::HostId::Alsa));
         }
         AudioBackend::Harmoniq => {
+            if !alsa_devices_available() {
+                devices.push(OutputDeviceInfo {
+                    id: "harmoniq::default".to_string(),
+                    label: "ALSA default".to_string(),
+                });
+                return Ok(devices);
+            }
             if let Ok(host) = cpal::host_from_id(cpal::HostId::Alsa) {
                 devices.extend(enumerate_linux_devices(
                     &host,
@@ -1023,6 +1055,9 @@ fn enumerate_linux_devices(
     backend: AudioBackend,
     host_id: cpal::HostId,
 ) -> Vec<OutputDeviceInfo> {
+    if !alsa_devices_available() {
+        return Vec::new();
+    }
     let mut devices = Vec::new();
     if let Ok(outputs) = host.output_devices() {
         for device in outputs {
@@ -1090,6 +1125,9 @@ mod linux_asio {
             preferred_host: Option<cpal::HostId>,
             preferred_device: Option<&str>,
         ) -> anyhow::Result<Self> {
+            if !super::alsa_devices_available() {
+                anyhow::bail!("no ALSA-compatible audio devices detected");
+            }
             let (host, host_id) = select_host(preferred_host)?;
             let device = select_device(&host, preferred_device)
                 .ok_or_else(|| anyhow!("no audio output device available for Linux ASIO"))?;

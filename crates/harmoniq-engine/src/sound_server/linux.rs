@@ -1,3 +1,5 @@
+use std::fs;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -79,6 +81,10 @@ impl UltraLowLatencyServer {
         config: BufferConfig,
         options: UltraLowLatencyOptions,
     ) -> anyhow::Result<Self> {
+        if !alsa_devices_available() {
+            anyhow::bail!("no ALSA-compatible audio devices detected");
+        }
+
         let host = cpal::host_from_id(cpal::HostId::Alsa).unwrap_or_else(|_| cpal::default_host());
         let device = select_device(&host, options.device.as_deref())
             .context("failed to select ALSA output device")?;
@@ -345,4 +351,27 @@ fn apply_realtime_priority(priority: i32) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+pub fn alsa_devices_available() -> bool {
+    const DEV_SND: &str = "/dev/snd";
+    const PROC_ASOUND_CARDS: &str = "/proc/asound/cards";
+    const PROC_ASOUND_PCM: &str = "/proc/asound/pcm";
+
+    if Path::new(DEV_SND).is_dir() {
+        if let Ok(mut entries) = fs::read_dir(DEV_SND) {
+            if entries.any(|entry| entry.map(|_| ()).is_ok()) {
+                return true;
+            }
+        }
+    }
+
+    if let Ok(cards) = fs::read_to_string(PROC_ASOUND_CARDS) {
+        let trimmed = cards.trim();
+        if !trimmed.is_empty() && !trimmed.contains("no soundcards") {
+            return true;
+        }
+    }
+
+    Path::new(PROC_ASOUND_PCM).exists()
 }
