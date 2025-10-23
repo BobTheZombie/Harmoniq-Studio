@@ -6,7 +6,7 @@ use std::thread::{self, JoinHandle};
 
 use anyhow::{anyhow, Context};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
+use cpal::{BufferSize, FromSample, Sample, SampleFormat, SampleRate, Stream, StreamConfig};
 use crossbeam::queue::ArrayQueue;
 use parking_lot::Mutex;
 
@@ -221,9 +221,9 @@ fn build_output_stream<T>(
     running: Arc<AtomicBool>,
 ) -> anyhow::Result<Stream>
 where
-    T: Sample + cpal::SizedSample,
+    T: Sample + cpal::SizedSample + FromSample<f32>,
 {
-    let silence = T::from(0.0f32);
+    let silence = T::from_sample(0.0f32);
     let stream = device.build_output_stream(
         config,
         move |output: &mut [T], _info| {
@@ -237,7 +237,7 @@ where
 
             for sample in output.iter_mut() {
                 if let Some(value) = queue.pop() {
-                    *sample = T::from(value);
+                    *sample = T::from_sample(value);
                 } else {
                     *sample = silence;
                 }
@@ -353,16 +353,22 @@ fn ensure_denormals_disabled() {
         DENORMAL_STATE.with(|state| {
             if !state.get() {
                 unsafe {
-                    #[cfg(target_arch = "x86")]
-                    use std::arch::x86::{_mm_getcsr, _mm_setcsr};
-                    #[cfg(target_arch = "x86_64")]
-                    use std::arch::x86_64::{_mm_getcsr, _mm_setcsr};
+                    use std::arch::asm;
 
                     const FTZ: u32 = 1 << 15;
                     const DAZ: u32 = 1 << 6;
-                    let mut csr = _mm_getcsr();
+                    let mut csr: u32 = 0;
+                    asm!(
+                        "stmxcsr [{ptr}]",
+                        ptr = in(reg) &mut csr,
+                        options(nostack, preserves_flags),
+                    );
                     csr |= FTZ | DAZ;
-                    _mm_setcsr(csr);
+                    asm!(
+                        "ldmxcsr [{ptr}]",
+                        ptr = in(reg) &csr,
+                        options(nostack, preserves_flags),
+                    );
                 }
                 state.set(true);
             }
