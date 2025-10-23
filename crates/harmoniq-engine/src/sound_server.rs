@@ -6,23 +6,23 @@
 //! of the critical path to guarantee deterministic scheduling behaviour. This
 //! module is only available on Linux builds where ALSA is present.
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "native"))]
 mod linux;
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "native"))]
 pub use linux::{UltraLowLatencyOptions, UltraLowLatencyServer};
 
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "native"))]
 pub use linux::alsa_devices_available;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(all(target_os = "linux", feature = "native")))]
 #[derive(Debug, Clone)]
 pub struct UltraLowLatencyOptions;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(all(target_os = "linux", feature = "native")))]
 pub struct UltraLowLatencyServer;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(all(target_os = "linux", feature = "native")))]
 impl UltraLowLatencyServer {
     /// Stub constructor for non-Linux targets. The custom sound server is not
     /// implemented outside of Linux at the moment. Callers should fall back to
@@ -32,6 +32,8 @@ impl UltraLowLatencyServer {
         _config: crate::BufferConfig,
         _options: UltraLowLatencyOptions,
     ) -> anyhow::Result<Self> {
-        anyhow::bail!("the Harmoniq ultra low latency server is only supported on Linux");
+        anyhow::bail!(
+            "the Harmoniq ultra low latency server is only supported on Linux with the native feature"
+        );
     }
 }
