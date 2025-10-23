@@ -1,5 +1,5 @@
-use egui::{self, Color32, Context, FontId, Rounding, Stroke, TextStyle};
 use egui::epaint::Margin;
+use egui::{self, Color32, Context, FontId, Rounding, Stroke, TextStyle};
 
 #[derive(Clone)]
 pub struct HarmoniqPalette {

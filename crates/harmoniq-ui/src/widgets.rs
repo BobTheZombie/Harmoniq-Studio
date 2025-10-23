@@ -330,7 +330,11 @@ impl<'a> egui::Widget for StateToggleButton<'a> {
 
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 6.0, fill);
-        painter.rect_stroke(rect, 6.0, egui::Stroke::new(1.0, self.palette.mixer_strip_border));
+        painter.rect_stroke(
+            rect,
+            6.0,
+            egui::Stroke::new(1.0, self.palette.mixer_strip_border),
+        );
         painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
@@ -401,11 +405,7 @@ impl<'a> egui::Widget for StepToggle<'a> {
         };
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect.shrink(2.0), 4.0, fill);
-        painter.rect_stroke(
-            rect.shrink(2.0),
-            4.0,
-            egui::Stroke::new(1.0, stroke),
-        );
+        painter.rect_stroke(rect.shrink(2.0), 4.0, egui::Stroke::new(1.0, stroke));
         response
     }
 }
@@ -464,11 +464,7 @@ impl<'a> egui::Widget for NoteBlock<'a> {
         };
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, self.rounding, fill);
-        painter.rect_stroke(
-            rect,
-            self.rounding,
-            egui::Stroke::new(1.0, border),
-        );
+        painter.rect_stroke(rect, self.rounding, egui::Stroke::new(1.0, border));
         response
     }
 }
