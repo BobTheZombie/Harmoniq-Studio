@@ -4,14 +4,18 @@ use arrayvec::ArrayVec;
 use parking_lot::Mutex;
 use ringbuf::{HeapConsumer, HeapProducer, HeapRb};
 
+#[cfg(feature = "openasio")]
 use harmoniq_dsp::buffer::{AudioBlock, AudioBlockMut};
 use harmoniq_dsp::utils::flush_denormals;
 #[cfg(feature = "no-denormals")]
 use harmoniq_dsp::utils::NoDenormalsGuard;
 
+#[cfg(feature = "openasio")]
 use crate::buffers::{AudioView, AudioViewMut};
 use crate::dsp::events::{MidiEvent, TransportClock};
-use crate::dsp::graph::{DspGraph, GraphProcess};
+use crate::dsp::graph::DspGraph;
+#[cfg(feature = "openasio")]
+use crate::dsp::graph::GraphProcess;
 
 #[cfg(feature = "openasio")]
 use crate::backend::EngineRt;

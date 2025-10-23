@@ -72,12 +72,14 @@ struct ParamPortInner {
     sender: Arc<Mutex<HeapProducer<ParamUpdate>>>,
 }
 
+#[derive(Clone, Copy)]
 enum BufferRef {
     Input,
     Scratch(usize),
     Output,
 }
 
+#[derive(Clone, Copy)]
 struct NodeExec {
     node_index: usize,
     input: BufferRef,
@@ -207,15 +209,64 @@ impl DspGraph {
             self.copy_block(block.inputs, &mut block.outputs, frames);
             return;
         }
-        for exec in &self.exec_order {
-            let node_slot = &mut self.nodes[exec.node_index];
-            if let Some(params) = node_slot.params.as_mut() {
-                while let Some(update) = params.pop() {
-                    node_slot.node.param(update);
+        let exec_count = self.exec_order.len();
+        for exec_index in 0..exec_count {
+            let exec = self.exec_order[exec_index];
+            {
+                let node_slot = &mut self.nodes[exec.node_index];
+                if let Some(params) = node_slot.params.as_mut() {
+                    while let Some(update) = params.pop() {
+                        node_slot.node.param(update);
+                    }
                 }
             }
-            let input_block = self.resolve_input(exec.input, block.inputs, frames);
-            let mut output_block = self.resolve_output(exec.output, &mut block.outputs, frames);
+
+            let output_block = match exec.output {
+                BufferRef::Input => AudioBlockMut::empty(),
+                BufferRef::Scratch(index) => {
+                    let frames = frames.min(self.max_block);
+                    if let Some(buf) = self.scratch.get_mut(index) {
+                        unsafe {
+                            AudioBlockMut::from_interleaved(
+                                buf.as_mut_ptr(),
+                                self.out_ch.max(1),
+                                frames,
+                            )
+                        }
+                    } else {
+                        AudioBlockMut::empty()
+                    }
+                }
+                BufferRef::Output => {
+                    if block.outputs.is_interleaved() {
+                        if let Some(ptr) = unsafe { block.outputs.interleaved_ptr_mut() } {
+                            unsafe {
+                                AudioBlockMut::from_interleaved(ptr, self.out_ch.max(1), frames)
+                            }
+                        } else {
+                            AudioBlockMut::empty()
+                        }
+                    } else if let Some(planes) = block.outputs.planes_ptrs_mut() {
+                        unsafe { AudioBlockMut::from_planar(planes, self.out_ch.max(1), frames) }
+                    } else {
+                        AudioBlockMut::empty()
+                    }
+                }
+            };
+            let input_block = match exec.input {
+                BufferRef::Input => block.inputs,
+                BufferRef::Scratch(index) => {
+                    let frames = frames.min(self.max_block);
+                    if let Some(buf) = self.scratch.get(index) {
+                        unsafe {
+                            AudioBlock::from_interleaved(buf.as_ptr(), self.out_ch.max(1), frames)
+                        }
+                    } else {
+                        AudioBlock::empty()
+                    }
+                }
+                BufferRef::Output => block.inputs,
+            };
             let mut ctx = ProcessContext {
                 sr: self.sr,
                 frames,
@@ -224,67 +275,8 @@ impl DspGraph {
                 transport: block.transport,
                 midi: block.midi,
             };
+            let node_slot = &mut self.nodes[exec.node_index];
             node_slot.node.process(&mut ctx);
-        }
-    }
-
-    fn resolve_input<'a>(
-        &'a self,
-        source: BufferRef,
-        input: AudioBlock<'a>,
-        frames: u32,
-    ) -> AudioBlock<'a> {
-        match source {
-            BufferRef::Input => input,
-            BufferRef::Scratch(index) => {
-                let frames = frames.min(self.max_block);
-                if let Some(buf) = self.scratch.get(index) {
-                    unsafe {
-                        AudioBlock::from_interleaved(buf.as_ptr(), self.out_ch.max(1), frames)
-                    }
-                } else {
-                    AudioBlock::empty()
-                }
-            }
-            BufferRef::Output => input,
-        }
-    }
-
-    fn resolve_output<'a>(
-        &'a mut self,
-        target: BufferRef,
-        output: &mut AudioBlockMut<'a>,
-        frames: u32,
-    ) -> AudioBlockMut<'a> {
-        match target {
-            BufferRef::Input => AudioBlockMut::empty(),
-            BufferRef::Scratch(index) => {
-                let frames = frames.min(self.max_block);
-                if let Some(buf) = self.scratch.get_mut(index) {
-                    unsafe {
-                        AudioBlockMut::from_interleaved(
-                            buf.as_mut_ptr(),
-                            self.out_ch.max(1),
-                            frames,
-                        )
-                    }
-                } else {
-                    AudioBlockMut::empty()
-                }
-            }
-            BufferRef::Output => {
-                if output.is_interleaved() {
-                    if let Some(ptr) = unsafe { output.interleaved_ptr_mut() } {
-                        unsafe { AudioBlockMut::from_interleaved(ptr, self.out_ch.max(1), frames) }
-                    } else {
-                        AudioBlockMut::empty()
-                    }
-                } else if let Some(planes) = output.planes_ptrs_mut() {
-                    unsafe { AudioBlockMut::from_planar(planes, self.out_ch.max(1), frames) }
-                } else {
-                    AudioBlockMut::empty()
-                }
-            }
         }
     }
 
