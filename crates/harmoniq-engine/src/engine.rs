@@ -107,6 +107,30 @@ impl HarmoniqEngine {
         &self.config
     }
 
+    pub fn reconfigure(&mut self, config: BufferConfig) -> anyhow::Result<()> {
+        let tone_enabled = self.tone_shaper.is_enabled();
+        self.config = config.clone();
+        self.master_buffer = Mutex::new(AudioBuffer::from_config(config.clone()));
+        self.tone_shaper = ToneShaper::new(&self.config);
+        self.tone_shaper.set_enabled(tone_enabled);
+
+        self.scratch_buffers.clear();
+
+        {
+            let processors = self.processors.read();
+            let mut latencies = self.latencies.write();
+            latencies.clear();
+            for (id, processor) in processors.iter() {
+                let mut processor = processor.lock();
+                processor.prepare(&self.config)?;
+                latencies.insert(*id, processor.latency_samples());
+            }
+        }
+
+        self.delay_lines.clear();
+        Ok(())
+    }
+
     /// Enables or disables the built-in tone shaper. By default the engine
     /// keeps the shaper bypassed so that the master bus remains sonically
     /// neutral when no additional effects are loaded.

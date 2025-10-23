@@ -57,6 +57,10 @@ impl ToneShaper {
         self.enabled = enabled;
     }
 
+    pub fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
     /// Applies the tone-shaping curve to the provided buffer in-place.
     pub fn process(&mut self, buffer: &mut AudioBuffer) {
         if !self.enabled {
