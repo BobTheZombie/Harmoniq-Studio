@@ -15,8 +15,10 @@ use eframe::egui::Margin;
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, FontId, Key, KeyboardShortcut, Modifiers, PointerButton,
     ProgressBar, Rect, Rgba, RichText, Rounding, Sense, Stroke, TextStyle, TextureOptions, Vec2,
+    WidgetText,
 };
 use eframe::{App, CreationContext, NativeOptions};
+use egui_dock::{DockArea, DockState, Style as DockStyle, TabIndex, TreeIndex, TabViewer};
 use egui_extras::{image::load_svg_bytes, install_image_loaders};
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
@@ -26,6 +28,10 @@ use harmoniq_engine::{
 };
 use harmoniq_plugins::{
     AudioClipMetrics, AudioEditorPlugin, GainPlugin, NoisePlugin, SineSynth, Sub808, WestCoastLead,
+};
+use harmoniq_ui::{
+    Fader, HarmoniqPalette, HarmoniqTheme, Knob, LevelMeter, NoteBlock, StateToggleButton,
+    StepToggle,
 };
 use hound::{SampleFormat, WavSpec, WavWriter};
 use mp3lame_encoder::{
@@ -187,196 +193,6 @@ impl AudioExportFormat {
     }
 }
 
-#[derive(Clone)]
-struct HarmoniqPalette {
-    background: Color32,
-    panel: Color32,
-    panel_alt: Color32,
-    toolbar: Color32,
-    toolbar_highlight: Color32,
-    toolbar_outline: Color32,
-    text_primary: Color32,
-    text_muted: Color32,
-    accent: Color32,
-    accent_alt: Color32,
-    accent_soft: Color32,
-    success: Color32,
-    warning: Color32,
-    track_header: Color32,
-    track_header_selected: Color32,
-    track_lane_overlay: Color32,
-    track_button_bg: Color32,
-    track_button_border: Color32,
-    automation_header: Color32,
-    automation_header_muted: Color32,
-    automation_lane_bg: Color32,
-    automation_lane_hidden_bg: Color32,
-    automation_point_border: Color32,
-    timeline_bg: Color32,
-    timeline_header: Color32,
-    timeline_border: Color32,
-    timeline_grid_primary: Color32,
-    timeline_grid_secondary: Color32,
-    ruler_text: Color32,
-    clip_text_primary: Color32,
-    clip_text_secondary: Color32,
-    clip_border_default: Color32,
-    clip_border_active: Color32,
-    clip_border_playing: Color32,
-    clip_shadow: Color32,
-    piano_background: Color32,
-    piano_grid_major: Color32,
-    piano_grid_minor: Color32,
-    piano_white: Color32,
-    piano_black: Color32,
-    meter_background: Color32,
-    meter_border: Color32,
-    meter_low: Color32,
-    meter_mid: Color32,
-    meter_high: Color32,
-    meter_peak: Color32,
-    meter_rms: Color32,
-    knob_base: Color32,
-    knob_ring: Color32,
-    knob_indicator: Color32,
-    knob_label: Color32,
-    mixer_strip_bg: Color32,
-    mixer_strip_selected: Color32,
-    mixer_strip_solo: Color32,
-    mixer_strip_muted: Color32,
-    mixer_strip_border: Color32,
-    mixer_strip_header: Color32,
-    mixer_strip_header_selected: Color32,
-    mixer_slot_bg: Color32,
-    mixer_slot_active: Color32,
-    mixer_slot_border: Color32,
-    mixer_toggle_active: Color32,
-    mixer_toggle_inactive: Color32,
-    mixer_toggle_text: Color32,
-}
-
-impl HarmoniqPalette {
-    fn new() -> Self {
-        Self {
-            background: Color32::from_rgb(30, 30, 30),
-            panel: Color32::from_rgb(34, 34, 38),
-            panel_alt: Color32::from_rgb(42, 42, 48),
-            toolbar: Color32::from_rgb(36, 36, 42),
-            toolbar_highlight: Color32::from_rgb(52, 52, 60),
-            toolbar_outline: Color32::from_rgb(88, 88, 98),
-            text_primary: Color32::from_rgb(232, 232, 240),
-            text_muted: Color32::from_rgb(164, 164, 176),
-            accent: Color32::from_rgb(138, 43, 226),
-            accent_alt: Color32::from_rgb(166, 104, 239),
-            accent_soft: Color32::from_rgb(112, 72, 196),
-            success: Color32::from_rgb(82, 212, 164),
-            warning: Color32::from_rgb(255, 120, 130),
-            track_header: Color32::from_rgb(44, 44, 52),
-            track_header_selected: Color32::from_rgb(59, 47, 79),
-            track_lane_overlay: Color32::from_rgba_unmultiplied(138, 43, 226, 42),
-            track_button_bg: Color32::from_rgb(48, 48, 56),
-            track_button_border: Color32::from_rgb(32, 32, 38),
-            automation_header: Color32::from_rgb(46, 46, 54),
-            automation_header_muted: Color32::from_rgb(38, 38, 44),
-            automation_lane_bg: Color32::from_rgb(34, 34, 40),
-            automation_lane_hidden_bg: Color32::from_rgb(30, 30, 36),
-            automation_point_border: Color32::from_rgb(54, 54, 64),
-            timeline_bg: Color32::from_rgb(32, 32, 38),
-            timeline_header: Color32::from_rgb(40, 40, 48),
-            timeline_border: Color32::from_rgb(90, 90, 102),
-            timeline_grid_primary: Color32::from_rgb(94, 80, 126),
-            timeline_grid_secondary: Color32::from_rgb(58, 58, 72),
-            ruler_text: Color32::from_rgb(204, 204, 214),
-            clip_text_primary: Color32::from_rgb(236, 236, 246),
-            clip_text_secondary: Color32::from_rgb(190, 190, 204),
-            clip_border_default: Color32::from_rgb(68, 68, 80),
-            clip_border_active: Color32::from_rgb(138, 43, 226),
-            clip_border_playing: Color32::from_rgb(200, 140, 255),
-            clip_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 120),
-            piano_background: Color32::from_rgb(28, 28, 32),
-            piano_grid_major: Color32::from_rgb(70, 70, 82),
-            piano_grid_minor: Color32::from_rgb(50, 50, 60),
-            piano_white: Color32::from_rgb(242, 242, 248),
-            piano_black: Color32::from_rgb(64, 64, 74),
-            meter_background: Color32::from_rgb(36, 36, 42),
-            meter_border: Color32::from_rgb(64, 64, 76),
-            meter_low: Color32::from_rgb(94, 210, 170),
-            meter_mid: Color32::from_rgb(255, 200, 132),
-            meter_high: Color32::from_rgb(255, 150, 132),
-            meter_peak: Color32::from_rgb(255, 98, 118),
-            meter_rms: Color32::from_rgb(194, 166, 255),
-            knob_base: Color32::from_rgb(52, 52, 64),
-            knob_ring: Color32::from_rgb(138, 43, 226),
-            knob_indicator: Color32::from_rgb(166, 104, 239),
-            knob_label: Color32::from_rgb(210, 210, 220),
-            mixer_strip_bg: Color32::from_rgb(40, 40, 48),
-            mixer_strip_selected: Color32::from_rgb(62, 50, 80),
-            mixer_strip_solo: Color32::from_rgb(56, 88, 78),
-            mixer_strip_muted: Color32::from_rgb(86, 54, 68),
-            mixer_strip_border: Color32::from_rgb(90, 90, 104),
-            mixer_strip_header: Color32::from_rgb(48, 48, 58),
-            mixer_strip_header_selected: Color32::from_rgb(68, 56, 92),
-            mixer_slot_bg: Color32::from_rgb(36, 36, 44),
-            mixer_slot_active: Color32::from_rgb(52, 44, 70),
-            mixer_slot_border: Color32::from_rgb(82, 82, 96),
-            mixer_toggle_active: Color32::from_rgb(138, 43, 226),
-            mixer_toggle_inactive: Color32::from_rgb(40, 40, 48),
-            mixer_toggle_text: Color32::from_rgb(232, 232, 240),
-        }
-    }
-}
-
-struct HarmoniqTheme {
-    palette: HarmoniqPalette,
-}
-
-impl HarmoniqTheme {
-    fn init(ctx: &egui::Context) -> Self {
-        let palette = HarmoniqPalette::new();
-        let mut style = (*ctx.style()).clone();
-        let mut visuals = style.visuals.clone();
-        visuals.dark_mode = true;
-        visuals.override_text_color = Some(palette.text_primary);
-        visuals.panel_fill = palette.background;
-        visuals.window_fill = palette.panel;
-        visuals.window_stroke = Stroke::new(1.0, palette.toolbar_outline);
-        visuals.window_rounding = Rounding::same(10.0);
-        visuals.widgets.noninteractive.bg_fill = palette.panel;
-        visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, palette.text_muted);
-        visuals.widgets.inactive.bg_fill = palette.panel_alt;
-        visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, palette.text_primary);
-        visuals.widgets.inactive.rounding = Rounding::same(6.0);
-        visuals.widgets.hovered.bg_fill = palette.accent_alt.gamma_multiply(0.6);
-        visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, palette.text_primary);
-        visuals.widgets.hovered.rounding = Rounding::same(6.0);
-        visuals.widgets.active.bg_fill = palette.accent.gamma_multiply(0.85);
-        visuals.widgets.active.fg_stroke = Stroke::new(1.2, palette.text_primary);
-        visuals.widgets.active.rounding = Rounding::same(6.0);
-        visuals.widgets.open.bg_fill = palette.toolbar_highlight;
-        visuals.selection.bg_fill = palette.accent_soft.gamma_multiply(0.85);
-        visuals.selection.stroke = Stroke::new(1.0, palette.accent_alt);
-        visuals.menu_rounding = Rounding::same(8.0);
-        visuals.hyperlink_color = palette.accent_alt;
-        style.visuals = visuals;
-        style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        style.spacing.button_padding = egui::vec2(12.0, 8.0);
-        style.spacing.window_margin = Margin::same(10.0);
-        style.text_styles = [
-            (TextStyle::Heading, FontId::proportional(26.0)),
-            (TextStyle::Body, FontId::proportional(17.0)),
-            (TextStyle::Button, FontId::proportional(16.0)),
-            (TextStyle::Small, FontId::proportional(13.0)),
-            (TextStyle::Monospace, FontId::monospace(15.0)),
-        ]
-        .into();
-        ctx.set_style(style);
-        Self { palette }
-    }
-
-    fn palette(&self) -> &HarmoniqPalette {
-        &self.palette
-    }
-}
 
 #[derive(Clone)]
 struct AppIcons {
@@ -601,8 +417,6 @@ impl EngineContext {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LayoutPersistence {
     browser_width: f32,
-    #[serde(default = "LayoutPersistence::default_channel_rack_width")]
-    channel_rack_width: f32,
     #[serde(default = "LayoutPersistence::default_mixer_width")]
     mixer_width: f32,
     piano_roll_height: f32,
@@ -612,10 +426,6 @@ struct LayoutPersistence {
 }
 
 impl LayoutPersistence {
-    fn default_channel_rack_width() -> f32 {
-        340.0
-    }
-
     fn default_mixer_width() -> f32 {
         360.0
     }
@@ -625,7 +435,6 @@ impl Default for LayoutPersistence {
     fn default() -> Self {
         Self {
             browser_width: 240.0,
-            channel_rack_width: Self::default_channel_rack_width(),
             mixer_width: Self::default_mixer_width(),
             piano_roll_height: 240.0,
             browser_visible: true,
@@ -687,17 +496,6 @@ impl LayoutState {
     fn set_mixer_width(&mut self, width: f32) {
         if (self.persistence.mixer_width - width).abs() > 0.5 {
             self.persistence.mixer_width = width.max(280.0);
-            self.needs_save = true;
-        }
-    }
-
-    fn channel_rack_width(&self) -> f32 {
-        self.persistence.channel_rack_width
-    }
-
-    fn set_channel_rack_width(&mut self, width: f32) {
-        if (self.persistence.channel_rack_width - width).abs() > 0.5 {
-            self.persistence.channel_rack_width = width.max(220.0);
             self.needs_save = true;
         }
     }
@@ -874,6 +672,66 @@ impl PluginRackState {
             std::mem::take(&mut self.pending_removals),
             std::mem::take(&mut self.pending_bypass),
         )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum WorkspaceTab {
+    Playlist,
+    ChannelRack,
+    PianoRoll,
+    Mixer,
+}
+
+impl WorkspaceTab {
+    fn title(&self) -> &'static str {
+        match self {
+            WorkspaceTab::Playlist => "Playlist",
+            WorkspaceTab::ChannelRack => "Channel Rack",
+            WorkspaceTab::PianoRoll => "Piano Roll",
+            WorkspaceTab::Mixer => "Mixer",
+        }
+    }
+}
+
+struct WorkspaceTabViewer<'a> {
+    app: &'a mut AppState,
+    palette: &'a HarmoniqPalette,
+}
+
+impl<'a> TabViewer for WorkspaceTabViewer<'a> {
+    type Tab = WorkspaceTab;
+
+    fn title(&mut self, tab: &mut Self::Tab) -> WidgetText {
+        tab.title().into()
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        match tab {
+            WorkspaceTab::Playlist => self.app.draw_playlist(ui),
+            WorkspaceTab::ChannelRack => {
+                egui::ScrollArea::vertical()
+                    .id_source("workspace_channel_rack")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| self.app.draw_sequencer(ui));
+            }
+            WorkspaceTab::PianoRoll => self.app.draw_piano_roll(ui),
+            WorkspaceTab::Mixer => self.app.draw_mixer_console_contents(ui),
+        }
+    }
+
+    fn closeable(&mut self, tab: &mut Self::Tab) -> bool {
+        matches!(tab, WorkspaceTab::PianoRoll | WorkspaceTab::Mixer)
+    }
+
+    fn on_close(&mut self, tab: &mut Self::Tab) -> bool {
+        let tab_clone = tab.clone();
+        self.app.close_workspace_tab(tab_clone);
+        true
+    }
+
+    fn allowed_in_windows(&self, tab: &mut Self::Tab) -> bool {
+        matches!(tab, WorkspaceTab::Mixer | WorkspaceTab::PianoRoll)
     }
 }
 
@@ -2693,7 +2551,6 @@ struct AppState {
     piano_roll: PianoRollState,
     piano_roll_selected_note: Option<usize>,
     piano_roll_drag: Option<PianoRollDragState>,
-    channel_rack_resize_start: Option<f32>,
     last_error: Option<String>,
     status_message: Option<String>,
     audio_settings: AudioSettingsState,
@@ -2717,12 +2574,14 @@ struct AppState {
     command_palette: CommandPaletteState,
     drag_payload: Option<DragPayload>,
     external_plugins: ExternalPluginManager,
+    workspace: DockState<WorkspaceTab>,
 }
 
 struct HarmoniqStudioApp {
     theme: HarmoniqTheme,
     icons: AppIcons,
     state: AppState,
+    dock_style: DockStyle,
 }
 
 impl Deref for HarmoniqStudioApp {
@@ -2747,6 +2606,7 @@ impl HarmoniqStudioApp {
         cc: &CreationContext<'_>,
     ) -> anyhow::Result<Self> {
         let theme = HarmoniqTheme::init(&cc.egui_ctx);
+        let dock_style = Self::create_dock_style(theme.palette());
         let icons = AppIcons::load(&cc.egui_ctx)?;
 
         let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
@@ -2792,6 +2652,18 @@ impl HarmoniqStudioApp {
         context.ensure_demo_plugins();
         let engine_context = Arc::new(Mutex::new(context));
 
+        let mut workspace = DockState::new(vec![
+            WorkspaceTab::Playlist,
+            WorkspaceTab::ChannelRack,
+            WorkspaceTab::PianoRoll,
+            WorkspaceTab::Mixer,
+        ]);
+        if !layout.persistence().piano_roll_visible {
+            workspace
+                .main_surface_mut()
+                .retain_tabs(|tab| *tab != WorkspaceTab::PianoRoll);
+        }
+
         let state = AppState {
             engine_runner,
             command_queue,
@@ -2813,7 +2685,6 @@ impl HarmoniqStudioApp {
             piano_roll: PianoRollState::default(),
             piano_roll_selected_note: None,
             piano_roll_drag: None,
-            channel_rack_resize_start: None,
             last_error: None,
             status_message: startup_status,
             audio_settings,
@@ -2837,12 +2708,14 @@ impl HarmoniqStudioApp {
             command_palette: CommandPaletteState::new(),
             drag_payload: None,
             external_plugins,
+            workspace,
         };
 
         let mut app = Self {
             theme,
             icons,
             state,
+            dock_style,
         };
 
         app.initialise_demo_clips();
@@ -2856,6 +2729,70 @@ impl HarmoniqStudioApp {
             app.focus_clip(0, 0);
         }
         Ok(app)
+    }
+
+    fn create_dock_style(palette: &HarmoniqPalette) -> DockStyle {
+        let mut style = DockStyle::default();
+        style.dock_area_padding = Some(Margin::symmetric(6.0, 6.0));
+        style.main_surface_border_stroke = Stroke::new(1.0, palette.toolbar_outline);
+        style.main_surface_border_rounding = Rounding::same(12.0);
+
+        style.separator.width = 4.0;
+        style.separator.extra_interact_width = 8.0;
+        style.separator.extra = 220.0;
+        style.separator.color_idle = palette.toolbar_outline.gamma_multiply(0.45);
+        style.separator.color_hovered = palette.accent_alt.gamma_multiply(0.8);
+        style.separator.color_dragged = palette.accent;
+
+        style.tab_bar.bg_fill = palette.panel;
+        style.tab_bar.height = 34.0;
+        style.tab_bar.hline_color = palette.toolbar_outline;
+        style.tab_bar.rounding = Rounding::same(10.0);
+
+        let mut active = style.tab.active.clone();
+        active.bg_fill = palette.accent_soft.gamma_multiply(0.8);
+        active.text_color = palette.text_primary;
+        active.outline_color = palette.accent;
+        active.rounding = Rounding::same(9.0);
+
+        let mut inactive = style.tab.inactive.clone();
+        inactive.bg_fill = palette.panel_alt;
+        inactive.text_color = palette.text_muted;
+        inactive.outline_color = palette.toolbar_outline.gamma_multiply(0.8);
+        inactive.rounding = Rounding::same(9.0);
+
+        let mut hovered = style.tab.hovered.clone();
+        hovered.bg_fill = palette.accent_alt.gamma_multiply(0.6);
+        hovered.text_color = palette.text_primary;
+        hovered.outline_color = palette.accent_alt;
+        hovered.rounding = Rounding::same(9.0);
+
+        style.tab.active = active.clone();
+        style.tab.focused = active.clone();
+        style.tab.active_with_kb_focus = active.clone();
+        style.tab.focused_with_kb_focus = active;
+        style.tab.inactive = inactive.clone();
+        style.tab.inactive_with_kb_focus = inactive;
+        style.tab.hovered = hovered;
+        style.tab.tab_body.inner_margin = Margin::symmetric(14.0, 10.0);
+        style.tab.tab_body.bg_fill = palette.panel;
+        style.tab.tab_body.stroke = Stroke::new(1.0, palette.toolbar_outline);
+
+        style.buttons.close_tab_bg_fill = palette.panel_alt;
+        style.buttons.close_tab_color = palette.text_primary;
+        style.buttons.close_tab_active_color = palette.accent;
+        style.buttons.add_tab_bg_fill = palette.panel_alt;
+        style.buttons.add_tab_color = palette.text_primary;
+        style.buttons.add_tab_active_color = palette.accent_alt;
+        style.buttons.add_tab_border_color = palette.toolbar_outline;
+
+        style.overlay.selection_color = palette.accent_alt.gamma_multiply(0.35);
+        style.overlay.selection_stroke_width = 2.0;
+        style.overlay.surface_fade_opacity = 0.12;
+        style.overlay.button_color = palette.text_primary;
+        style.overlay.button_border_stroke = Stroke::new(1.0, palette.toolbar_outline);
+
+        style
     }
 
     fn initialise_demo_clips(&mut self) {
@@ -3254,6 +3191,7 @@ impl HarmoniqStudioApp {
         if track_idx >= self.tracks.len() {
             return;
         }
+        self.open_workspace_tab(WorkspaceTab::PianoRoll);
         let existing_selection = self
             .selected_clip
             .filter(|(selected_track, _)| *selected_track == track_idx)
@@ -3891,6 +3829,51 @@ impl HarmoniqStudioApp {
                             self.piano_roll.key_height = defaults.key_height;
                             ui.close_menu();
                         }
+                        ui.separator();
+                        let mut browser_visible = self.layout.persistence().browser_visible;
+                        if ui.checkbox(&mut browser_visible, "Browser").changed() {
+                            self.layout.set_browser_visible(browser_visible);
+                            ui.close_menu();
+                        }
+                        let mut playlist_visible =
+                            self.workspace_contains(&WorkspaceTab::Playlist);
+                        if ui.checkbox(&mut playlist_visible, "Playlist").changed() {
+                            if playlist_visible {
+                                self.open_workspace_tab(WorkspaceTab::Playlist);
+                            } else {
+                                self.close_workspace_tab(WorkspaceTab::Playlist);
+                            }
+                            ui.close_menu();
+                        }
+                        let mut channel_visible =
+                            self.workspace_contains(&WorkspaceTab::ChannelRack);
+                        if ui.checkbox(&mut channel_visible, "Channel Rack").changed() {
+                            if channel_visible {
+                                self.open_workspace_tab(WorkspaceTab::ChannelRack);
+                            } else {
+                                self.close_workspace_tab(WorkspaceTab::ChannelRack);
+                            }
+                            ui.close_menu();
+                        }
+                        let mut piano_visible =
+                            self.workspace_contains(&WorkspaceTab::PianoRoll);
+                        if ui.checkbox(&mut piano_visible, "Piano Roll").changed() {
+                            if piano_visible {
+                                self.open_workspace_tab(WorkspaceTab::PianoRoll);
+                            } else {
+                                self.close_workspace_tab(WorkspaceTab::PianoRoll);
+                            }
+                            ui.close_menu();
+                        }
+                        let mut mixer_visible = self.workspace_contains(&WorkspaceTab::Mixer);
+                        if ui.checkbox(&mut mixer_visible, "Mixer").changed() {
+                            if mixer_visible {
+                                self.open_workspace_tab(WorkspaceTab::Mixer);
+                            } else {
+                                self.close_workspace_tab(WorkspaceTab::Mixer);
+                            }
+                            ui.close_menu();
+                        }
                     });
 
                     ui.menu_button("Options", |ui| {
@@ -4096,11 +4079,14 @@ impl HarmoniqStudioApp {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.label(RichText::new("Master").color(palette.text_muted));
-                            Self::draw_meter(
-                                ui,
-                                &self.master_track.meter,
-                                &palette,
-                                Vec2::new(38.0, 80.0),
+                            ui.add(
+                                LevelMeter::new(&palette)
+                                    .with_levels(
+                                        self.master_track.meter.left_level(),
+                                        self.master_track.meter.right_level(),
+                                        self.master_track.meter.rms_level(),
+                                    )
+                                    .with_size(Vec2::new(38.0, 80.0)),
                             );
                         });
                     });
@@ -4163,12 +4149,41 @@ impl HarmoniqStudioApp {
                     ui.vertical(|ui| {
                         ui.label(RichText::new("Panels").color(palette.text_muted));
                         let mut browser = self.layout.persistence().browser_visible;
-                        if ui.checkbox(&mut browser, "Browser").clicked() {
+                        if ui.checkbox(&mut browser, "Browser").changed() {
                             self.layout.set_browser_visible(browser);
                         }
-                        let mut piano_roll = self.layout.persistence().piano_roll_visible;
-                        if ui.checkbox(&mut piano_roll, "Piano Roll").clicked() {
-                            self.layout.set_piano_roll_visible(piano_roll);
+                        let mut playlist = self.workspace_contains(&WorkspaceTab::Playlist);
+                        if ui.checkbox(&mut playlist, "Playlist").changed() {
+                            if playlist {
+                                self.open_workspace_tab(WorkspaceTab::Playlist);
+                            } else {
+                                self.close_workspace_tab(WorkspaceTab::Playlist);
+                            }
+                        }
+                        let mut channel_rack =
+                            self.workspace_contains(&WorkspaceTab::ChannelRack);
+                        if ui.checkbox(&mut channel_rack, "Channel Rack").changed() {
+                            if channel_rack {
+                                self.open_workspace_tab(WorkspaceTab::ChannelRack);
+                            } else {
+                                self.close_workspace_tab(WorkspaceTab::ChannelRack);
+                            }
+                        }
+                        let mut piano_roll = self.workspace_contains(&WorkspaceTab::PianoRoll);
+                        if ui.checkbox(&mut piano_roll, "Piano Roll").changed() {
+                            if piano_roll {
+                                self.open_workspace_tab(WorkspaceTab::PianoRoll);
+                            } else {
+                                self.close_workspace_tab(WorkspaceTab::PianoRoll);
+                            }
+                        }
+                        let mut mixer = self.workspace_contains(&WorkspaceTab::Mixer);
+                        if ui.checkbox(&mut mixer, "Mixer").changed() {
+                            if mixer {
+                                self.open_workspace_tab(WorkspaceTab::Mixer);
+                            } else {
+                                self.close_workspace_tab(WorkspaceTab::Mixer);
+                            }
                         }
                     });
                 });
@@ -4559,22 +4574,26 @@ impl HarmoniqStudioApp {
                     .small(),
             );
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                for step in 0..instrument.pattern.step_count {
-                    if step > 0 && step % 4 == 0 {
-                        ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    for step in 0..instrument.pattern.step_count {
+                        if step > 0 && step % 4 == 0 {
+                            ui.add_space(8.0);
+                        }
+                        let active =
+                            self.instrument_step_active(reference, &instrument.pattern, step);
+                        let response = ui.add(
+                            StepToggle::new(&palette, accent)
+                                .active(active)
+                                .emphasise(step % 4 == 0),
+                        );
+                        if response.clicked() {
+                            self.toggle_instrument_step(instrument_idx, step, !active);
+                            self.focused_instrument = Some(instrument_idx);
+                        }
+                        response.on_hover_text(format!("Step {}", step + 1));
                     }
-                    let active = self.instrument_step_active(reference, &instrument.pattern, step);
-                    let response =
-                        Self::sequencer_step_widget(ui, active, accent, &palette, step % 4 == 0);
-                    if response.clicked() {
-                        self.toggle_instrument_step(instrument_idx, step, !active);
-                        self.focused_instrument = Some(instrument_idx);
-                    }
-                    response.on_hover_text(format!("Step {}", step + 1));
-                }
-            });
+                });
         } else {
             ui.label(
                 RichText::new("Clip unavailable for this instrument")
@@ -4582,39 +4601,6 @@ impl HarmoniqStudioApp {
                     .small(),
             );
         }
-    }
-
-    fn sequencer_step_widget(
-        ui: &mut egui::Ui,
-        active: bool,
-        accent: Color32,
-        palette: &HarmoniqPalette,
-        emphasise: bool,
-    ) -> egui::Response {
-        let base = if emphasise {
-            palette.toolbar_highlight
-        } else {
-            palette.panel
-        };
-        let desired = egui::vec2(18.0, 32.0);
-        let (rect, response) = ui.allocate_exact_size(desired, Sense::click());
-        let mut fill = if active {
-            accent
-        } else {
-            base.gamma_multiply(1.05)
-        };
-        if response.hovered() {
-            fill = fill.gamma_multiply(1.08);
-        }
-        let stroke = if active {
-            palette.accent_alt.gamma_multiply(1.1)
-        } else {
-            palette.toolbar_outline
-        };
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect.shrink(2.0), 4.0, fill);
-        painter.rect_stroke(rect.shrink(2.0), 4.0, Stroke::new(1.0, stroke));
-        response
     }
 
     fn draw_playlist(&mut self, ui: &mut egui::Ui) {
@@ -5442,29 +5428,20 @@ impl HarmoniqStudioApp {
                             egui::pos2(x, y - key_height + 2.0),
                             egui::vec2(width, key_height - 4.0),
                         );
-                        if pointer_pos
-                            .map(|pos| note_rect.contains(pos))
-                            .unwrap_or(false)
-                        {
-                            hovered_note = Some((index, note_rect));
+                        let response = ui.put(
+                            note_rect,
+                            NoteBlock::new(
+                                note_rect,
+                                &palette,
+                                clip.color,
+                                palette.timeline_border,
+                            )
+                            .selected(selected_note == Some(index)),
+                        );
+                        if response.hovered() {
+                            hovered_note = Some((index, response.rect));
                         }
-                        let mut fill = clip.color.gamma_multiply(0.95);
-                        if selected_note == Some(index) {
-                            fill = fill.gamma_multiply(1.25);
-                        } else if hovered_note
-                            .map(|(hover_index, _)| hover_index == index)
-                            .unwrap_or(false)
-                        {
-                            fill = fill.gamma_multiply(1.1);
-                        }
-                        painter.rect_filled(note_rect, 4.0, fill);
-                        let border_color = if selected_note == Some(index) {
-                            palette.clip_border_active
-                        } else {
-                            palette.timeline_border
-                        };
-                        painter.rect_stroke(note_rect, 4.0, egui::Stroke::new(1.0, border_color));
-                        note_rects.push((index, note_rect));
+                        note_rects.push((index, response.rect));
                     }
 
                     if let Some((hover_index, hover_rect)) = hovered_note {
@@ -5662,79 +5639,6 @@ impl HarmoniqStudioApp {
         }
     }
 
-    fn draw_meter(
-        ui: &mut egui::Ui,
-        meter: &TrackMeter,
-        palette: &HarmoniqPalette,
-        desired_size: egui::Vec2,
-    ) {
-        let (rect, _) = ui.allocate_exact_size(desired_size, Sense::hover());
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 8.0, palette.meter_background);
-        painter.rect_stroke(rect, 8.0, Stroke::new(1.0, palette.meter_border));
-
-        let gutter = 4.0;
-        let bar_width = (rect.width() - gutter * 3.0) / 2.0;
-        let max_height = rect.height() - gutter * 2.0;
-        let segments = [
-            (0.0, 0.55, palette.meter_low),
-            (0.55, 0.8, palette.meter_mid),
-            (0.8, 0.95, palette.meter_high),
-            (0.95, 1.0, palette.meter_peak),
-        ];
-
-        let draw_channel = |level: f32, x_start: f32, painter: &egui::Painter| {
-            let level = level.clamp(0.0, 1.0);
-            let x_end = x_start + bar_width;
-            for &(start, end, color) in &segments {
-                if level <= start {
-                    continue;
-                }
-                let segment_end = level.min(end);
-                if segment_end <= start {
-                    continue;
-                }
-                let start_y = rect.bottom() - gutter - start * max_height;
-                let end_y = rect.bottom() - gutter - segment_end * max_height;
-                if end_y >= start_y {
-                    continue;
-                }
-                let segment_rect = egui::Rect::from_min_max(
-                    egui::pos2(x_start, end_y),
-                    egui::pos2(x_end, start_y),
-                );
-                painter.rect_filled(segment_rect, 2.0, color);
-            }
-        };
-
-        let left_start = rect.left() + gutter;
-        let right_start = rect.left() + gutter * 2.0 + bar_width;
-        draw_channel(meter.left_level(), left_start, &painter);
-        draw_channel(meter.right_level(), right_start, &painter);
-
-        let tick_color = palette.meter_border.gamma_multiply(0.6);
-        for tick in [0.25_f32, 0.5, 0.75] {
-            let y = rect.bottom() - gutter - tick * max_height;
-            painter.line_segment(
-                [
-                    egui::pos2(rect.left() + gutter * 0.6, y),
-                    egui::pos2(rect.right() - gutter * 0.6, y),
-                ],
-                Stroke::new(0.5, tick_color),
-            );
-        }
-
-        let rms_height = meter.rms_level().clamp(0.0, 1.0) * max_height;
-        let rms_y = rect.bottom() - gutter - rms_height;
-        painter.line_segment(
-            [
-                egui::pos2(rect.left() + gutter, rms_y),
-                egui::pos2(rect.right() - gutter, rms_y),
-            ],
-            Stroke::new(1.0, palette.meter_rms),
-        );
-    }
-
     fn draw_strip_header(
         ui: &mut egui::Ui,
         label: &str,
@@ -5789,41 +5693,6 @@ impl HarmoniqStudioApp {
             palette.text_primary,
         );
 
-        response
-    }
-
-    fn draw_strip_toggle(
-        ui: &mut egui::Ui,
-        value: &mut bool,
-        label: &str,
-        palette: &HarmoniqPalette,
-    ) -> egui::Response {
-        let size = egui::vec2(38.0, 20.0);
-        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-        let painter = ui.painter_at(rect);
-        let active = *value;
-        let fill = if active {
-            palette.mixer_toggle_active
-        } else {
-            palette.mixer_toggle_inactive
-        };
-        painter.rect_filled(rect, 6.0, fill);
-        painter.rect_stroke(rect, 6.0, Stroke::new(1.0, palette.mixer_strip_border));
-        let text_color = if active {
-            palette.mixer_toggle_text
-        } else {
-            palette.text_muted
-        };
-        painter.text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            label,
-            FontId::proportional(10.0),
-            text_color,
-        );
-        if response.clicked() {
-            *value = !*value;
-        }
         response
     }
 
@@ -6057,7 +5926,15 @@ impl HarmoniqStudioApp {
             let fader_height = 132.0;
             ui.horizontal(|ui| {
                 ui.vertical_centered(|ui| {
-                    Self::draw_meter(ui, &track.meter, palette, egui::vec2(18.0, fader_height));
+                    ui.add(
+                        LevelMeter::new(palette)
+                            .with_levels(
+                                track.meter.left_level(),
+                                track.meter.right_level(),
+                                track.meter.rms_level(),
+                            )
+                            .with_size(egui::vec2(18.0, fader_height)),
+                    );
                     ui.add_space(2.0);
                     ui.label(
                         RichText::new(format!("{:.1} dB", track.meter.level_db()))
@@ -6083,7 +5960,8 @@ impl HarmoniqStudioApp {
             ui.add_space(6.0);
             ui.centered_and_justified(|ui| {
                 ui.add(
-                    Knob::new(&mut track.pan, -1.0, 1.0, 0.0, "PAN", palette).with_diameter(40.0),
+                    Knob::new(&mut track.pan, -1.0, 1.0, 0.0, "PAN", palette)
+                        .with_diameter(40.0),
                 );
             });
 
@@ -6091,8 +5969,8 @@ impl HarmoniqStudioApp {
             ui.centered_and_justified(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 ui.horizontal(|ui| {
-                    let _ = Self::draw_strip_toggle(ui, &mut track.muted, "M", palette);
-                    let _ = Self::draw_strip_toggle(ui, &mut track.solo, "S", palette);
+                    ui.add(StateToggleButton::new(&mut track.muted, "M", palette));
+                    ui.add(StateToggleButton::new(&mut track.solo, "S", palette));
                 });
             });
 
@@ -6137,7 +6015,15 @@ impl HarmoniqStudioApp {
             let fader_height = 144.0;
             ui.horizontal(|ui| {
                 ui.vertical_centered(|ui| {
-                    Self::draw_meter(ui, &master.meter, palette, egui::vec2(20.0, fader_height));
+                    ui.add(
+                        LevelMeter::new(palette)
+                            .with_levels(
+                                master.meter.left_level(),
+                                master.meter.right_level(),
+                                master.meter.rms_level(),
+                            )
+                            .with_size(egui::vec2(20.0, fader_height)),
+                    );
                     ui.add_space(2.0);
                     ui.label(
                         RichText::new(format!("{:.1} dB", master.meter.level_db()))
@@ -6745,8 +6631,11 @@ impl HarmoniqStudioApp {
     fn execute_command(&mut self, action: CommandAction) {
         match action {
             CommandAction::TogglePianoRoll => {
-                let visible = !self.layout.persistence().piano_roll_visible;
-                self.layout.set_piano_roll_visible(visible);
+                if self.workspace_contains(&WorkspaceTab::PianoRoll) {
+                    self.close_workspace_tab(WorkspaceTab::PianoRoll);
+                } else {
+                    self.open_workspace_tab(WorkspaceTab::PianoRoll);
+                }
             }
             CommandAction::ToggleBrowser => {
                 let visible = !self.layout.persistence().browser_visible;
@@ -6764,7 +6653,10 @@ impl HarmoniqStudioApp {
             CommandAction::SaveProject => self.save_project(),
             CommandAction::OpenProject => self.open_project(),
             CommandAction::BounceProject => self.bounce_project(),
-            CommandAction::FocusMixer => self.mixer_console.open(),
+            CommandAction::FocusMixer => {
+                self.mixer_console.open();
+                self.open_workspace_tab(WorkspaceTab::Mixer);
+            }
             CommandAction::FocusPlaylist => self.focus_playlist_panel(),
             CommandAction::FocusChannelRack => self.focus_channel_rack_panel(),
             CommandAction::SetPatternMode => self.pattern_mode = true,
@@ -6773,6 +6665,7 @@ impl HarmoniqStudioApp {
     }
 
     fn focus_playlist_panel(&mut self) {
+        self.open_workspace_tab(WorkspaceTab::Playlist);
         if self.tracks.is_empty() {
             self.status_message = Some("No tracks available in the playlist".into());
             self.set_selected_clip(None);
@@ -6799,6 +6692,7 @@ impl HarmoniqStudioApp {
     }
 
     fn focus_channel_rack_panel(&mut self) {
+        self.open_workspace_tab(WorkspaceTab::ChannelRack);
         if self.sequencer.instruments.is_empty() {
             self.status_message = Some("Add an instrument to focus the channel rack".into());
             return;
@@ -6815,6 +6709,48 @@ impl HarmoniqStudioApp {
             }
         }
         self.status_message = Some(format!("Channel rack focused on {}", instrument.name));
+    }
+
+    fn workspace_contains(&self, tab: &WorkspaceTab) -> bool {
+        self.workspace
+            .iter_all_tabs()
+            .any(|(_, existing)| existing == tab)
+    }
+
+    fn ensure_workspace_tab(&mut self, tab: WorkspaceTab) {
+        if !self.workspace_contains(&tab) {
+            self.workspace.push_to_first_leaf(tab);
+        }
+    }
+
+    fn open_workspace_tab(&mut self, tab: WorkspaceTab) {
+        match tab {
+            WorkspaceTab::PianoRoll => {
+                self.layout.set_piano_roll_visible(true);
+                self.ensure_workspace_tab(WorkspaceTab::PianoRoll);
+            }
+            WorkspaceTab::Mixer => {
+                self.mixer_console.show = true;
+                self.ensure_workspace_tab(WorkspaceTab::Mixer);
+            }
+            WorkspaceTab::Playlist => self.ensure_workspace_tab(WorkspaceTab::Playlist),
+            WorkspaceTab::ChannelRack => self.ensure_workspace_tab(WorkspaceTab::ChannelRack),
+        }
+    }
+
+    fn close_workspace_tab(&mut self, tab: WorkspaceTab) {
+        let tab_to_remove = tab.clone();
+        match tab {
+            WorkspaceTab::PianoRoll => {
+                self.layout.set_piano_roll_visible(false);
+            }
+            WorkspaceTab::Mixer => {
+                self.mixer_console.show = false;
+            }
+            WorkspaceTab::Playlist | WorkspaceTab::ChannelRack => {}
+        }
+        self.workspace
+            .retain_tabs(|existing| *existing != tab_to_remove);
     }
 
     fn load_external_plugin(&mut self, plugin: &DiscoveredPlugin) {
@@ -7016,22 +6952,8 @@ impl App for HarmoniqStudioApp {
                 .show(ctx, |ui| self.draw_browser_panel(ui));
             self.layout.set_browser_width(panel.response.rect.width());
         }
-        if self.layout.persistence().piano_roll_visible {
-            let piano_panel = egui::TopBottomPanel::bottom("piano_roll")
-                .resizable(true)
-                .default_height(self.layout.persistence().piano_roll_height)
-                .frame(
-                    egui::Frame::none()
-                        .fill(palette.panel)
-                        .inner_margin(Margin::symmetric(14.0, 12.0))
-                        .stroke(Stroke::new(1.0, palette.toolbar_outline))
-                        .rounding(Rounding::same(18.0)),
-                )
-                .show(ctx, |ui| self.draw_piano_roll(ui));
-            self.layout
-                .set_piano_roll_height(piano_panel.response.rect.height());
-        }
-
+        let dock_style = self.dock_style.clone();
+        let state = &mut self.state;
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
@@ -7041,76 +6963,13 @@ impl App for HarmoniqStudioApp {
                     .rounding(Rounding::same(18.0)),
             )
             .show(ctx, |ui| {
-                let total_height = ui.available_height();
-                let total_width = ui.available_width();
-                let min_channel_rack = 260.0;
-                let min_playlist = 320.0;
-                let handle_width = 6.0;
-                let spacing = 8.0;
-                let gutter = handle_width + spacing;
-                let available_for_rack = total_width - min_playlist - gutter;
-                let min_rack = if available_for_rack < min_channel_rack {
-                    available_for_rack.max(180.0)
-                } else {
-                    min_channel_rack
+                let mut viewer = WorkspaceTabViewer {
+                    app: state,
+                    palette: &palette,
                 };
-                let max_channel_rack = (total_width - gutter).max(min_rack);
-                let stored_width = self.layout.channel_rack_width();
-                let mut channel_rack_width = stored_width.clamp(min_rack, max_channel_rack);
-
-                ui.horizontal(|ui| {
-                    ui.set_height(total_height);
-
-                    let channel_rack_area = ui.allocate_ui_with_layout(
-                        Vec2::new(channel_rack_width, total_height),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| {
-                            egui::ScrollArea::vertical()
-                                .id_source("sequencer_scroll")
-                                .auto_shrink([false, false])
-                                .show(ui, |ui| self.draw_sequencer(ui));
-                        },
-                    );
-                    channel_rack_width = channel_rack_area
-                        .response
-                        .rect
-                        .width()
-                        .clamp(min_rack, max_channel_rack);
-
-                    let (handle_rect, handle_response_raw) = ui
-                        .allocate_exact_size(Vec2::new(handle_width, total_height), Sense::drag());
-                    let handle_response =
-                        handle_response_raw.on_hover_cursor(CursorIcon::ResizeHorizontal);
-                    let handle_color = if handle_response.dragged() || handle_response.hovered() {
-                        palette.toolbar_outline.gamma_multiply(0.8)
-                    } else {
-                        palette.toolbar_outline.gamma_multiply(0.45)
-                    };
-                    ui.painter_at(handle_rect)
-                        .rect_filled(handle_rect, 3.0, handle_color);
-
-                    if handle_response.drag_started() {
-                        self.channel_rack_resize_start = Some(channel_rack_width);
-                    }
-                    if handle_response.dragged() {
-                        let start = self.channel_rack_resize_start.unwrap_or(channel_rack_width);
-                        let target = (start + handle_response.drag_delta().x)
-                            .clamp(min_rack, max_channel_rack);
-                        self.layout.set_channel_rack_width(target);
-                    } else {
-                        self.layout.set_channel_rack_width(channel_rack_width);
-                        self.channel_rack_resize_start = None;
-                    }
-
-                    ui.add_space(spacing);
-
-                    let playlist_size = Vec2::new(ui.available_width(), total_height);
-                    ui.allocate_ui_with_layout(
-                        playlist_size,
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| self.draw_playlist(ui),
-                    );
-                });
+                DockArea::new(&mut state.workspace)
+                    .style(dock_style.clone())
+                    .show_inside(ui, &mut viewer);
             });
 
         self.draw_mixer_window(ctx, &palette);
@@ -7641,182 +7500,6 @@ impl ProjectMaster {
     }
 }
 
-struct Fader<'a> {
-    value: &'a mut f32,
-    min: f32,
-    max: f32,
-    default: f32,
-    height: f32,
-    palette: &'a HarmoniqPalette,
-}
-
-impl<'a> Fader<'a> {
-    fn new(
-        value: &'a mut f32,
-        min: f32,
-        max: f32,
-        default: f32,
-        palette: &'a HarmoniqPalette,
-    ) -> Self {
-        Self {
-            value,
-            min,
-            max,
-            default,
-            height: 156.0,
-            palette,
-        }
-    }
-
-    fn with_height(mut self, height: f32) -> Self {
-        self.height = height.max(80.0);
-        self
-    }
-}
-
-impl<'a> egui::Widget for Fader<'a> {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        let width = 32.0;
-        let (rect, mut response) =
-            ui.allocate_exact_size(egui::vec2(width, self.height), Sense::click_and_drag());
-        let mut value = (*self.value).clamp(self.min, self.max);
-
-        if response.dragged() {
-            let delta = ui.ctx().input(|i| i.pointer.delta().y);
-            let sensitivity = (self.max - self.min).abs() / self.height.max(1.0);
-            value -= delta * sensitivity;
-            value = value.clamp(self.min, self.max);
-            *self.value = value;
-            response.mark_changed();
-            ui.ctx().request_repaint();
-        } else {
-            *self.value = value;
-        }
-
-        if response.double_clicked() {
-            *self.value = self.default.clamp(self.min, self.max);
-            response.mark_changed();
-        }
-
-        let track_rect = rect.shrink2(egui::vec2(width * 0.3, 10.0));
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 8.0, self.palette.meter_background);
-        painter.rect_stroke(rect, 8.0, Stroke::new(1.0, self.palette.meter_border));
-
-        let normalized = (value - self.min) / (self.max - self.min).max(1e-6);
-        let handle_y = track_rect.bottom() - normalized * track_rect.height();
-        let handle_rect = egui::Rect::from_center_size(
-            egui::pos2(track_rect.center().x, handle_y),
-            egui::vec2(track_rect.width() + 6.0, 14.0),
-        );
-
-        painter.rect_filled(track_rect, 4.0, self.palette.toolbar_highlight);
-        painter.rect_filled(handle_rect, 6.0, self.palette.accent);
-        painter.rect_stroke(
-            handle_rect,
-            6.0,
-            Stroke::new(1.0, self.palette.toolbar_outline),
-        );
-
-        response
-    }
-}
-
-struct Knob<'a> {
-    value: &'a mut f32,
-    min: f32,
-    max: f32,
-    default: f32,
-    label: &'a str,
-    palette: &'a HarmoniqPalette,
-    diameter: f32,
-}
-
-impl<'a> Knob<'a> {
-    fn new(
-        value: &'a mut f32,
-        min: f32,
-        max: f32,
-        default: f32,
-        label: &'a str,
-        palette: &'a HarmoniqPalette,
-    ) -> Self {
-        Self {
-            value,
-            min,
-            max,
-            default,
-            label,
-            palette,
-            diameter: 56.0,
-        }
-    }
-
-    fn with_diameter(mut self, diameter: f32) -> Self {
-        self.diameter = diameter.max(28.0);
-        self
-    }
-}
-
-impl<'a> egui::Widget for Knob<'a> {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        let knob_diameter = self.diameter;
-        let label_height = 18.0;
-        let desired_size = egui::vec2(knob_diameter + 16.0, knob_diameter + label_height + 12.0);
-        let (rect, mut response) = ui.allocate_exact_size(desired_size, Sense::drag());
-        let mut value = (*self.value).clamp(self.min, self.max);
-
-        if response.dragged() {
-            let delta = ui.ctx().input(|i| i.pointer.delta().y);
-            let sensitivity = (self.max - self.min).abs() / 160.0;
-            value -= delta * sensitivity;
-            value = value.clamp(self.min, self.max);
-            *self.value = value;
-            response.mark_changed();
-            ui.ctx().request_repaint();
-        } else {
-            *self.value = value;
-        }
-
-        if response.double_clicked() {
-            *self.value = self.default.clamp(self.min, self.max);
-            response.mark_changed();
-        }
-
-        let knob_radius = knob_diameter * 0.5;
-        let knob_center = egui::pos2(rect.center().x, rect.top() + knob_radius + 6.0);
-        let painter = ui.painter_at(rect);
-        painter.circle_filled(knob_center, knob_radius, self.palette.knob_base);
-        painter.circle_stroke(
-            knob_center,
-            knob_radius,
-            Stroke::new(2.0, self.palette.knob_ring),
-        );
-
-        let normalized = (value - self.min) / (self.max - self.min).max(1e-6);
-        let angle = (-135.0_f32.to_radians()) + normalized * (270.0_f32.to_radians());
-        let indicator = egui::pos2(
-            knob_center.x + angle.cos() * (knob_radius - 6.0),
-            knob_center.y + angle.sin() * (knob_radius - 6.0),
-        );
-        painter.line_segment(
-            [knob_center, indicator],
-            Stroke::new(3.0, self.palette.knob_indicator),
-        );
-        painter.circle_filled(knob_center, 3.0, self.palette.knob_indicator);
-
-        let label_pos = egui::pos2(rect.center().x, rect.bottom() - 6.0);
-        painter.text(
-            label_pos,
-            Align2::CENTER_BOTTOM,
-            self.label,
-            FontId::proportional(12.0),
-            self.palette.knob_label,
-        );
-
-        response
-    }
-}
 
 struct Clip {
     name: String,
