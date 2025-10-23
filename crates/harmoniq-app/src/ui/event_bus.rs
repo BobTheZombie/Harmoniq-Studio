@@ -27,6 +27,7 @@ pub enum AppEvent {
     OpenFile(PathBuf),
     SaveProject,
     RequestRepaint,
+    OpenAudioSettings,
 }
 
 #[derive(Clone, Default)]

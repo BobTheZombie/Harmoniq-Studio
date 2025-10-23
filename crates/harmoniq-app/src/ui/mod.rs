@@ -1,3 +1,4 @@
+pub mod audio_settings;
 pub mod browser;
 pub mod channel_rack;
 pub mod event_bus;

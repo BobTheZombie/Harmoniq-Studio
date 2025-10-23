@@ -38,6 +38,9 @@ use audio::{
 };
 use midi::list_midi_inputs;
 use ui::{
+    audio_settings::{
+        ActiveAudioSummary, AudioSettingsAction, AudioSettingsFeedback, AudioSettingsPanel,
+    },
     browser::BrowserPane,
     channel_rack::ChannelRackPane,
     event_bus::{AppEvent, EventBus, LayoutEvent, TransportEvent},
@@ -707,12 +710,16 @@ impl EngineRunner {
         Ok(runner)
     }
 
-    fn refresh_runtime(&mut self) -> anyhow::Result<()> {
+    fn stop_streams(&mut self) {
         if let Some(mut loop_state) = self.offline_loop.take() {
             loop_state.stop();
         }
         self.realtime = None;
         self.last_runtime_error = None;
+    }
+
+    fn refresh_runtime(&mut self) -> anyhow::Result<()> {
+        self.stop_streams();
 
         if self.runtime.is_enabled() {
             let options = self.runtime.clone();
@@ -748,6 +755,43 @@ impl EngineRunner {
         }
     }
 
+    fn try_reconfigure(
+        &mut self,
+        config: BufferConfig,
+        runtime: AudioRuntimeOptions,
+    ) -> anyhow::Result<()> {
+        self.stop_streams();
+        {
+            let mut engine = self.engine.lock();
+            engine.reconfigure(config.clone())?;
+        }
+        self.config = config;
+        self.runtime = runtime;
+        self.refresh_runtime()
+    }
+
+    fn reconfigure(
+        &mut self,
+        config: BufferConfig,
+        runtime: AudioRuntimeOptions,
+    ) -> anyhow::Result<()> {
+        let previous_config = self.config.clone();
+        let previous_runtime = self.runtime.clone();
+
+        match self.try_reconfigure(config, runtime) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                if let Err(revert_err) = self.try_reconfigure(previous_config, previous_runtime) {
+                    error!(
+                        ?revert_err,
+                        "failed to restore previous audio configuration after error",
+                    );
+                }
+                Err(err)
+            }
+        }
+    }
+
     fn reconfigure_audio(&mut self, runtime: AudioRuntimeOptions) -> anyhow::Result<()> {
         let previous = self.runtime.clone();
         self.runtime = runtime;
@@ -762,6 +806,10 @@ impl EngineRunner {
             return Err(err);
         }
         Ok(())
+    }
+
+    fn config(&self) -> &BufferConfig {
+        &self.config
     }
 
     fn runtime_options(&self) -> &AudioRuntimeOptions {
@@ -832,6 +880,7 @@ struct HarmoniqStudioApp {
     piano_roll: PianoRollPane,
     mixer: MixerPane,
     playlist: PlaylistPane,
+    audio_settings: AudioSettingsPanel,
     event_bus: EventBus,
     engine_runner: EngineRunner,
     command_queue: harmoniq_engine::EngineCommandQueue,
@@ -901,6 +950,8 @@ impl HarmoniqStudioApp {
         let piano_roll = PianoRollPane::default();
         let mixer = MixerPane::default();
         let playlist = PlaylistPane::default();
+        let audio_settings =
+            AudioSettingsPanel::new(engine_runner.config(), engine_runner.runtime_options());
 
         let status_message = engine_runner
             .last_runtime_error()
@@ -919,6 +970,7 @@ impl HarmoniqStudioApp {
             piano_roll,
             mixer,
             playlist,
+            audio_settings,
             event_bus,
             engine_runner,
             command_queue,
@@ -1030,6 +1082,11 @@ impl HarmoniqStudioApp {
                 }
                 AppEvent::SaveProject => {
                     self.status_message = Some("Project saved".into());
+                }
+                AppEvent::OpenAudioSettings => {
+                    let config = self.engine_runner.config().clone();
+                    let runtime = self.engine_runner.runtime_options().clone();
+                    self.audio_settings.open(&config, &runtime);
                 }
                 AppEvent::RequestRepaint => {}
             }
@@ -1185,6 +1242,41 @@ impl App for HarmoniqStudioApp {
                     .style(dock_style)
                     .show_inside(ui, &mut tab_viewer);
             });
+
+        let active_audio_summary =
+            self.engine_runner
+                .realtime()
+                .map(|runtime| ActiveAudioSummary {
+                    backend: runtime.backend(),
+                    device_name: runtime.device_name().to_string(),
+                    host_label: runtime.host_label().map(|label| label.to_string()),
+                });
+        let last_runtime_error = self
+            .engine_runner
+            .last_runtime_error()
+            .map(|err| err.to_string());
+
+        if let Some(action) = self.audio_settings.ui(
+            ctx,
+            &palette,
+            active_audio_summary.as_ref(),
+            last_runtime_error.as_deref(),
+        ) {
+            if let AudioSettingsAction::Apply { config, runtime } = action {
+                let result = self
+                    .engine_runner
+                    .reconfigure(config.clone(), runtime.clone());
+                self.audio_settings
+                    .on_apply_result(result, &config, &runtime);
+            }
+        }
+
+        if let Some(feedback) = self.audio_settings.take_status_message() {
+            if feedback.is_error() {
+                warn!("{}", feedback.message());
+            }
+            self.status_message = Some(feedback.message().to_string());
+        }
 
         if let Some(message) = &self.status_message {
             egui::Area::new(Id::new("status_message"))

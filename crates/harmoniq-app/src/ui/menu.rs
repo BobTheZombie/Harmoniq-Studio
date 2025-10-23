@@ -77,7 +77,7 @@ impl MenuBarState {
 
             ui.menu_button("Options", |ui| {
                 if ui.button("Audio Settings").clicked() {
-                    event_bus.publish(AppEvent::RequestRepaint);
+                    event_bus.publish(AppEvent::OpenAudioSettings);
                     ui.close_menu();
                 }
                 if ui.button("MIDI Settings").clicked() {
