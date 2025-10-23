@@ -14,11 +14,10 @@ use clap::Parser;
 use eframe::egui::Margin;
 use eframe::egui::{
     self, Align2, Color32, CursorIcon, FontId, Key, KeyboardShortcut, Modifiers, PointerButton,
-    ProgressBar, Rect, Rgba, RichText, Rounding, Sense, Stroke, TextStyle, TextureOptions, Vec2,
-    WidgetText,
+    ProgressBar, Rect, Rgba, RichText, Rounding, Sense, Stroke, TextureOptions, Vec2, WidgetText,
 };
 use eframe::{App, CreationContext, NativeOptions};
-use egui_dock::{DockArea, DockState, Style as DockStyle, TabIndex, TreeIndex, TabViewer};
+use egui_dock::{DockArea, DockState, Style as DockStyle, TabViewer};
 use egui_extras::{image::load_svg_bytes, install_image_loaders};
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
@@ -192,7 +191,6 @@ impl AudioExportFormat {
         }
     }
 }
-
 
 #[derive(Clone)]
 struct AppIcons {
@@ -694,12 +692,7 @@ impl WorkspaceTab {
     }
 }
 
-struct WorkspaceTabViewer<'a> {
-    app: &'a mut AppState,
-    palette: &'a HarmoniqPalette,
-}
-
-impl<'a> TabViewer for WorkspaceTabViewer<'a> {
+impl TabViewer for HarmoniqStudioApp {
     type Tab = WorkspaceTab;
 
     fn title(&mut self, tab: &mut Self::Tab) -> WidgetText {
@@ -708,15 +701,15 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
-            WorkspaceTab::Playlist => self.app.draw_playlist(ui),
+            WorkspaceTab::Playlist => self.draw_playlist(ui),
             WorkspaceTab::ChannelRack => {
                 egui::ScrollArea::vertical()
                     .id_source("workspace_channel_rack")
                     .auto_shrink([false, false])
-                    .show(ui, |ui| self.app.draw_sequencer(ui));
+                    .show(ui, |ui| self.draw_sequencer(ui));
             }
-            WorkspaceTab::PianoRoll => self.app.draw_piano_roll(ui),
-            WorkspaceTab::Mixer => self.app.draw_mixer_console_contents(ui),
+            WorkspaceTab::PianoRoll => self.draw_piano_roll(ui),
+            WorkspaceTab::Mixer => self.draw_mixer_console_contents(ui),
         }
     }
 
@@ -726,7 +719,7 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
 
     fn on_close(&mut self, tab: &mut Self::Tab) -> bool {
         let tab_clone = tab.clone();
-        self.app.close_workspace_tab(tab_clone);
+        self.close_workspace_tab(tab_clone);
         true
     }
 
@@ -3835,8 +3828,7 @@ impl HarmoniqStudioApp {
                             self.layout.set_browser_visible(browser_visible);
                             ui.close_menu();
                         }
-                        let mut playlist_visible =
-                            self.workspace_contains(&WorkspaceTab::Playlist);
+                        let mut playlist_visible = self.workspace_contains(&WorkspaceTab::Playlist);
                         if ui.checkbox(&mut playlist_visible, "Playlist").changed() {
                             if playlist_visible {
                                 self.open_workspace_tab(WorkspaceTab::Playlist);
@@ -3855,8 +3847,7 @@ impl HarmoniqStudioApp {
                             }
                             ui.close_menu();
                         }
-                        let mut piano_visible =
-                            self.workspace_contains(&WorkspaceTab::PianoRoll);
+                        let mut piano_visible = self.workspace_contains(&WorkspaceTab::PianoRoll);
                         if ui.checkbox(&mut piano_visible, "Piano Roll").changed() {
                             if piano_visible {
                                 self.open_workspace_tab(WorkspaceTab::PianoRoll);
@@ -4160,8 +4151,7 @@ impl HarmoniqStudioApp {
                                 self.close_workspace_tab(WorkspaceTab::Playlist);
                             }
                         }
-                        let mut channel_rack =
-                            self.workspace_contains(&WorkspaceTab::ChannelRack);
+                        let mut channel_rack = self.workspace_contains(&WorkspaceTab::ChannelRack);
                         if ui.checkbox(&mut channel_rack, "Channel Rack").changed() {
                             if channel_rack {
                                 self.open_workspace_tab(WorkspaceTab::ChannelRack);
@@ -4574,26 +4564,25 @@ impl HarmoniqStudioApp {
                     .small(),
             );
             ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    for step in 0..instrument.pattern.step_count {
-                        if step > 0 && step % 4 == 0 {
-                            ui.add_space(8.0);
-                        }
-                        let active =
-                            self.instrument_step_active(reference, &instrument.pattern, step);
-                        let response = ui.add(
-                            StepToggle::new(&palette, accent)
-                                .active(active)
-                                .emphasise(step % 4 == 0),
-                        );
-                        if response.clicked() {
-                            self.toggle_instrument_step(instrument_idx, step, !active);
-                            self.focused_instrument = Some(instrument_idx);
-                        }
-                        response.on_hover_text(format!("Step {}", step + 1));
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for step in 0..instrument.pattern.step_count {
+                    if step > 0 && step % 4 == 0 {
+                        ui.add_space(8.0);
                     }
-                });
+                    let active = self.instrument_step_active(reference, &instrument.pattern, step);
+                    let response = ui.add(
+                        StepToggle::new(&palette, accent)
+                            .active(active)
+                            .emphasise(step % 4 == 0),
+                    );
+                    if response.clicked() {
+                        self.toggle_instrument_step(instrument_idx, step, !active);
+                        self.focused_instrument = Some(instrument_idx);
+                    }
+                    response.on_hover_text(format!("Step {}", step + 1));
+                }
+            });
         } else {
             ui.label(
                 RichText::new("Clip unavailable for this instrument")
@@ -5960,8 +5949,7 @@ impl HarmoniqStudioApp {
             ui.add_space(6.0);
             ui.centered_and_justified(|ui| {
                 ui.add(
-                    Knob::new(&mut track.pan, -1.0, 1.0, 0.0, "PAN", palette)
-                        .with_diameter(40.0),
+                    Knob::new(&mut track.pan, -1.0, 1.0, 0.0, "PAN", palette).with_diameter(40.0),
                 );
             });
 
@@ -6953,7 +6941,6 @@ impl App for HarmoniqStudioApp {
             self.layout.set_browser_width(panel.response.rect.width());
         }
         let dock_style = self.dock_style.clone();
-        let state = &mut self.state;
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
@@ -6963,13 +6950,12 @@ impl App for HarmoniqStudioApp {
                     .rounding(Rounding::same(18.0)),
             )
             .show(ctx, |ui| {
-                let mut viewer = WorkspaceTabViewer {
-                    app: state,
-                    palette: &palette,
-                };
-                DockArea::new(&mut state.workspace)
+                let mut workspace =
+                    std::mem::replace(&mut self.state.workspace, DockState::new(Vec::new()));
+                DockArea::new(&mut workspace)
                     .style(dock_style.clone())
-                    .show_inside(ui, &mut viewer);
+                    .show_inside(ui, self);
+                self.state.workspace = workspace;
             });
 
         self.draw_mixer_window(ctx, &palette);
@@ -7499,7 +7485,6 @@ impl ProjectMaster {
         }
     }
 }
-
 
 struct Clip {
     name: String,
