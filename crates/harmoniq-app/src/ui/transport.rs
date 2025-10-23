@@ -63,14 +63,15 @@ impl TransportBar {
             }
 
             let mut record_enabled = matches!(snapshot.transport, TransportState::Recording);
+            let record_color = if record_enabled {
+                palette.accent
+            } else {
+                palette.text_primary
+            };
             if ui
                 .toggle_value(
                     &mut record_enabled,
-                    RichText::new("Rec").color(if record_enabled {
-                        palette.accent
-                    } else {
-                        palette.text_primary
-                    }),
+                    RichText::new("Rec").color(record_color),
                 )
                 .clicked()
             {
@@ -120,11 +121,11 @@ impl TransportBar {
             }
 
             let mut pattern_mode = snapshot.pattern_mode;
+            let pattern_label = if pattern_mode { "Pattern" } else { "Song" };
             if ui
                 .toggle_value(
                     &mut pattern_mode,
-                    RichText::new(if pattern_mode { "Pattern" } else { "Song" })
-                        .color(palette.text_muted),
+                    RichText::new(pattern_label).color(palette.text_muted),
                 )
                 .clicked()
             {

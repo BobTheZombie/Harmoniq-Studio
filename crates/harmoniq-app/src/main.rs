@@ -878,7 +878,7 @@ impl HarmoniqStudioApp {
             time_signature,
         )));
 
-        let mut layout = LayoutState::load(PathBuf::from("config/ui_layout.json"));
+        let layout = LayoutState::load(PathBuf::from("config/ui_layout.json"));
         let mut dock_state = layout.dock().unwrap_or_else(|| build_default_workspace());
 
         if dock_state.main_surface().is_empty() {
@@ -1074,7 +1074,18 @@ impl HarmoniqStudioApp {
     }
 }
 
-impl TabViewer for HarmoniqStudioApp {
+struct WorkspaceTabViewer<'a> {
+    palette: &'a HarmoniqPalette,
+    event_bus: &'a EventBus,
+    channel_rack: &'a mut ChannelRackPane,
+    piano_roll: &'a mut PianoRollPane,
+    mixer: &'a mut MixerPane,
+    playlist: &'a mut PlaylistPane,
+    transport_state: TransportState,
+    transport_clock: TransportClock,
+}
+
+impl<'a> TabViewer for WorkspaceTabViewer<'a> {
     type Tab = WorkspacePane;
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
@@ -1083,19 +1094,13 @@ impl TabViewer for HarmoniqStudioApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
-            WorkspacePane::ChannelRack => {
-                self.channel_rack
-                    .ui(ui, self.theme.palette(), &self.event_bus)
-            }
-            WorkspacePane::PianoRoll => {
-                self.piano_roll
-                    .ui(ui, self.theme.palette(), &self.event_bus)
-            }
-            WorkspacePane::Mixer => self.mixer.ui(ui, self.theme.palette(), &self.event_bus),
+            WorkspacePane::ChannelRack => self.channel_rack.ui(ui, self.palette, self.event_bus),
+            WorkspacePane::PianoRoll => self.piano_roll.ui(ui, self.palette, self.event_bus),
+            WorkspacePane::Mixer => self.mixer.ui(ui, self.palette, self.event_bus),
             WorkspacePane::Playlist => self.playlist.ui(
                 ui,
-                self.theme.palette(),
-                &self.event_bus,
+                self.palette,
+                self.event_bus,
                 self.transport_state,
                 self.transport_clock,
             ),
@@ -1108,7 +1113,7 @@ impl App for HarmoniqStudioApp {
         self.process_events();
         self.update_engine_context();
 
-        let palette = self.theme.palette();
+        let palette = self.theme.palette().clone();
 
         egui::TopBottomPanel::top("menu_bar")
             .frame(
@@ -1118,7 +1123,7 @@ impl App for HarmoniqStudioApp {
             )
             .show(ctx, |ui| {
                 self.menu
-                    .ui(ui, palette, &self.event_bus, self.browser.is_visible());
+                    .ui(ui, &palette, &self.event_bus, self.browser.is_visible());
             });
 
         egui::TopBottomPanel::top("transport_bar")
@@ -1137,7 +1142,7 @@ impl App for HarmoniqStudioApp {
                     pattern_mode: self.pattern_mode,
                 };
                 self.transport_bar
-                    .ui(ui, palette, &self.icons, &self.event_bus, snapshot);
+                    .ui(ui, &palette, &self.icons, &self.event_bus, snapshot);
             });
 
         if self.browser.is_visible() {
@@ -1152,11 +1157,10 @@ impl App for HarmoniqStudioApp {
                         .rounding(Rounding::same(16.0)),
                 )
                 .show(ctx, |ui| {
-                    self.browser.ui(ui, palette, &self.event_bus);
+                    self.browser.ui(ui, &palette, &self.event_bus);
                 });
             self.browser.set_width(panel.response.rect.width());
         }
-
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
@@ -1166,9 +1170,20 @@ impl App for HarmoniqStudioApp {
                     .rounding(Rounding::same(18.0)),
             )
             .show(ctx, |ui| {
+                let dock_style = self.dock_style.clone();
+                let mut tab_viewer = WorkspaceTabViewer {
+                    palette: &palette,
+                    event_bus: &self.event_bus,
+                    channel_rack: &mut self.channel_rack,
+                    piano_roll: &mut self.piano_roll,
+                    mixer: &mut self.mixer,
+                    playlist: &mut self.playlist,
+                    transport_state: self.transport_state,
+                    transport_clock: self.transport_clock,
+                };
                 DockArea::new(&mut self.dock_state)
-                    .style(self.dock_style.clone())
-                    .show_inside(ui, self);
+                    .style(dock_style)
+                    .show_inside(ui, &mut tab_viewer);
             });
 
         if let Some(message) = &self.status_message {
