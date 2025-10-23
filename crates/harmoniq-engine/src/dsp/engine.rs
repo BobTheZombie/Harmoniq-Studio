@@ -9,10 +9,12 @@ use harmoniq_dsp::utils::flush_denormals;
 #[cfg(feature = "no-denormals")]
 use harmoniq_dsp::utils::NoDenormalsGuard;
 
-use crate::backend::EngineRt;
 use crate::buffers::{AudioView, AudioViewMut};
 use crate::dsp::events::{MidiEvent, TransportClock};
 use crate::dsp::graph::{DspGraph, GraphProcess};
+
+#[cfg(feature = "openasio")]
+use crate::backend::EngineRt;
 
 const MIDI_RING_CAPACITY: usize = 512;
 const MIDI_BUFFER_CAPACITY: usize = 512;
@@ -94,6 +96,7 @@ impl RealtimeDspEngine {
     }
 }
 
+#[cfg(feature = "openasio")]
 impl EngineRt for RealtimeDspEngine {
     fn process(
         &mut self,
