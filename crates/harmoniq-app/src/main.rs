@@ -6,11 +6,16 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use flacenc::component::BitRepr;
+use flacenc::error::Verify;
+
 use anyhow::{anyhow, Context};
 use clap::Parser;
-use eframe::egui::{self, Align2, Margin, PointerButton, RichText, Rounding, Stroke};
+use eframe::egui::{
+    self, Align2, CursorIcon, Id, Margin, PointerButton, RichText, Rounding, Stroke,
+};
 use eframe::{App, CreationContext, NativeOptions};
-use egui_dock::{DockArea, DockState, NodeIndex, Style as DockStyle, TabViewer};
+use egui_dock::{DockArea, DockState, Style as DockStyle, TabViewer};
 use egui_extras::{image::load_svg_bytes, install_image_loaders};
 use harmoniq_engine::{
     AudioBuffer, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine,
@@ -400,24 +405,34 @@ fn write_mp3_file(
     sample_rate: f32,
     samples: &[i16],
 ) -> anyhow::Result<()> {
-    let mut encoder = mp3lame_encoder::Builder::new()
-        .unwrap()
-        .sample_rate(sample_rate.round() as usize)
-        .num_channels(channels)
-        .quality(mp3lame_encoder::Quality::Medium)
+    let mut builder = mp3lame_encoder::Builder::new()
+        .ok_or_else(|| anyhow!("failed to create MP3 encoder builder"))?;
+    builder
+        .set_sample_rate(sample_rate.round() as u32)
+        .map_err(|err| anyhow!("invalid sample rate for MP3 encoder: {err}"))?;
+    builder
+        .set_num_channels(channels as u8)
+        .map_err(|err| anyhow!("invalid channel count for MP3 encoder: {err}"))?;
+    builder
+        .set_quality(mp3lame_encoder::Quality::Good)
+        .map_err(|err| anyhow!("failed to configure MP3 encoder quality: {err}"))?;
+
+    let mut encoder = builder
         .build()
         .map_err(|err| anyhow!("failed to create MP3 encoder: {err}"))?;
+
     let pcm: Vec<i16> = samples.to_vec();
-    let interleaved =
-        mp3lame_encoder::InterleavedPcm::new(pcm, channels, sample_rate.round() as usize);
-    let encoded = encoder
-        .encode(&interleaved)
+    let mut output = Vec::new();
+    let frame_count = samples.len() / channels.max(1);
+    output.reserve(mp3lame_encoder::max_required_buffer_size(frame_count));
+
+    encoder
+        .encode_to_vec(mp3lame_encoder::InterleavedPcm(&pcm), &mut output)
         .map_err(|err| anyhow!("failed to encode MP3: {err}"))?;
-    let finalised = encoder
-        .flush(mp3lame_encoder::FlushNoGap::default())
+    encoder
+        .flush_to_vec::<mp3lame_encoder::FlushNoGap>(&mut output)
         .map_err(|err| anyhow!("failed to finalise MP3: {err}"))?;
-    let mut output = encoded;
-    output.extend(finalised);
+
     fs::write(path, output).context("failed to write MP3 file")?;
     Ok(())
 }
@@ -499,8 +514,8 @@ fn main() -> anyhow::Result<()> {
     if args.list_audio_backends {
         let backends = available_backends();
         println!("Available realtime audio backends:");
-        for backend in backends {
-            println!("  - {backend}");
+        for (backend, description) in backends {
+            println!("  - {backend}: {description}");
         }
         return Ok(());
     }
@@ -839,7 +854,7 @@ impl HarmoniqStudioApp {
         cc: &CreationContext<'_>,
     ) -> anyhow::Result<Self> {
         let theme = HarmoniqTheme::init(&cc.egui_ctx);
-        let dock_style = Self::create_dock_style(theme.palette());
+        let dock_style = Self::create_dock_style(cc.egui_ctx.style().as_ref(), theme.palette());
         let icons = AppIcons::load(&cc.egui_ctx)?;
 
         let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
@@ -866,7 +881,7 @@ impl HarmoniqStudioApp {
         let mut layout = LayoutState::load(PathBuf::from("config/ui_layout.json"));
         let mut dock_state = layout.dock().unwrap_or_else(|| build_default_workspace());
 
-        if dock_state.is_empty() {
+        if dock_state.main_surface().is_empty() {
             dock_state = build_default_workspace();
         }
 
@@ -919,14 +934,56 @@ impl HarmoniqStudioApp {
         })
     }
 
-    fn create_dock_style(palette: &HarmoniqPalette) -> DockStyle {
-        let mut style = DockStyle::from_egui(palette.egui_style());
-        style.surfaces.fill = palette.panel;
-        style.tabs.fill = palette.panel_alt;
-        style.tabs.bg_rect = Some((palette.panel_alt, palette.toolbar_outline));
-        style.border = Stroke::new(1.0, palette.toolbar_outline);
-        style.separator = Stroke::new(1.0, palette.toolbar_outline);
-        style.hovered_border = Stroke::new(1.0, palette.accent);
+    fn create_dock_style(base_style: &egui::Style, palette: &HarmoniqPalette) -> DockStyle {
+        let mut style = DockStyle::from_egui(base_style);
+
+        style.main_surface_border_stroke = Stroke::new(1.0, palette.toolbar_outline);
+        style.main_surface_border_rounding = Rounding::same(12.0);
+
+        style.tab_bar.bg_fill = palette.panel_alt;
+        style.tab_bar.hline_color = palette.toolbar_outline;
+        style.tab_bar.fill_tab_bar = true;
+
+        style.tab.tab_body.bg_fill = palette.panel;
+        style.tab.tab_body.stroke = Stroke::new(1.0, palette.toolbar_outline);
+        style.tab.tab_body.rounding = Rounding::same(12.0);
+
+        style.tab.active.bg_fill = palette.panel_alt;
+        style.tab.active.text_color = palette.text_primary;
+        style.tab.active.outline_color = palette.toolbar_outline;
+
+        style.tab.hovered.bg_fill = palette.toolbar_highlight;
+        style.tab.hovered.text_color = palette.text_primary;
+        style.tab.hovered.outline_color = palette.accent;
+
+        style.tab.focused = style.tab.active.clone();
+        style.tab.focused_with_kb_focus = style.tab.active.clone();
+        style.tab.active_with_kb_focus = style.tab.active.clone();
+
+        style.tab.inactive.bg_fill = palette.panel;
+        style.tab.inactive.text_color = palette.text_muted;
+        style.tab.inactive.outline_color = palette.toolbar_outline;
+        style.tab.inactive_with_kb_focus = style.tab.inactive.clone();
+
+        style.buttons.close_tab_color = palette.text_primary;
+        style.buttons.close_tab_active_color = palette.accent;
+        style.buttons.close_tab_bg_fill = palette.panel_alt;
+        style.buttons.add_tab_color = palette.text_primary;
+        style.buttons.add_tab_active_color = palette.accent;
+        style.buttons.add_tab_bg_fill = palette.panel_alt;
+        style.buttons.add_tab_border_color = palette.toolbar_outline;
+
+        style.separator.color_idle = palette.toolbar_outline;
+        style.separator.color_hovered = palette.accent;
+        style.separator.color_dragged = palette.accent_alt;
+
+        style.overlay.selection_color = palette.accent_soft.gamma_multiply(0.6);
+        style.overlay.button_color = palette.accent;
+        style.overlay.button_border_stroke = Stroke::new(1.0, palette.toolbar_outline);
+        style.overlay.hovered_leaf_highlight.color = palette.accent_soft.gamma_multiply(0.25);
+        style.overlay.hovered_leaf_highlight.rounding = Rounding::same(12.0);
+        style.overlay.hovered_leaf_highlight.stroke = Stroke::new(1.0, palette.accent);
+
         style
     }
 
@@ -1109,15 +1166,13 @@ impl App for HarmoniqStudioApp {
                     .rounding(Rounding::same(18.0)),
             )
             .show(ctx, |ui| {
-                let mut dock = std::mem::take(&mut self.dock_state);
-                DockArea::new(&mut dock)
+                DockArea::new(&mut self.dock_state)
                     .style(self.dock_style.clone())
                     .show_inside(ui, self);
-                self.dock_state = dock;
             });
 
         if let Some(message) = &self.status_message {
-            egui::Area::new("status_message")
+            egui::Area::new(Id::new("status_message"))
                 .anchor(Align2::LEFT_BOTTOM, [16.0, -16.0])
                 .show(ctx, |ui| {
                     egui::Frame::none()
@@ -1140,7 +1195,7 @@ impl App for HarmoniqStudioApp {
         }
     }
 
-    fn on_exit(&mut self, _ctx: &egui::Context) {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.layout.flush();
     }
 }

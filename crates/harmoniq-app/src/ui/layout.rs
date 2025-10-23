@@ -63,7 +63,14 @@ impl LayoutState {
     }
 
     pub fn store_dock(&mut self, dock: &DockState<WorkspacePane>) {
-        if self.stored.dock.as_ref() != Some(dock) {
+        let serialized_current = serde_json::to_string(dock).ok();
+        let serialized_stored = self
+            .stored
+            .dock
+            .as_ref()
+            .and_then(|stored| serde_json::to_string(stored).ok());
+
+        if serialized_current != serialized_stored {
             self.stored.dock = Some(dock.clone());
             self.dirty = true;
         }

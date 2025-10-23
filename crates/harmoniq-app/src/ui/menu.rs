@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use egui::{self, RichText};
+use eframe::egui::{self, RichText};
 
 use harmoniq_ui::HarmoniqPalette;
 

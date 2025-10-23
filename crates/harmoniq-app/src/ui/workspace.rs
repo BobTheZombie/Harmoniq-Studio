@@ -22,7 +22,8 @@ impl WorkspacePane {
 
 pub fn build_default_workspace() -> DockState<WorkspacePane> {
     let mut dock = DockState::new(vec![WorkspacePane::Playlist]);
-    if let Some(surface) = dock.main_surface_mut().node_tree_mut() {
+    {
+        let surface = dock.main_surface_mut();
         let [playlist_node, channel_node] =
             surface.split_left(NodeIndex::root(), 0.75, vec![WorkspacePane::ChannelRack]);
         let [_channel, _piano] =

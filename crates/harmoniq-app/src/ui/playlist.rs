@@ -88,9 +88,7 @@ impl PlaylistPane {
 
         ui.vertical(|ui| {
             ui.heading(RichText::new("Playlist").color(palette.text_primary));
-            ui.label(
-                RichText::new(format!("Clock {}", clock.format())).color(palette.text_secondary),
-            );
+            ui.label(RichText::new(format!("Clock {}", clock.format())).color(palette.text_muted));
             ui.add_space(8.0);
 
             let track_height = 64.0;
@@ -165,7 +163,7 @@ impl PlaylistPane {
                                 egui::Align2::LEFT_BOTTOM,
                                 format!("Bar {}", beat / 4 + 1),
                                 egui::FontId::proportional(12.0),
-                                palette.text_secondary,
+                                palette.text_muted,
                             );
                         }
                     }

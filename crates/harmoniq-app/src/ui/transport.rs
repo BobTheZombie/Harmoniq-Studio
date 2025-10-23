@@ -35,7 +35,7 @@ impl TransportBar {
             };
             if ui
                 .add(
-                    egui::ImageButton::new(play_icon.id(), egui::vec2(30.0, 30.0))
+                    egui::ImageButton::new((play_icon.id(), egui::vec2(30.0, 30.0)))
                         .frame(false)
                         .tint(palette.text_primary),
                 )
@@ -53,7 +53,7 @@ impl TransportBar {
 
             if ui
                 .add(
-                    egui::ImageButton::new(icons.stop.id(), egui::vec2(30.0, 30.0))
+                    egui::ImageButton::new((icons.stop.id(), egui::vec2(30.0, 30.0)))
                         .frame(false)
                         .tint(palette.text_primary),
                 )
@@ -112,7 +112,7 @@ impl TransportBar {
             if ui
                 .toggle_value(
                     &mut metronome,
-                    RichText::new("Metronome").color(palette.text_secondary),
+                    RichText::new("Metronome").color(palette.text_muted),
                 )
                 .clicked()
             {
@@ -124,7 +124,7 @@ impl TransportBar {
                 .toggle_value(
                     &mut pattern_mode,
                     RichText::new(if pattern_mode { "Pattern" } else { "Song" })
-                        .color(palette.text_secondary),
+                        .color(palette.text_muted),
                 )
                 .clicked()
             {
