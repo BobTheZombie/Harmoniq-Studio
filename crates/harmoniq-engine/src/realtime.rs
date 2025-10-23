@@ -223,7 +223,7 @@ fn build_output_stream<T>(
 where
     T: Sample + cpal::SizedSample,
 {
-    let silence = T::from::<f32>(0.0);
+    let silence = T::from_sample(0.0);
     let stream = device.build_output_stream(
         config,
         move |output: &mut [T], _info| {
@@ -237,7 +237,7 @@ where
 
             for sample in output.iter_mut() {
                 if let Some(value) = queue.pop() {
-                    *sample = T::from::<f32>(value);
+                    *sample = T::from_sample(value);
                 } else {
                     *sample = silence;
                 }
@@ -260,7 +260,7 @@ fn choose_stream_config(
     let clamped = rate_hz.clamp(1.0, u32::MAX as f32) as u32;
     let desired_rate = SampleRate(clamped);
 
-    if let Ok(mut configs) = device.supported_output_configs() {
+    if let Ok(configs) = device.supported_output_configs() {
         for range in configs {
             if range.channels() == desired_channels
                 && range.sample_format() == SampleFormat::F32
@@ -272,7 +272,7 @@ fn choose_stream_config(
         }
     }
 
-    if let Ok(mut configs) = device.supported_output_configs() {
+    if let Ok(configs) = device.supported_output_configs() {
         for range in configs {
             if range.channels() == desired_channels && range.sample_format() == SampleFormat::F32 {
                 return Ok(range.with_sample_rate(range.max_sample_rate()));
@@ -280,7 +280,7 @@ fn choose_stream_config(
         }
     }
 
-    if let Ok(mut configs) = device.supported_output_configs() {
+    if let Ok(configs) = device.supported_output_configs() {
         for range in configs {
             if range.channels() == desired_channels {
                 return Ok(range.with_sample_rate(range.max_sample_rate()));
