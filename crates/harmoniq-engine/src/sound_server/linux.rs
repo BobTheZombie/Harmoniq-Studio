@@ -13,6 +13,11 @@ use parking_lot::Mutex;
 
 use crate::{AudioBuffer, BufferConfig, HarmoniqEngine};
 
+#[cfg(feature = "openasio")]
+use crate::backend::{openasio::OpenAsioBackend, StreamConfig as EngineStreamConfig};
+#[cfg(feature = "openasio")]
+use crate::buffers::{AudioView, AudioViewMut};
+
 /// Options for configuring the Harmoniq ultra low latency sound server.
 #[derive(Debug, Clone)]
 pub struct UltraLowLatencyOptions {
@@ -26,6 +31,9 @@ pub struct UltraLowLatencyOptions {
     pub queue_depth: usize,
     /// Optional thread priority for the render worker.
     pub realtime_priority: Option<i32>,
+    #[cfg(feature = "openasio")]
+    /// Optional OpenASIO driver configuration.
+    pub openasio: Option<UltraOpenAsioOptions>,
 }
 
 impl Default for UltraLowLatencyOptions {
@@ -35,6 +43,8 @@ impl Default for UltraLowLatencyOptions {
             buffer_frames: None,
             queue_depth: 4,
             realtime_priority: Some(70),
+            #[cfg(feature = "openasio")]
+            openasio: None,
         }
     }
 }
@@ -59,15 +69,70 @@ impl UltraLowLatencyOptions {
         self.realtime_priority = priority;
         self
     }
+
+    #[cfg(feature = "openasio")]
+    pub fn with_openasio(mut self, options: Option<UltraOpenAsioOptions>) -> Self {
+        self.openasio = options;
+        self
+    }
+}
+
+#[cfg(feature = "openasio")]
+#[derive(Debug, Clone)]
+pub struct UltraOpenAsioOptions {
+    pub driver_path: String,
+    pub device: Option<String>,
+    pub noninterleaved: bool,
+    pub in_channels: Option<u16>,
+    pub out_channels: Option<u16>,
+}
+
+#[cfg(feature = "openasio")]
+impl UltraOpenAsioOptions {
+    pub fn new(driver_path: impl Into<String>) -> Self {
+        Self {
+            driver_path: driver_path.into(),
+            device: None,
+            noninterleaved: false,
+            in_channels: None,
+            out_channels: None,
+        }
+    }
+
+    pub fn with_device(mut self, device: Option<String>) -> Self {
+        self.device = device;
+        self
+    }
+
+    pub fn with_noninterleaved(mut self, noninterleaved: bool) -> Self {
+        self.noninterleaved = noninterleaved;
+        self
+    }
+
+    pub fn with_in_channels(mut self, channels: Option<u16>) -> Self {
+        self.in_channels = channels;
+        self
+    }
+
+    pub fn with_out_channels(mut self, channels: Option<u16>) -> Self {
+        self.out_channels = channels;
+        self
+    }
 }
 
 enum ControlMessage {
     Stop,
 }
 
+enum StreamHandle {
+    Cpal(cpal::Stream),
+    #[cfg(feature = "openasio")]
+    OpenAsio(OpenAsioBackend),
+}
+
 /// Handle for the Harmoniq ultra low latency sound server.
 pub struct UltraLowLatencyServer {
-    stream: cpal::Stream,
+    stream: StreamHandle,
     render_thread: Option<JoinHandle<()>>,
     control: Sender<ControlMessage>,
     running: Arc<AtomicBool>,
@@ -83,6 +148,11 @@ impl UltraLowLatencyServer {
     ) -> anyhow::Result<Self> {
         if !alsa_devices_available() {
             anyhow::bail!("no ALSA-compatible audio devices detected");
+        }
+
+        #[cfg(feature = "openasio")]
+        if let Some(openasio) = options.openasio.clone() {
+            return Self::start_openasio(engine, config, options, openasio);
         }
 
         let host = cpal::host_from_id(cpal::HostId::Alsa).unwrap_or_else(|_| cpal::default_host());
@@ -107,7 +177,7 @@ impl UltraLowLatencyServer {
             );
         }
 
-        let queue_capacity = (config.block_size * channels).max(1) * options.queue_depth;
+        let queue_capacity = queue_capacity(config.block_size, channels, options.queue_depth);
         let queue = Arc::new(ArrayQueue::new(queue_capacity));
         let running = Arc::new(AtomicBool::new(true));
 
@@ -136,6 +206,7 @@ impl UltraLowLatencyServer {
                     control_rx,
                     render_running,
                     render_options,
+                    channels,
                 ) {
                     tracing::error!(?err, "sound server render loop terminated with error");
                 }
@@ -143,7 +214,100 @@ impl UltraLowLatencyServer {
             .context("failed to spawn render thread")?;
 
         Ok(Self {
-            stream,
+            stream: StreamHandle::Cpal(stream),
+            render_thread: Some(render_handle),
+            control: control_tx,
+            running,
+            device_name,
+            config,
+        })
+    }
+
+    #[cfg(feature = "openasio")]
+    fn start_openasio(
+        engine: Arc<Mutex<HarmoniqEngine>>,
+        config: BufferConfig,
+        options: UltraLowLatencyOptions,
+        openasio: UltraOpenAsioOptions,
+    ) -> anyhow::Result<Self> {
+        let device_selection = openasio
+            .device
+            .clone()
+            .or(options.device.clone())
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty());
+        let device_name = device_selection
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+
+        let out_channels = openasio
+            .out_channels
+            .unwrap_or(config.layout.channels() as u16)
+            .max(1);
+        let out_channels_usize = out_channels as usize;
+        if out_channels_usize != config.layout.channels() as usize {
+            tracing::warn!(
+                device_channels = out_channels_usize,
+                engine_channels = config.layout.channels(),
+                "OpenASIO channel count differs from engine layout; excess channels will be silent"
+            );
+        }
+
+        let queue_capacity =
+            queue_capacity(config.block_size, out_channels_usize, options.queue_depth);
+        let queue = Arc::new(ArrayQueue::new(queue_capacity));
+        for _ in 0..queue_capacity {
+            let _ = queue.push(0.0);
+        }
+        let running = Arc::new(AtomicBool::new(true));
+
+        let render_queue = Arc::clone(&queue);
+        let render_running = Arc::clone(&running);
+        let (control_tx, control_rx) = channel::bounded(1);
+        let render_config = config.clone();
+        let render_options = options.clone();
+        let render_handle = thread::Builder::new()
+            .name("harmoniq-ultra-render".into())
+            .spawn(move || {
+                if let Err(err) = render_loop(
+                    engine,
+                    render_config,
+                    render_queue,
+                    control_rx,
+                    render_running,
+                    render_options,
+                    out_channels_usize,
+                ) {
+                    tracing::error!(?err, "sound server render loop terminated with error");
+                }
+            })
+            .context("failed to spawn render thread")?;
+
+        let sample_rate = config.sample_rate.round() as u32;
+        let buffer_frames = options
+            .buffer_frames
+            .unwrap_or(config.block_size as u32)
+            .max(1);
+        let desired = EngineStreamConfig::new(
+            sample_rate,
+            buffer_frames,
+            openasio.in_channels.unwrap_or(0),
+            out_channels,
+            !openasio.noninterleaved,
+        );
+
+        let mut backend = OpenAsioBackend::new(
+            openasio.driver_path.clone(),
+            device_selection.clone(),
+            openasio.noninterleaved,
+            desired,
+        );
+        let process =
+            QueueProcess::new(Arc::clone(&queue), Arc::clone(&running), out_channels_usize);
+        backend.start(Box::new(process))?;
+
+        Ok(Self {
+            stream: StreamHandle::OpenAsio(backend),
             render_thread: Some(render_handle),
             control: control_tx,
             running,
@@ -167,7 +331,15 @@ impl UltraLowLatencyServer {
     pub fn shutdown(mut self) -> anyhow::Result<()> {
         self.running.store(false, Ordering::Relaxed);
         let _ = self.control.send(ControlMessage::Stop);
-        self.stream.pause()?;
+        match &mut self.stream {
+            StreamHandle::Cpal(stream) => {
+                stream.pause()?;
+            }
+            #[cfg(feature = "openasio")]
+            StreamHandle::OpenAsio(backend) => {
+                backend.stop();
+            }
+        }
         if let Some(handle) = self.render_thread.take() {
             handle
                 .join()
@@ -181,7 +353,15 @@ impl Drop for UltraLowLatencyServer {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
         let _ = self.control.send(ControlMessage::Stop);
-        let _ = self.stream.pause();
+        match &mut self.stream {
+            StreamHandle::Cpal(stream) => {
+                let _ = stream.pause();
+            }
+            #[cfg(feature = "openasio")]
+            StreamHandle::OpenAsio(backend) => {
+                backend.stop();
+            }
+        }
         if let Some(handle) = self.render_thread.take() {
             let _ = handle.join();
         }
@@ -279,6 +459,129 @@ where
     }
 }
 
+#[cfg(feature = "openasio")]
+struct QueueProcess {
+    queue: Arc<ArrayQueue<f32>>,
+    running: Arc<AtomicBool>,
+    channels: usize,
+}
+
+#[cfg(feature = "openasio")]
+impl QueueProcess {
+    fn new(queue: Arc<ArrayQueue<f32>>, running: Arc<AtomicBool>, channels: usize) -> Self {
+        Self {
+            queue,
+            running,
+            channels: channels.max(1),
+        }
+    }
+
+    fn pop_sample(&self) -> f32 {
+        self.queue.pop().unwrap_or(0.0)
+    }
+}
+
+#[cfg(feature = "openasio")]
+impl crate::backend::EngineRt for QueueProcess {
+    fn process(
+        &mut self,
+        _inputs: AudioView<'_>,
+        mut outputs: AudioViewMut<'_>,
+        frames: u32,
+    ) -> bool {
+        let frames = frames as usize;
+        let channels = self.channels;
+        if frames == 0 || channels == 0 {
+            return true;
+        }
+
+        let total_samples = frames.saturating_mul(channels);
+        if let Some(out) = outputs.interleaved_mut() {
+            let len = out.len();
+            let samples_to_fill = len.min(total_samples);
+            for sample in &mut out[..samples_to_fill] {
+                *sample = self.pop_sample();
+            }
+            for sample in &mut out[samples_to_fill..] {
+                *sample = 0.0;
+            }
+            if samples_to_fill < total_samples {
+                for _ in samples_to_fill..total_samples {
+                    let _ = self.queue.pop();
+                }
+            }
+            if !self.running.load(Ordering::Relaxed) {
+                out.fill(0.0);
+            }
+        } else if let Some(mut planar) = outputs.planar() {
+            let frames_available = planar.frames();
+            let mut plane_ptrs = planar.planes().to_vec();
+            let plane_count = plane_ptrs.len();
+            let active = plane_count.min(channels);
+            let frames_to_write = frames.min(frames_available);
+
+            for frame_idx in 0..frames_to_write {
+                for ch in 0..active {
+                    let sample = self.pop_sample();
+                    let plane_ptr = plane_ptrs[ch];
+                    if !plane_ptr.is_null() {
+                        unsafe {
+                            *plane_ptr.add(frame_idx) = sample;
+                        }
+                    }
+                }
+                for ch in active..plane_count {
+                    let plane_ptr = plane_ptrs[ch];
+                    if !plane_ptr.is_null() {
+                        unsafe {
+                            *plane_ptr.add(frame_idx) = 0.0;
+                        }
+                    }
+                }
+                for _ in active..channels {
+                    let _ = self.queue.pop();
+                }
+            }
+
+            for frame_idx in frames_to_write..frames_available {
+                for plane_ptr in &plane_ptrs {
+                    if !plane_ptr.is_null() {
+                        unsafe {
+                            *plane_ptr.add(frame_idx) = 0.0;
+                        }
+                    }
+                }
+            }
+
+            let consumed = frames_to_write.saturating_mul(channels);
+            if consumed < total_samples {
+                for _ in consumed..total_samples {
+                    let _ = self.queue.pop();
+                }
+            }
+
+            if !self.running.load(Ordering::Relaxed) {
+                let frames_available = planar.frames();
+                for plane_ptr in planar.planes() {
+                    if !plane_ptr.is_null() {
+                        for idx in 0..frames_available {
+                            unsafe {
+                                *plane_ptr.add(idx) = 0.0;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            for _ in 0..total_samples {
+                let _ = self.queue.pop();
+            }
+        }
+
+        true
+    }
+}
+
 fn render_loop(
     engine: Arc<Mutex<HarmoniqEngine>>,
     config: BufferConfig,
@@ -286,6 +589,7 @@ fn render_loop(
     control_rx: Receiver<ControlMessage>,
     running: Arc<AtomicBool>,
     options: UltraLowLatencyOptions,
+    target_channels: usize,
 ) -> anyhow::Result<()> {
     lock_memory()?;
     if let Some(priority) = options.realtime_priority {
@@ -295,7 +599,8 @@ fn render_loop(
     }
 
     let mut buffer = AudioBuffer::from_config(config.clone());
-    let mut interleaved = vec![0.0f32; buffer.len() * config.layout.channels() as usize];
+    let output_channels = target_channels.max(1);
+    let mut interleaved = vec![0.0f32; buffer.len().max(1) * output_channels];
 
     while running.load(Ordering::Relaxed) {
         if let Ok(ControlMessage::Stop) = control_rx.try_recv() {
@@ -309,9 +614,19 @@ fn render_loop(
                 .context("engine processing failed")?;
         }
 
-        write_interleaved(&buffer, &mut interleaved);
+        let frames = buffer.len();
+        if frames == 0 {
+            continue;
+        }
 
-        for &sample in &interleaved {
+        let required = frames.saturating_mul(output_channels);
+        if interleaved.len() < required {
+            interleaved.resize(required, 0.0);
+        }
+
+        write_interleaved(&buffer, &mut interleaved[..required], output_channels);
+
+        for &sample in &interleaved[..required] {
             while queue.push(sample).is_err() {
                 let _ = queue.pop();
             }
@@ -322,14 +637,34 @@ fn render_loop(
     Ok(())
 }
 
-fn write_interleaved(buffer: &AudioBuffer, target: &mut [f32]) {
+fn write_interleaved(buffer: &AudioBuffer, target: &mut [f32], target_channels: usize) {
+    if target_channels == 0 {
+        return;
+    }
     let channels = buffer.as_slice().len();
     let frames = buffer.len();
+    let required = frames.saturating_mul(target_channels);
+    if required == 0 {
+        return;
+    }
+
     for frame in 0..frames {
-        for channel in 0..channels {
-            target[frame * channels + channel] = buffer.as_slice()[channel][frame];
+        for channel in 0..target_channels {
+            let value = if channel < channels {
+                buffer.as_slice()[channel][frame]
+            } else {
+                0.0
+            };
+            target[frame * target_channels + channel] = value;
         }
     }
+}
+
+fn queue_capacity(block_size: usize, channels: usize, depth: usize) -> usize {
+    let frames = block_size.max(1);
+    let channels = channels.max(1);
+    let depth = depth.max(2);
+    frames.saturating_mul(channels).saturating_mul(depth)
 }
 
 fn lock_memory() -> anyhow::Result<()> {

@@ -12,6 +12,8 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, FromSample, SampleFormat, SizedSample, StreamConfig};
 #[cfg(target_os = "linux")]
 use harmoniq_engine::sound_server::alsa_devices_available;
+#[cfg(all(target_os = "linux", feature = "openasio"))]
+use harmoniq_engine::sound_server::UltraOpenAsioOptions;
 use harmoniq_engine::{
     AudioBuffer, AudioClip, BufferConfig, ChannelLayout, EngineCommandQueue, HarmoniqEngine,
 };
@@ -553,11 +555,75 @@ impl RealtimeAudio {
                     .output_device
                     .clone()
                     .or_else(|| Some("default".to_string()));
+                let base_options = harmoniq_engine::sound_server::UltraLowLatencyOptions::default()
+                    .with_device(device.clone());
+
+                #[cfg(feature = "openasio")]
+                let openasio_request = {
+                    let wants_openasio = options.openasio_driver.is_some()
+                        || options.openasio_device.is_some()
+                        || options.openasio_in_channels.is_some()
+                        || options.openasio_out_channels.is_some()
+                        || options.openasio_noninterleaved;
+                    if wants_openasio {
+                        let default_driver = if cfg!(debug_assertions) {
+                            "target/debug/libopenasio_driver_cpal.so"
+                        } else {
+                            "target/release/libopenasio_driver_cpal.so"
+                        };
+                        let driver_path = options
+                            .openasio_driver
+                            .clone()
+                            .unwrap_or_else(|| default_driver.to_string());
+                        let device_selection = options
+                            .openasio_device
+                            .clone()
+                            .or_else(|| device.clone())
+                            .filter(|name| !name.is_empty());
+                        Some(
+                            UltraOpenAsioOptions::new(driver_path)
+                                .with_device(device_selection)
+                                .with_noninterleaved(options.openasio_noninterleaved)
+                                .with_in_channels(options.openasio_in_channels)
+                                .with_out_channels(options.openasio_out_channels),
+                        )
+                    } else {
+                        None
+                    }
+                };
+
+                #[cfg(feature = "openasio")]
+                let server = {
+                    if let Some(openasio_opts) = openasio_request {
+                        match harmoniq_engine::sound_server::UltraLowLatencyServer::start(
+                            Arc::clone(&engine),
+                            config.clone(),
+                            base_options.clone().with_openasio(Some(openasio_opts)),
+                        ) {
+                            Ok(server) => server,
+                            Err(err) => {
+                                warn!(?err, "failed to start Harmoniq Ultra with OpenASIO; falling back to ALSA backend");
+                                harmoniq_engine::sound_server::UltraLowLatencyServer::start(
+                                    Arc::clone(&engine),
+                                    config.clone(),
+                                    base_options.clone(),
+                                )?
+                            }
+                        }
+                    } else {
+                        harmoniq_engine::sound_server::UltraLowLatencyServer::start(
+                            Arc::clone(&engine),
+                            config.clone(),
+                            base_options.clone(),
+                        )?
+                    }
+                };
+
+                #[cfg(not(feature = "openasio"))]
                 let server = harmoniq_engine::sound_server::UltraLowLatencyServer::start(
                     Arc::clone(&engine),
                     config.clone(),
-                    harmoniq_engine::sound_server::UltraLowLatencyOptions::default()
-                        .with_device(device.clone()),
+                    base_options,
                 )?;
                 let device_name = device.unwrap_or_else(|| server.device_name().to_string());
                 Ok(StreamCreation {
