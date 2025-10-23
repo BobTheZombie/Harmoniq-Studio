@@ -221,7 +221,7 @@ fn build_output_stream<T>(
     running: Arc<AtomicBool>,
 ) -> anyhow::Result<Stream>
 where
-    T: Sample + cpal::SizedSample + FromSample<f32>,
+    T: Sample + cpal::SizedSample + FromSample<f32> + Send + 'static,
 {
     let silence = T::from_sample(0.0f32);
     let stream = device.build_output_stream(
