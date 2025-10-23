@@ -5,6 +5,7 @@
 //! workstations and live performance scenarios.
 
 pub mod buffer;
+pub mod buffers;
 pub mod engine;
 pub mod graph;
 pub mod nodes;
@@ -21,6 +22,9 @@ pub use engine::{EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportSta
 pub use graph::{GraphBuilder, GraphHandle, NodeHandle};
 pub use nodes::SineNode;
 pub use plugin::{AudioProcessor, MidiEvent, MidiProcessor, PluginDescriptor, PluginId};
+
+#[cfg(feature = "openasio")]
+pub mod backend;
 
 #[cfg(feature = "native")]
 pub use realtime::{start_realtime, EngineHandle};

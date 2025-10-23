@@ -17,6 +17,7 @@ rayon = "1.8"
 petgraph = "0.6"
 ringbuf = "0.3"
 cpal = { version = "0.16", optional = true }
+openasio = { git = "https://github.com/BobTheZombie/OpenASIO-SDK", package = "openasio", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
@@ -29,6 +30,7 @@ vst2 = []
 vst3 = []
 au = []
 rtas = []
+openasio = ["dep:openasio"]
 
 [dev-dependencies]
 serde_json.workspace = true
