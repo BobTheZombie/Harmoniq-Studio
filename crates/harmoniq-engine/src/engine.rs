@@ -220,11 +220,11 @@ impl HarmoniqEngine {
         Ok(())
     }
 
-    pub fn execute_command(&self, command: EngineCommand) -> anyhow::Result<()> {
+    pub fn execute_command(&mut self, command: EngineCommand) -> anyhow::Result<()> {
         self.handle_command(command)
     }
 
-    fn handle_command(&self, command: EngineCommand) -> anyhow::Result<()> {
+    fn handle_command(&mut self, command: EngineCommand) -> anyhow::Result<()> {
         match command {
             EngineCommand::SetTempo(_tempo) => {
                 // Tempo will influence scheduling and clip triggering.
@@ -341,7 +341,7 @@ impl HarmoniqEngine {
         Ok(())
     }
 
-    fn drain_command_queue(&self) -> anyhow::Result<()> {
+    fn drain_command_queue(&mut self) -> anyhow::Result<()> {
         while let Some(command) = self.command_queue.pop() {
             self.handle_command(command)?;
         }
@@ -453,11 +453,6 @@ impl ClipPlayback {
             return true;
         }
 
-        let output_channels = buffer.as_mut_slice();
-        if output_channels.is_empty() {
-            return true;
-        }
-
         let clip_channels = self.clip.channels();
         if clip_channels == 0 {
             return true;
@@ -465,7 +460,12 @@ impl ClipPlayback {
 
         let clip_samples = self.clip.samples();
         let mut position = self.position;
-        let available_frames = buffer.len();
+        let output_channels = buffer.as_mut_slice();
+        if output_channels.is_empty() {
+            return true;
+        }
+
+        let available_frames = output_channels[0].len();
 
         for frame_index in 0..available_frames {
             if position >= total_frames {
