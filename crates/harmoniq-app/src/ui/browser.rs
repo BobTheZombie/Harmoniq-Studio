@@ -69,6 +69,9 @@ impl BrowserPane {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette, event_bus: &EventBus) {
         self.refresh_categories();
+        let filter = self.filter.trim().to_ascii_lowercase();
+        let matches_filter = |name: &str| Self::matches_filter(&filter, name);
+
         ui.vertical(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
@@ -90,7 +93,7 @@ impl BrowserPane {
                         .default_open(category.expanded);
                         let response = header.show(ui, |ui| {
                             for entry in &category.entries {
-                                if !self.matches_filter(&entry.name) {
+                                if !matches_filter(&entry.name) {
                                     continue;
                                 }
                                 let label = RichText::new(&entry.name).color(palette.text_muted);
@@ -105,12 +108,11 @@ impl BrowserPane {
         });
     }
 
-    fn matches_filter(&self, name: &str) -> bool {
-        let needle = self.filter.trim().to_ascii_lowercase();
-        if needle.is_empty() {
+    fn matches_filter(filter: &str, name: &str) -> bool {
+        if filter.is_empty() {
             true
         } else {
-            name.to_ascii_lowercase().contains(&needle)
+            name.to_ascii_lowercase().contains(filter)
         }
     }
 

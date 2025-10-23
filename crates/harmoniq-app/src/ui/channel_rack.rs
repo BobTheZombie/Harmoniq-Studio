@@ -42,6 +42,8 @@ impl ChannelRackPane {
         if self.channels.is_empty() {
             self.channels = Self::seed_channels();
         }
+        let mut clone_requests: Vec<(usize, Channel)> = Vec::new();
+
         ui.vertical(|ui| {
             ui.heading(RichText::new("Channel Rack").color(palette.text_primary));
             ui.add_space(6.0);
@@ -125,7 +127,7 @@ impl ChannelRackPane {
                                         if ui.button("Clone").clicked() {
                                             let mut clone = channel.clone();
                                             clone.name = format!("{} Copy", channel.name);
-                                            self.channels.insert(index + 1, clone);
+                                            clone_requests.push((index + 1, clone));
                                         }
                                     },
                                 );
@@ -141,6 +143,14 @@ impl ChannelRackPane {
                 ));
             }
         });
+
+        if !clone_requests.is_empty() {
+            let mut offset = 0;
+            for (index, channel) in clone_requests {
+                self.channels.insert(index + offset, channel);
+                offset += 1;
+            }
+        }
     }
 }
 
