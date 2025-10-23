@@ -61,6 +61,14 @@ impl<'a> AudioView<'a> {
     }
 
     #[inline]
+    pub fn planes_ptrs(&self) -> Option<&'a [*const f32]> {
+        match self.kind {
+            AudioViewKind::Planar(ptrs) => Some(ptrs),
+            _ => None,
+        }
+    }
+
+    #[inline]
     pub fn plane(&self, index: usize) -> Option<&'a [f32]> {
         match self.kind {
             AudioViewKind::Planar(ptrs) => ptrs
@@ -153,6 +161,14 @@ impl<'a> AudioViewMut<'a> {
                 planes: *planes,
                 frames: self.frames,
             }),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn planes_ptrs_mut(&mut self) -> Option<&mut [*mut f32]> {
+        match &mut self.kind {
+            AudioViewMutKind::Planar(planes) => Some(*planes),
             _ => None,
         }
     }
