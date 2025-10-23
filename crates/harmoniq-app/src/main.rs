@@ -35,6 +35,7 @@ mod ui;
 
 use audio::{
     available_backends, describe_layout, AudioBackend, AudioRuntimeOptions, RealtimeAudio,
+    SoundTestSample,
 };
 use midi::list_midi_inputs;
 use ui::{
@@ -913,6 +914,7 @@ struct HarmoniqStudioApp {
     mixer: MixerPane,
     playlist: PlaylistPane,
     audio_settings: AudioSettingsPanel,
+    sound_test: SoundTestSample,
     event_bus: EventBus,
     engine_runner: EngineRunner,
     command_queue: harmoniq_engine::EngineCommandQueue,
@@ -984,6 +986,7 @@ impl HarmoniqStudioApp {
         let playlist = PlaylistPane::default();
         let audio_settings =
             AudioSettingsPanel::new(engine_runner.config(), engine_runner.runtime_options());
+        let sound_test = SoundTestSample::load().context("failed to load sound test sample")?;
 
         let status_message = engine_runner
             .last_runtime_error()
@@ -1003,6 +1006,7 @@ impl HarmoniqStudioApp {
             mixer,
             playlist,
             audio_settings,
+            sound_test,
             event_bus,
             engine_runner,
             command_queue,
@@ -1074,6 +1078,22 @@ impl HarmoniqStudioApp {
     fn send_command(&mut self, command: EngineCommand) {
         if let Err(command) = self.command_queue.try_send(command) {
             self.status_message = Some(format!("Command queue full: {command:?}"));
+        }
+    }
+
+    fn play_sound_test(&mut self) {
+        let sample_rate = self.engine_runner.config().sample_rate;
+        let clip = self.sound_test.prepare_clip(sample_rate);
+        match self
+            .command_queue
+            .try_send(EngineCommand::PlaySoundTest(clip))
+        {
+            Ok(()) => {
+                self.status_message = Some("Playing sound test".to_string());
+            }
+            Err(command) => {
+                self.status_message = Some(format!("Command queue full: {command:?}"));
+            }
         }
     }
 
@@ -1288,17 +1308,24 @@ impl App for HarmoniqStudioApp {
             .last_runtime_error()
             .map(|err| err.to_string());
 
-        if let Some(AudioSettingsAction::Apply { config, runtime }) = self.audio_settings.ui(
+        if let Some(action) = self.audio_settings.ui(
             ctx,
             &palette,
             active_audio_summary.as_ref(),
             last_runtime_error.as_deref(),
         ) {
-            let result = self
-                .engine_runner
-                .reconfigure(config.clone(), runtime.clone());
-            self.audio_settings
-                .on_apply_result(result, &config, &runtime);
+            match action {
+                AudioSettingsAction::Apply { config, runtime } => {
+                    let result = self
+                        .engine_runner
+                        .reconfigure(config.clone(), runtime.clone());
+                    self.audio_settings
+                        .on_apply_result(result, &config, &runtime);
+                }
+                AudioSettingsAction::PlayTestSound => {
+                    self.play_sound_test();
+                }
+            }
         }
 
         if let Some(feedback) = self.audio_settings.take_status_message() {

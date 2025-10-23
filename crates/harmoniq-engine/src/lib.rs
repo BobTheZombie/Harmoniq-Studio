@@ -18,7 +18,7 @@ mod tone;
 pub mod realtime;
 
 pub use buffer::{AudioBuffer, BufferConfig, ChannelLayout};
-pub use engine::{EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
+pub use engine::{AudioClip, EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
 pub use graph::{GraphBuilder, GraphHandle, NodeHandle};
 pub use nodes::SineNode;
 pub use plugin::{AudioProcessor, MidiEvent, MidiProcessor, PluginDescriptor, PluginId};

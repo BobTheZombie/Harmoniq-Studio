@@ -55,6 +55,35 @@ impl EngineCommandQueue {
     }
 }
 
+/// Immutable clip of audio data that can be scheduled for playback.
+#[derive(Clone, Debug)]
+pub struct AudioClip {
+    samples: Arc<Vec<Vec<f32>>>,
+}
+
+impl AudioClip {
+    pub fn from_channels(channels: Vec<Vec<f32>>) -> Self {
+        Self {
+            samples: Arc::new(channels),
+        }
+    }
+
+    fn channels(&self) -> usize {
+        self.samples.len()
+    }
+
+    fn frames(&self) -> usize {
+        self.samples
+            .first()
+            .map(|channel| channel.len())
+            .unwrap_or(0)
+    }
+
+    fn samples(&self) -> &[Vec<f32>] {
+        &self.samples
+    }
+}
+
 /// Commands that can be sent to the engine from UI or automation.
 #[derive(Debug, Clone)]
 pub enum EngineCommand {
@@ -62,6 +91,7 @@ pub enum EngineCommand {
     SetTransport(TransportState),
     ReplaceGraph(GraphHandle),
     SubmitMidi(Vec<MidiEvent>),
+    PlaySoundTest(AudioClip),
 }
 
 /// Central Harmoniq engine responsible for orchestrating the processing graph.
@@ -79,6 +109,7 @@ pub struct HarmoniqEngine {
     latencies: RwLock<HashMap<PluginId, usize>>,
     delay_lines: HashMap<PluginId, DelayCompensator>,
     scratch_buffers: Vec<AudioBuffer>,
+    sound_test: Option<ClipPlayback>,
 }
 
 impl HarmoniqEngine {
@@ -100,6 +131,7 @@ impl HarmoniqEngine {
             latencies: RwLock::new(HashMap::new()),
             delay_lines: HashMap::new(),
             scratch_buffers: Vec::new(),
+            sound_test: None,
         })
     }
 
@@ -128,6 +160,7 @@ impl HarmoniqEngine {
         }
 
         self.delay_lines.clear();
+        self.sound_test = None;
         Ok(())
     }
 
@@ -201,6 +234,9 @@ impl HarmoniqEngine {
             EngineCommand::SubmitMidi(events) => {
                 let mut pending = self.pending_midi.lock();
                 pending.extend(events);
+            }
+            EngineCommand::PlaySoundTest(clip) => {
+                self.sound_test = Some(ClipPlayback::new(clip));
             }
         }
         Ok(())
@@ -293,6 +329,12 @@ impl HarmoniqEngine {
             self.tone_shaper.process(&mut master);
             for (target_channel, source_channel) in output.channels_mut().zip(master.channels()) {
                 target_channel.copy_from_slice(source_channel);
+            }
+        }
+
+        if let Some(player) = self.sound_test.as_mut() {
+            if player.mix_into(output) {
+                self.sound_test = None;
             }
         }
 
@@ -392,6 +434,59 @@ impl HarmoniqEngine {
             delay.configure(channels, additional_delay, self.config.block_size);
             delay.process(&mut buffers[index]);
         }
+    }
+}
+
+struct ClipPlayback {
+    clip: AudioClip,
+    position: usize,
+}
+
+impl ClipPlayback {
+    fn new(clip: AudioClip) -> Self {
+        Self { clip, position: 0 }
+    }
+
+    fn mix_into(&mut self, buffer: &mut AudioBuffer) -> bool {
+        let total_frames = self.clip.frames();
+        if total_frames == 0 {
+            return true;
+        }
+
+        let output_channels = buffer.as_mut_slice();
+        if output_channels.is_empty() {
+            return true;
+        }
+
+        let clip_channels = self.clip.channels();
+        if clip_channels == 0 {
+            return true;
+        }
+
+        let clip_samples = self.clip.samples();
+        let mut position = self.position;
+        let available_frames = buffer.len();
+
+        for frame_index in 0..available_frames {
+            if position >= total_frames {
+                break;
+            }
+
+            for (channel_index, channel) in output_channels.iter_mut().enumerate() {
+                let source_channel = channel_index.min(clip_channels - 1);
+                if let Some(value) = clip_samples
+                    .get(source_channel)
+                    .and_then(|channel| channel.get(position))
+                {
+                    channel[frame_index] += *value;
+                }
+            }
+
+            position += 1;
+        }
+
+        self.position = position;
+        self.position >= total_frames
     }
 }
 

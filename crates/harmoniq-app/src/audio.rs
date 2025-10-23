@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io::Cursor;
 use std::sync::Arc;
 
 #[cfg(target_os = "linux")]
@@ -12,7 +13,7 @@ use cpal::{BufferSize, FromSample, SampleFormat, SizedSample, StreamConfig};
 #[cfg(target_os = "linux")]
 use harmoniq_engine::sound_server::alsa_devices_available;
 use harmoniq_engine::{
-    AudioBuffer, BufferConfig, ChannelLayout, EngineCommandQueue, HarmoniqEngine,
+    AudioBuffer, AudioClip, BufferConfig, ChannelLayout, EngineCommandQueue, HarmoniqEngine,
 };
 use parking_lot::Mutex;
 use tracing::{info, warn};
@@ -894,6 +895,83 @@ impl RealtimeAudio {
                 *sample = silence;
             }
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct SoundTestSample {
+    samples: Vec<Vec<f32>>,
+    sample_rate: f32,
+}
+
+impl SoundTestSample {
+    pub fn load() -> anyhow::Result<Self> {
+        let bytes = include_bytes!("../../../resources/audio/testing_harmoniq_stereo.wav");
+        let cursor = Cursor::new(&bytes[..]);
+        let mut reader =
+            hound::WavReader::new(cursor).context("failed to open sound test audio")?;
+        let spec = reader.spec();
+        let channels = spec.channels.max(1) as usize;
+        let sample_rate = spec.sample_rate as f32;
+        let mut samples = vec![Vec::new(); channels];
+
+        for (index, sample) in reader.samples::<i16>().enumerate() {
+            let value = sample.context("failed to decode sound test audio")? as f32 / 32768.0;
+            let channel = index % channels;
+            samples[channel].push(value);
+        }
+
+        Ok(Self {
+            samples,
+            sample_rate,
+        })
+    }
+
+    pub fn prepare_clip(&self, target_sample_rate: f32) -> AudioClip {
+        if self.samples.is_empty() {
+            return AudioClip::from_channels(Vec::<Vec<f32>>::new());
+        }
+
+        if self.sample_rate <= 0.0 || target_sample_rate <= 0.0 {
+            return AudioClip::from_channels(self.samples.clone());
+        }
+
+        let ratio = target_sample_rate / self.sample_rate;
+        if (ratio - 1.0).abs() < f32::EPSILON {
+            return AudioClip::from_channels(self.samples.clone());
+        }
+
+        let source_frames = self.samples[0].len();
+        if source_frames == 0 {
+            return AudioClip::from_channels(self.samples.clone());
+        }
+
+        let target_frames = ((source_frames as f32) * ratio).ceil().max(1.0) as usize;
+        let mut channels = Vec::with_capacity(self.samples.len());
+
+        for source in &self.samples {
+            if source.is_empty() {
+                channels.push(vec![0.0; target_frames]);
+                continue;
+            }
+
+            let mut resampled = Vec::with_capacity(target_frames);
+            let max_index = source.len() - 1;
+            for frame in 0..target_frames {
+                let position = (frame as f32) / ratio;
+                let lower = position.floor() as usize;
+                let frac = position - lower as f32;
+                let lower = lower.min(max_index);
+                let upper = (lower + 1).min(max_index);
+                let start = source[lower];
+                let end = source[upper];
+                let value = start + (end - start) * frac;
+                resampled.push(value.clamp(-1.0, 1.0));
+            }
+            channels.push(resampled);
+        }
+
+        AudioClip::from_channels(channels)
     }
 }
 

@@ -1,0 +1,152 @@
+{
+  "dock": {
+    "surfaces": [
+      {
+        "Main": {
+          "nodes": [
+            {
+              "Horizontal": {
+                "rect": {
+                  "min": {
+                    "x": 272.5,
+                    "y": 68.5
+                  },
+                  "max": {
+                    "x": 1907.5,
+                    "y": 928.5
+                  }
+                },
+                "fraction": 0.75
+              }
+            },
+            {
+              "Vertical": {
+                "rect": {
+                  "min": {
+                    "x": 272.5,
+                    "y": 68.5
+                  },
+                  "max": {
+                    "x": 1499.0,
+                    "y": 928.5
+                  }
+                },
+                "fraction": 0.55
+              }
+            },
+            {
+              "Leaf": {
+                "rect": {
+                  "min": {
+                    "x": 1500.0,
+                    "y": 68.5
+                  },
+                  "max": {
+                    "x": 1907.5,
+                    "y": 928.5
+                  }
+                },
+                "viewport": {
+                  "min": {
+                    "x": 1500.0,
+                    "y": 92.5
+                  },
+                  "max": {
+                    "x": 1907.5,
+                    "y": 928.5
+                  }
+                },
+                "tabs": [
+                  "Playlist"
+                ],
+                "active": 0,
+                "scroll": 0.0
+              }
+            },
+            {
+              "Leaf": {
+                "rect": {
+                  "min": {
+                    "x": 272.5,
+                    "y": 68.5
+                  },
+                  "max": {
+                    "x": 1499.0,
+                    "y": 541.0
+                  }
+                },
+                "viewport": {
+                  "min": {
+                    "x": 272.5,
+                    "y": 92.5
+                  },
+                  "max": {
+                    "x": 1499.0,
+                    "y": 541.0
+                  }
+                },
+                "tabs": [
+                  "ChannelRack"
+                ],
+                "active": 0,
+                "scroll": 0.0
+              }
+            },
+            {
+              "Leaf": {
+                "rect": {
+                  "min": {
+                    "x": 272.5,
+                    "y": 542.0
+                  },
+                  "max": {
+                    "x": 1499.0,
+                    "y": 928.5
+                  }
+                },
+                "viewport": {
+                  "min": {
+                    "x": 272.5,
+                    "y": 566.0
+                  },
+                  "max": {
+                    "x": 1499.0,
+                    "y": 928.5
+                  }
+                },
+                "tabs": [
+                  "PianoRoll"
+                ],
+                "active": 0,
+                "scroll": 0.0
+              }
+            },
+            "Empty",
+            "Empty",
+            "Empty",
+            "Empty",
+            "Empty",
+            "Empty",
+            "Empty",
+            "Empty",
+            "Empty",
+            "Empty"
+          ],
+          "focused_node": 2
+        }
+      }
+    ],
+    "focused_surface": 0,
+    "translations": {
+      "tab_context_menu": {
+        "close_button": "Close",
+        "eject_button": "Eject"
+      },
+      "window": {
+        "close_button_tooltip": "This window contains non-closable tabs."
+      }
+    }
+  },
+  "browser_width": 260.0,
+  "browser_visible": true
+}

@@ -37,6 +37,7 @@ pub enum AudioSettingsAction {
         config: BufferConfig,
         runtime: AudioRuntimeOptions,
     },
+    PlayTestSound,
 }
 
 pub struct AudioSettingsPanel {
@@ -150,6 +151,7 @@ impl AudioSettingsPanel {
 
         let prev_backend = self.backend;
         let mut apply_clicked = false;
+        let mut play_test_clicked = false;
         let mut open_flag = self.open;
 
         egui::Window::new("Audio Settings")
@@ -238,6 +240,20 @@ impl AudioSettingsPanel {
                 }
 
                 ui.add_space(10.0);
+                if ui.button("Play sound test").clicked() {
+                    if self.enable_audio {
+                        play_test_clicked = true;
+                        self.feedback = Some(AudioSettingsFeedback::Info(
+                            "Playing sound test...".to_string(),
+                        ));
+                    } else {
+                        self.feedback = Some(AudioSettingsFeedback::Error(
+                            "Enable realtime audio to run the sound test".to_string(),
+                        ));
+                    }
+                    self.feedback_dirty = true;
+                }
+                ui.add_space(10.0);
                 ui.heading("Performance");
                 ui.add_space(4.0);
 
@@ -288,6 +304,10 @@ impl AudioSettingsPanel {
             self.pending_device_refresh = true;
             self.feedback = None;
             self.feedback_dirty = false;
+        }
+
+        if play_test_clicked {
+            return Some(AudioSettingsAction::PlayTestSound);
         }
 
         if apply_clicked {
