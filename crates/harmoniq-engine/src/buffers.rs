@@ -7,6 +7,7 @@ pub struct AudioView<'a> {
     kind: AudioViewKind<'a>,
 }
 
+#[derive(Clone, Copy)]
 enum AudioViewKind<'a> {
     Interleaved(&'a [f32]),
     Planar(&'a [*const f32]),
