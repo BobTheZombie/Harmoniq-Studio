@@ -1,35 +1,17 @@
 [package]
 name = "harmoniq-engine"
-edition.workspace = true
-license.workspace = true
-version.workspace = true
+version = "0.1.0"
+edition = "2021"
 
 [dependencies]
-anyhow.workspace = true
-thiserror.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-rand.workspace = true
-parking_lot.workspace = true
-tracing = "0.1"
-crossbeam = "0.8"
-rayon = "1.8"
-petgraph = "0.6"
-ringbuf = "0.3"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-cpal = "0.16"
-libc = "0.2"
-
-[features]
-default = ["native"]
-native = []
-wasm = []
-vst2 = []
-vst3 = []
-au = []
-rtas = []
-
-[dev-dependencies]
-serde_json.workspace = true
-rand.workspace = true
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+harmoniq-audioio = { path = "../harmoniq-audioio" }
+harmoniq-graph = { path = "../harmoniq-graph" }
+harmoniq-host = { path = "../harmoniq-host" }
+harmoniq-midi = { path = "../harmoniq-midi" }
+harmoniq-project = { path = "../harmoniq-project" }
+harmoniq-utils = { path = "../harmoniq-utils" }
+serde = { workspace = true, features = ["derive"] }
+thiserror = { workspace = true }

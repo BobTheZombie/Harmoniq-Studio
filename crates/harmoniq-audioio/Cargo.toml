@@ -1,0 +1,14 @@
+[package]
+name = "harmoniq-audioio"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+harmoniq-utils = { path = "../harmoniq-utils" }
+
+[features]
+default = []
+pipewire = []

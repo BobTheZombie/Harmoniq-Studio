@@ -1,0 +1,13 @@
+[package]
+name = "harmoniq-ui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = { workspace = true }
+egui = { workspace = true }
+egui_extras = { workspace = true }
+harmoniq-engine = { path = "../harmoniq-engine" }
+harmoniq-utils = { path = "../harmoniq-utils" }
+serde = { workspace = true, features = ["derive"] }
+tracing = { workspace = true }

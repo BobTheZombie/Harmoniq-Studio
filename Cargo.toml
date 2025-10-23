@@ -1,21 +1,17 @@
 [workspace]
 members = [
-    "crates/harmoniq-engine",
-    "crates/harmoniq-app",
-    "crates/harmoniq-plugins",
+    "crates/harmoniq-utils",
+    "crates/harmoniq-graph",
+    "crates/harmoniq-audioio",
+    "crates/harmoniq-midi",
+    "crates/harmoniq-project",
+    "crates/harmoniq-host",
     "crates/harmoniq-plugin-sdk",
-    "crates/harmoniq-plugin-host",
-    "crates/harmoniq-plugin-analog",
-    "crates/harmoniq-plugin-fm",
-    "crates/harmoniq-plugin-wavetable",
-    "crates/harmoniq-plugin-sampler",
-    "crates/harmoniq-plugin-granular",
-    "crates/harmoniq-plugin-additive",
-    "crates/harmoniq-plugin-organ-piano",
-    "crates/harmoniq-plugin-bass",
-    "crates/harmoniq-plugin-westcoast",
-    "crates/harmoniq-plugin-sub808",
-    "crates/harmoniq-plugin-edison",
+    "crates/harmoniq-engine",
+    "crates/harmoniq-ui",
+    "crates/harmoniq-app",
+    "crates/harmoniq-tests",
+    "examples/hello-harmoniq-plugin",
 ]
 resolver = "2"
 
@@ -29,8 +25,25 @@ anyhow = "1.0"
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rand = "0.8"
+serde_bytes = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 parking_lot = "0.12"
+ringbuf = "0.3"
+smallvec = "1.11"
+bitflags = "2.4"
+egui = "0.27"
+eframe = { version = "0.27", features = ["wgpu"] }
+egui_extras = "0.27"
+crossbeam-channel = "0.5"
+crossbeam-utils = "0.8"
+async-channel = "1.9"
+rand = "0.8"
+uuid = { version = "1", features = ["serde", "v4"] }
+bytes = "1.5"
+chrono = { version = "0.4", features = ["serde"] }
+strum = { version = "0.25", features = ["derive"] }
 
 [workspace.metadata]
 project-description = "Harmoniq Studio - a native, multi-platform digital audio workstation."
+

@@ -1,0 +1,19 @@
+[package]
+name = "harmoniq-host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+harmoniq-plugin-sdk = { path = "../harmoniq-plugin-sdk" }
+harmoniq-utils = { path = "../harmoniq-utils" }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[features]
+default = ["host-clap"]
+host-vst3 = []
+host-clap = []
+host-vst2 = []
+bridge-sandbox = []

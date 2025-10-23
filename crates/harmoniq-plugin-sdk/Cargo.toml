@@ -1,11 +1,8 @@
 [package]
 name = "harmoniq-plugin-sdk"
-edition.workspace = true
-license.workspace = true
-version.workspace = true
+version = "0.1.0"
+edition = "2021"
 
 [dependencies]
-harmoniq-engine = { path = "../harmoniq-engine" }
-thiserror.workspace = true
-serde.workspace = true
-anyhow.workspace = true
+anyhow = { workspace = true }
+thiserror = { workspace = true }

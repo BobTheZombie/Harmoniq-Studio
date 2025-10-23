@@ -1,0 +1,11 @@
+[package]
+name = "harmoniq-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dev-dependencies]
+harmoniq-engine = { path = "../harmoniq-engine" }
+harmoniq-graph = { path = "../harmoniq-graph" }
+harmoniq-project = { path = "../harmoniq-project" }
+anyhow = { workspace = true }

@@ -1,0 +1,16 @@
+[package]
+name = "harmoniq-utils"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+ringbuf = { workspace = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tracing = { workspace = true }
+
+[features]
+default = []
+serde = ["dep:serde", "dep:serde_json"]
