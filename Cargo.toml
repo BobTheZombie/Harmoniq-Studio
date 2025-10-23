@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/harmoniq-dsp",
     "crates/harmoniq-engine",
     "crates/harmoniq-app",
     "crates/harmoniq-plugins",

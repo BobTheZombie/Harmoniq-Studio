@@ -6,6 +6,7 @@
 
 pub mod buffer;
 pub mod buffers;
+pub mod dsp;
 pub mod engine;
 pub mod graph;
 pub mod nodes;
@@ -18,6 +19,7 @@ mod tone;
 pub mod realtime;
 
 pub use buffer::{AudioBuffer, BufferConfig, ChannelLayout};
+pub use dsp::RealtimeDspEngine;
 pub use engine::{AudioClip, EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
 pub use graph::{GraphBuilder, GraphHandle, NodeHandle};
 pub use nodes::SineNode;
