@@ -82,6 +82,31 @@ struct Cli {
     #[arg(long, default_value_t = AudioBackend::Auto)]
     audio_backend: AudioBackend,
 
+    /// Path to the OpenASIO driver (.so)
+    #[cfg(feature = "openasio")]
+    #[arg(long)]
+    openasio_driver: Option<String>,
+
+    /// Device name to open when using OpenASIO
+    #[cfg(feature = "openasio")]
+    #[arg(long)]
+    openasio_device: Option<String>,
+
+    /// Request non-interleaved buffers from OpenASIO drivers
+    #[cfg(feature = "openasio")]
+    #[arg(long, default_value_t = false)]
+    openasio_noninterleaved: bool,
+
+    /// Number of input channels when using OpenASIO
+    #[cfg(feature = "openasio")]
+    #[arg(long)]
+    openasio_in: Option<u16>,
+
+    /// Number of output channels when using OpenASIO
+    #[cfg(feature = "openasio")]
+    #[arg(long)]
+    openasio_out: Option<u16>,
+
     /// Disable realtime audio streaming
     #[arg(long, default_value_t = false)]
     disable_audio: bool,
@@ -534,11 +559,20 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let runtime_options = AudioRuntimeOptions::new(
+    let mut runtime_options = AudioRuntimeOptions::new(
         args.audio_backend,
         args.midi_input.clone(),
         !args.disable_audio,
     );
+
+    #[cfg(feature = "openasio")]
+    {
+        runtime_options.openasio_driver = args.openasio_driver.clone();
+        runtime_options.openasio_device = args.openasio_device.clone();
+        runtime_options.openasio_noninterleaved = args.openasio_noninterleaved;
+        runtime_options.openasio_in_channels = args.openasio_in;
+        runtime_options.openasio_out_channels = args.openasio_out;
+    }
 
     if let Some(path) = args.bounce.clone() {
         let config = BufferConfig::new(args.sample_rate, args.block_size, ChannelLayout::Stereo);

@@ -27,6 +27,8 @@ pub enum AudioBackend {
     Auto,
     Alsa,
     Harmoniq,
+    #[cfg(feature = "openasio")]
+    OpenAsio,
     PulseAudio,
     PipeWire,
     Asio,
@@ -50,6 +52,8 @@ impl AudioBackend {
                 }
             }
             AudioBackend::Harmoniq => None,
+            #[cfg(feature = "openasio")]
+            AudioBackend::OpenAsio => None,
             AudioBackend::PulseAudio => {
                 #[cfg(target_os = "linux")]
                 {
@@ -133,6 +137,8 @@ impl fmt::Display for AudioBackend {
             AudioBackend::Auto => "auto",
             AudioBackend::Alsa => "ALSA",
             AudioBackend::Harmoniq => "Harmoniq Ultra",
+            #[cfg(feature = "openasio")]
+            AudioBackend::OpenAsio => "OpenASIO",
             AudioBackend::PulseAudio => "PulseAudio",
             AudioBackend::PipeWire => "PipeWire",
             AudioBackend::Asio => "ASIO",
@@ -264,6 +270,8 @@ fn linux_backend_label(backend: AudioBackend, _host_id: Option<cpal::HostId>) ->
         AudioBackend::PulseAudio => "PulseAudio (via ALSA)".to_string(),
         AudioBackend::Alsa => "ALSA".to_string(),
         AudioBackend::Harmoniq => "Harmoniq Ultra".to_string(),
+        #[cfg(feature = "openasio")]
+        AudioBackend::OpenAsio => "OpenASIO".to_string(),
         AudioBackend::Asio => "Linux ASIO (ALSA)".to_string(),
         other => other.to_string(),
     }
@@ -275,6 +283,16 @@ pub struct AudioRuntimeOptions {
     pub midi_input: Option<String>,
     pub enable_audio: bool,
     pub output_device: Option<String>,
+    #[cfg(feature = "openasio")]
+    pub openasio_driver: Option<String>,
+    #[cfg(feature = "openasio")]
+    pub openasio_device: Option<String>,
+    #[cfg(feature = "openasio")]
+    pub openasio_noninterleaved: bool,
+    #[cfg(feature = "openasio")]
+    pub openasio_in_channels: Option<u16>,
+    #[cfg(feature = "openasio")]
+    pub openasio_out_channels: Option<u16>,
 }
 
 impl AudioRuntimeOptions {
@@ -284,6 +302,16 @@ impl AudioRuntimeOptions {
             midi_input,
             enable_audio,
             output_device: None,
+            #[cfg(feature = "openasio")]
+            openasio_driver: None,
+            #[cfg(feature = "openasio")]
+            openasio_device: None,
+            #[cfg(feature = "openasio")]
+            openasio_noninterleaved: false,
+            #[cfg(feature = "openasio")]
+            openasio_in_channels: None,
+            #[cfg(feature = "openasio")]
+            openasio_out_channels: None,
         }
     }
 
@@ -330,6 +358,8 @@ enum StreamBackend {
     Cpal(cpal::Stream),
     LinuxAsio(LinuxAsioDriver),
     Ultra(harmoniq_engine::sound_server::UltraLowLatencyServer),
+    #[cfg(feature = "openasio")]
+    OpenAsio(openasio_rt::OpenAsioHandle),
 }
 
 struct StreamCreation {
@@ -470,6 +500,23 @@ impl RealtimeAudio {
         backend: AudioBackend,
     ) -> anyhow::Result<StreamCreation> {
         match backend {
+            #[cfg(feature = "openasio")]
+            AudioBackend::OpenAsio => {
+                let handle = openasio_rt::OpenAsioHandle::start(
+                    Arc::clone(&engine),
+                    config.clone(),
+                    options,
+                )?;
+                let device_name = handle.device_name().to_string();
+                let device_id = handle.device_id().map(|id| id.to_string());
+                Ok(StreamCreation {
+                    stream: StreamBackend::OpenAsio(handle),
+                    backend: AudioBackend::OpenAsio,
+                    device_name,
+                    device_id,
+                    host_label: Some(linux_backend_label(AudioBackend::OpenAsio, None)),
+                })
+            }
             AudioBackend::Asio => {
                 if !alsa_devices_available() {
                     anyhow::bail!("no ALSA-compatible audio devices detected");
@@ -859,6 +906,8 @@ fn device_identifier_for_backend(
     {
         match backend {
             AudioBackend::Harmoniq => format!("harmoniq::{name}"),
+            #[cfg(feature = "openasio")]
+            AudioBackend::OpenAsio => format!("openasio::{name}"),
             AudioBackend::PulseAudio | AudioBackend::PipeWire | AudioBackend::Alsa => {
                 linux_device_identifier(cpal::HostId::Alsa, name)
             }
@@ -931,6 +980,16 @@ pub fn available_backends() -> Vec<(AudioBackend, String)> {
                 hosts.push((
                     AudioBackend::Asio,
                     "Harmoniq ASIO (ultra low latency)".to_string(),
+                ));
+            }
+            #[cfg(feature = "openasio")]
+            if hosts
+                .iter()
+                .all(|(backend, _)| *backend != AudioBackend::OpenAsio)
+            {
+                hosts.push((
+                    AudioBackend::OpenAsio,
+                    "OpenASIO (experimental low latency)".to_string(),
                 ));
             }
         }
@@ -1036,6 +1095,11 @@ fn linux_available_output_devices(backend: AudioBackend) -> anyhow::Result<Vec<O
                     label: "ALSA default".to_string(),
                 });
             }
+        }
+        #[cfg(feature = "openasio")]
+        AudioBackend::OpenAsio => {
+            // Enumeration requires loading the requested OpenASIO driver; rely on
+            // explicit CLI configuration for now.
         }
         AudioBackend::Auto => {
             let host = cpal::default_host();
@@ -1415,6 +1479,264 @@ mod linux_asio {
         {
             for sample in &mut output[start_sample..] {
                 *sample = T::from_sample(0.0);
+            }
+        }
+    }
+}
+
+#[cfg(all(feature = "openasio", target_os = "linux"))]
+mod openasio_rt {
+    use super::{alsa_devices_available, AudioRuntimeOptions};
+    use anyhow::{bail, Context, Result};
+    use crossbeam::queue::ArrayQueue;
+    use harmoniq_engine::backend::openasio::OpenAsioBackend;
+    use harmoniq_engine::backend::{EngineRt, StreamConfig as EngineStreamConfig};
+    use harmoniq_engine::buffers::{AudioView, AudioViewMut};
+    use harmoniq_engine::{AudioBuffer, BufferConfig, HarmoniqEngine};
+    use parking_lot::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::thread::{self, JoinHandle};
+    use tracing::{error, warn};
+
+    pub struct OpenAsioHandle {
+        backend: Option<OpenAsioBackend>,
+        device_name: String,
+        device_id: Option<String>,
+    }
+
+    impl OpenAsioHandle {
+        pub fn start(
+            engine: Arc<Mutex<HarmoniqEngine>>,
+            config: BufferConfig,
+            options: &AudioRuntimeOptions,
+        ) -> Result<Self> {
+            if !alsa_devices_available() {
+                bail!("no ALSA-compatible audio devices detected");
+            }
+
+            let default_driver = if cfg!(debug_assertions) {
+                "target/debug/libopenasio_driver_cpal.so"
+            } else {
+                "target/release/libopenasio_driver_cpal.so"
+            };
+            let driver_path = options
+                .openasio_driver
+                .clone()
+                .unwrap_or_else(|| default_driver.to_string());
+
+            let device_selection = options
+                .openasio_device
+                .clone()
+                .filter(|name| !name.is_empty());
+            let device_name = device_selection
+                .clone()
+                .unwrap_or_else(|| "default".to_string());
+
+            let interleaved = !options.openasio_noninterleaved;
+            let out_channels = options
+                .openasio_out_channels
+                .unwrap_or(config.layout.channels() as u16);
+            let in_channels = options.openasio_in_channels.unwrap_or(0);
+            let sample_rate = config.sample_rate.round() as u32;
+            let buffer_frames = config.block_size as u32;
+            let desired = EngineStreamConfig::new(
+                sample_rate,
+                buffer_frames.max(1),
+                in_channels,
+                out_channels,
+                interleaved,
+            );
+
+            let rt = RtProcess::new(Arc::clone(&engine), config.clone(), out_channels as usize)?;
+
+            let mut backend = OpenAsioBackend::new(
+                driver_path,
+                device_selection.clone(),
+                options.openasio_noninterleaved,
+                desired,
+            );
+            backend.start(Box::new(rt))?;
+
+            let device_id = Some(format!("openasio::{}", device_name));
+
+            Ok(Self {
+                backend: Some(backend),
+                device_name,
+                device_id,
+            })
+        }
+
+        pub fn device_name(&self) -> &str {
+            &self.device_name
+        }
+
+        pub fn device_id(&self) -> Option<&str> {
+            self.device_id.as_deref()
+        }
+    }
+
+    impl Drop for OpenAsioHandle {
+        fn drop(&mut self) {
+            if let Some(mut backend) = self.backend.take() {
+                backend.stop();
+            }
+        }
+    }
+
+    struct RtProcess {
+        queue: Arc<ArrayQueue<f32>>,
+        running: Arc<AtomicBool>,
+        out_channels: usize,
+        render_thread: Option<JoinHandle<()>>,
+    }
+
+    impl RtProcess {
+        fn new(
+            engine: Arc<Mutex<HarmoniqEngine>>,
+            config: BufferConfig,
+            out_channels: usize,
+        ) -> Result<Self> {
+            let channels = out_channels.max(1);
+            let frames = config.block_size.max(1);
+            let capacity = frames
+                .saturating_mul(channels)
+                .saturating_mul(4)
+                .max(channels);
+            let queue = Arc::new(ArrayQueue::new(capacity));
+            for _ in 0..capacity {
+                queue.force_push(0.0);
+            }
+            let running = Arc::new(AtomicBool::new(true));
+            let render_queue = Arc::clone(&queue);
+            let render_running = Arc::clone(&running);
+            let render_engine = Arc::clone(&engine);
+            let render_config = config.clone();
+            let render_out_channels = out_channels;
+            let render_thread = thread::Builder::new()
+                .name("harmoniq-openasio-render".into())
+                .spawn(move || {
+                    run_render_loop(
+                        render_engine,
+                        render_config,
+                        render_queue,
+                        render_running,
+                        render_out_channels,
+                    );
+                })
+                .context("failed to spawn OpenASIO render thread")?;
+            Ok(Self {
+                queue,
+                running,
+                out_channels,
+                render_thread: Some(render_thread),
+            })
+        }
+    }
+
+    impl EngineRt for RtProcess {
+        fn process(
+            &mut self,
+            _inputs: AudioView<'_>,
+            mut outputs: AudioViewMut<'_>,
+            frames: u32,
+        ) -> bool {
+            let frames = frames as usize;
+            let channels = self.out_channels;
+            if frames == 0 || channels == 0 {
+                return true;
+            }
+            let total_samples = frames.saturating_mul(channels);
+            if let Some(out) = outputs.interleaved_mut() {
+                let len = out.len().min(total_samples);
+                for sample in &mut out[..len] {
+                    *sample = self.queue.pop().unwrap_or(0.0);
+                }
+                for sample in &mut out[len..] {
+                    *sample = 0.0;
+                }
+            } else if let Some(mut planar) = outputs.planar() {
+                let planes = planar.planes();
+                let plane_count = planes.len();
+                let frames_to_write = frames.min(planar.frames());
+                let ptr = planes.as_mut_ptr();
+                for frame_idx in 0..frames_to_write {
+                    for ch in 0..plane_count {
+                        let sample = self.queue.pop().unwrap_or(0.0);
+                        if ch < channels {
+                            let plane_ptr = unsafe { *ptr.add(ch) };
+                            if !plane_ptr.is_null() {
+                                unsafe {
+                                    *plane_ptr.add(frame_idx) = sample;
+                                }
+                            }
+                        }
+                    }
+                }
+                let consumed = frames_to_write.saturating_mul(plane_count);
+                for _ in consumed..total_samples {
+                    let _ = self.queue.pop();
+                }
+            } else {
+                for _ in 0..total_samples {
+                    let _ = self.queue.pop();
+                }
+            }
+            true
+        }
+    }
+
+    impl Drop for RtProcess {
+        fn drop(&mut self) {
+            self.running.store(false, Ordering::Relaxed);
+            if let Some(handle) = self.render_thread.take() {
+                if let Err(err) = handle.join() {
+                    error!(?err, "OpenASIO render thread terminated unexpectedly");
+                }
+            }
+        }
+    }
+
+    fn run_render_loop(
+        engine: Arc<Mutex<HarmoniqEngine>>,
+        config: BufferConfig,
+        queue: Arc<ArrayQueue<f32>>,
+        running: Arc<AtomicBool>,
+        out_channels: usize,
+    ) {
+        let mut buffer = AudioBuffer::from_config(config.clone());
+        let mut interleaved = vec![0.0f32; out_channels.max(1) * config.block_size.max(1)];
+        while running.load(Ordering::Relaxed) {
+            let result = {
+                let mut guard = engine.lock();
+                guard.process_block(&mut buffer)
+            };
+            if let Err(err) = result {
+                warn!(?err, "engine processing failed in OpenASIO render loop");
+                buffer.clear();
+            }
+            let frames = buffer.len();
+            if frames == 0 {
+                continue;
+            }
+            let channel_data = buffer.as_slice();
+            let available_channels = channel_data.len();
+            let required = frames.saturating_mul(out_channels.max(1));
+            if interleaved.len() < required {
+                interleaved.resize(required, 0.0);
+            }
+            for frame_idx in 0..frames {
+                for ch in 0..out_channels {
+                    let value = if ch < available_channels {
+                        channel_data[ch].get(frame_idx).copied().unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
+                    interleaved[frame_idx * out_channels + ch] = value;
+                }
+            }
+            for &sample in &interleaved[..required] {
+                queue.force_push(sample);
             }
         }
     }

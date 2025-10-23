@@ -54,6 +54,34 @@ compatibility layer so it also works with PipeWire setups. Headless mode
 defaults to realtime streaming but can be disabled with `--disable-audio` for
 offline graph validation.
 
+### OpenASIO backend
+
+For ultra low latency setups on Linux, Harmoniq Studio can host OpenASIO
+drivers via an optional feature flag. Build the workspace with OpenASIO support
+enabled:
+
+```bash
+cargo build --workspace --features openasio
+```
+
+To run against the bundled CPAL reference driver:
+
+```bash
+cargo run -p harmoniq-app --features openasio -- \
+  --audio-backend openasio \
+  --openasio-driver target/debug/libopenasio_driver_cpal.so
+```
+
+To use the AMD Family 17h ALSA OpenASIO driver, point the CLI at the shared
+library and device name:
+
+```bash
+cargo run -p harmoniq-app --features openasio -- \
+  --audio-backend openasio \
+  --openasio-driver /path/to/libopenasio_driver_alsa17h.so \
+  --openasio-device "hw:0,0"
+```
+
 ### Desktop integration (Linux)
 
 Harmoniq Studio ships with a freedesktop-compatible launcher entry and icon in
