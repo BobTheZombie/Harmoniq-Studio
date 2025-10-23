@@ -7,15 +7,23 @@
 pub mod buffer;
 pub mod engine;
 pub mod graph;
+pub mod nodes;
 pub mod plugin;
 pub mod sound_server;
 pub mod time;
 mod tone;
 
+#[cfg(feature = "native")]
+pub mod realtime;
+
 pub use buffer::{AudioBuffer, BufferConfig, ChannelLayout};
 pub use engine::{EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
 pub use graph::{GraphBuilder, GraphHandle, NodeHandle};
+pub use nodes::SineNode;
 pub use plugin::{AudioProcessor, MidiEvent, MidiProcessor, PluginDescriptor, PluginId};
+
+#[cfg(feature = "native")]
+pub use realtime::{start_realtime, EngineHandle};
 
 #[cfg(test)]
 mod tests {

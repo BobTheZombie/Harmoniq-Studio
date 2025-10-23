@@ -16,14 +16,14 @@ crossbeam = "0.8"
 rayon = "1.8"
 petgraph = "0.6"
 ringbuf = "0.3"
+cpal = { version = "0.16", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-cpal = "0.16"
 libc = "0.2"
 
 [features]
 default = ["native"]
-native = []
+native = ["cpal"]
 wasm = []
 vst2 = []
 vst3 = []
