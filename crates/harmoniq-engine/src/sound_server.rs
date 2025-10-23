@@ -1,14 +1,17 @@
 //! Ultra low latency sound server for Harmoniq.
 //!
 //! The sound server runs the [`HarmoniqEngine`] in a dedicated real-time
-//! thread and streams audio directly to the selected ALSA device. The design
-//! avoids blocking operations on the audio thread and keeps all allocations out
-//! of the critical path to guarantee deterministic scheduling behaviour. This
-//! module is only available on Linux builds where ALSA is present.
+//! thread and streams audio directly to the selected ALSA or OpenASIO driver.
+//! The design avoids blocking operations on the audio thread and keeps all
+//! allocations out of the critical path to guarantee deterministic scheduling
+//! behaviour. This module is only available on Linux builds where ALSA is
+//! present.
 
 #[cfg(all(target_os = "linux", feature = "native"))]
 mod linux;
 
+#[cfg(all(target_os = "linux", feature = "native", feature = "openasio"))]
+pub use linux::UltraOpenAsioOptions;
 #[cfg(all(target_os = "linux", feature = "native"))]
 pub use linux::{UltraLowLatencyOptions, UltraLowLatencyServer};
 
