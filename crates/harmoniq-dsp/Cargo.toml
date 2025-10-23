@@ -1,0 +1,22 @@
+[package]
+name = "harmoniq-dsp"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "DSP primitives and processors for Harmoniq Studio"
+
+[features]
+default = ["simd"]
+simd = []
+fast-math = []
+no-denormals = []
+
+[dependencies]
+once_cell = "1"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "gain"
+harness = false
