@@ -67,17 +67,16 @@ impl MixerPane {
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         for track in &mut self.tracks {
-                            self.draw_channel_strip(ui, palette, track, event_bus);
+                            Self::draw_channel_strip(ui, palette, track, event_bus);
                         }
                         ui.add_space(24.0);
-                        self.draw_channel_strip(ui, palette, &mut self.master, event_bus);
+                        Self::draw_channel_strip(ui, palette, &mut self.master, event_bus);
                     });
                 });
         });
     }
 
     fn draw_channel_strip(
-        &mut self,
         ui: &mut egui::Ui,
         palette: &HarmoniqPalette,
         track: &mut MixerTrack,

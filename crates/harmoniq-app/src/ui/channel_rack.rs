@@ -68,7 +68,7 @@ impl ChannelRackPane {
                                                 "Vol {:.0}%",
                                                 channel.volume * 100.0
                                             ))
-                                            .color(palette.text_secondary),
+                                            .color(palette.text_muted),
                                         );
                                     },
                                 );
@@ -97,7 +97,7 @@ impl ChannelRackPane {
                             ui.add_space(10.0);
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 14.0;
-                                ui.label(RichText::new("Volume").color(palette.text_secondary));
+                                ui.label(RichText::new("Volume").color(palette.text_muted));
                                 let mut volume = channel.volume;
                                 if ui
                                     .add(
@@ -108,7 +108,7 @@ impl ChannelRackPane {
                                 {
                                     channel.volume = volume;
                                 }
-                                ui.label(RichText::new("Pan").color(palette.text_secondary));
+                                ui.label(RichText::new("Pan").color(palette.text_muted));
                                 let mut pan = channel.pan;
                                 if ui
                                     .add(

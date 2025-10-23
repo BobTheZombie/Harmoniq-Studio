@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use egui::{self, RichText};
+use eframe::egui::{self, RichText};
 use harmoniq_ui::HarmoniqPalette;
 
 use crate::ui::event_bus::{AppEvent, EventBus};
@@ -93,8 +93,7 @@ impl BrowserPane {
                                 if !self.matches_filter(&entry.name) {
                                     continue;
                                 }
-                                let label =
-                                    RichText::new(&entry.name).color(palette.text_secondary);
+                                let label = RichText::new(&entry.name).color(palette.text_muted);
                                 if ui.selectable_label(false, label).clicked() {
                                     event_bus.publish(AppEvent::OpenFile(entry.path.clone()));
                                 }
