@@ -226,7 +226,7 @@ impl AudioSettingsPanel {
                         grid.end_row();
 
                         grid.label(" ");
-                        if ui.button("Refresh devices").clicked() {
+                        if grid.button("Refresh devices").clicked() {
                             self.pending_device_refresh = true;
                         }
                         grid.end_row();

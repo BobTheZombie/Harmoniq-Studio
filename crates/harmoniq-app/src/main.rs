@@ -38,9 +38,7 @@ use audio::{
 };
 use midi::list_midi_inputs;
 use ui::{
-    audio_settings::{
-        ActiveAudioSummary, AudioSettingsAction, AudioSettingsFeedback, AudioSettingsPanel,
-    },
+    audio_settings::{ActiveAudioSummary, AudioSettingsAction, AudioSettingsPanel},
     browser::BrowserPane,
     channel_rack::ChannelRackPane,
     event_bus::{AppEvent, EventBus, LayoutEvent, TransportEvent},
@@ -1256,19 +1254,17 @@ impl App for HarmoniqStudioApp {
             .last_runtime_error()
             .map(|err| err.to_string());
 
-        if let Some(action) = self.audio_settings.ui(
+        if let Some(AudioSettingsAction::Apply { config, runtime }) = self.audio_settings.ui(
             ctx,
             &palette,
             active_audio_summary.as_ref(),
             last_runtime_error.as_deref(),
         ) {
-            if let AudioSettingsAction::Apply { config, runtime } = action {
-                let result = self
-                    .engine_runner
-                    .reconfigure(config.clone(), runtime.clone());
-                self.audio_settings
-                    .on_apply_result(result, &config, &runtime);
-            }
+            let result = self
+                .engine_runner
+                .reconfigure(config.clone(), runtime.clone());
+            self.audio_settings
+                .on_apply_result(result, &config, &runtime);
         }
 
         if let Some(feedback) = self.audio_settings.take_status_message() {
