@@ -601,11 +601,8 @@ impl EngineContext {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LayoutPersistence {
     browser_width: f32,
-    #[serde(
-        default = "LayoutPersistence::default_sequencer_height",
-        alias = "channel_rack_width"
-    )]
-    sequencer_height: f32,
+    #[serde(default = "LayoutPersistence::default_channel_rack_width")]
+    channel_rack_width: f32,
     #[serde(default = "LayoutPersistence::default_mixer_width")]
     mixer_width: f32,
     piano_roll_height: f32,
@@ -615,7 +612,7 @@ struct LayoutPersistence {
 }
 
 impl LayoutPersistence {
-    fn default_sequencer_height() -> f32 {
+    fn default_channel_rack_width() -> f32 {
         340.0
     }
 
@@ -628,7 +625,7 @@ impl Default for LayoutPersistence {
     fn default() -> Self {
         Self {
             browser_width: 240.0,
-            sequencer_height: Self::default_sequencer_height(),
+            channel_rack_width: Self::default_channel_rack_width(),
             mixer_width: Self::default_mixer_width(),
             piano_roll_height: 240.0,
             browser_visible: true,
@@ -687,20 +684,20 @@ impl LayoutState {
         }
     }
 
-    fn sequencer_height(&self) -> f32 {
-        self.persistence.sequencer_height
-    }
-
-    fn set_sequencer_height(&mut self, height: f32) {
-        if (self.persistence.sequencer_height - height).abs() > 0.5 {
-            self.persistence.sequencer_height = height.max(220.0);
+    fn set_mixer_width(&mut self, width: f32) {
+        if (self.persistence.mixer_width - width).abs() > 0.5 {
+            self.persistence.mixer_width = width.max(280.0);
             self.needs_save = true;
         }
     }
 
-    fn set_mixer_width(&mut self, width: f32) {
-        if (self.persistence.mixer_width - width).abs() > 0.5 {
-            self.persistence.mixer_width = width.max(280.0);
+    fn channel_rack_width(&self) -> f32 {
+        self.persistence.channel_rack_width
+    }
+
+    fn set_channel_rack_width(&mut self, width: f32) {
+        if (self.persistence.channel_rack_width - width).abs() > 0.5 {
+            self.persistence.channel_rack_width = width.max(220.0);
             self.needs_save = true;
         }
     }
@@ -2696,7 +2693,7 @@ struct AppState {
     piano_roll: PianoRollState,
     piano_roll_selected_note: Option<usize>,
     piano_roll_drag: Option<PianoRollDragState>,
-    sequencer_resize_start: Option<f32>,
+    channel_rack_resize_start: Option<f32>,
     last_error: Option<String>,
     status_message: Option<String>,
     audio_settings: AudioSettingsState,
@@ -2816,7 +2813,7 @@ impl HarmoniqStudioApp {
             piano_roll: PianoRollState::default(),
             piano_roll_selected_note: None,
             piano_roll_drag: None,
-            sequencer_resize_start: None,
+            channel_rack_resize_start: None,
             last_error: None,
             status_message: startup_status,
             audio_settings,
@@ -4342,75 +4339,101 @@ impl HarmoniqStudioApp {
         self.section_label(ui, &self.icons.track, "Channel Rack");
         ui.add_space(10.0);
 
-        if self.sequencer.instruments.is_empty() {
-            Self::tinted_frame(&palette, ui, palette.panel_alt, |ui| {
+        Self::tinted_frame(&palette, ui, palette.panel_alt.gamma_multiply(1.04), |ui| {
+            ui.horizontal(|ui| {
                 ui.label(
-                    RichText::new("Add an instrument to begin sequencing.")
-                        .color(palette.text_muted),
-                );
-                ui.label(
-                    RichText::new("Each instrument can open the piano roll with a right click.")
+                    RichText::new("Step Sequencer")
                         .color(palette.text_muted)
                         .small(),
                 );
-            });
-        } else {
-            for index in 0..self.sequencer.instruments.len() {
-                let fill = if self.focused_instrument == Some(index) {
-                    palette.panel_alt.gamma_multiply(1.12)
-                } else {
-                    palette.panel_alt
-                };
-                Self::tinted_frame(&palette, ui, fill, |ui| {
-                    self.draw_sequencer_instrument(ui, index);
-                });
-                ui.add_space(8.0);
-            }
-        }
-
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.menu_button("Add Instrument", |ui| {
-                for plugin in InstrumentPlugin::all() {
+                ui.add_space(6.0);
+                let instrument_count = self.sequencer.instruments.len();
+                ui.label(
+                    RichText::new(format!("{instrument_count} instruments"))
+                        .color(palette.text_muted)
+                        .small(),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .button(plugin.display_name())
-                        .on_hover_text(plugin.description())
+                        .button(RichText::new("Refresh Clips").color(palette.text_primary))
                         .clicked()
                     {
-                        self.add_sequencer_instrument(*plugin);
-                        ui.close_menu();
+                        self.refresh_sequencer_clips();
+                    }
+                    ui.add_space(6.0);
+                    ui.menu_button(
+                        RichText::new("Add Instrument").color(palette.text_primary),
+                        |ui| {
+                            for plugin in InstrumentPlugin::all() {
+                                if ui
+                                    .button(plugin.display_name())
+                                    .on_hover_text(plugin.description())
+                                    .clicked()
+                                {
+                                    self.add_sequencer_instrument(*plugin);
+                                    ui.close_menu();
+                                }
+                            }
+                        },
+                    );
+                });
+            });
+
+            ui.add_space(12.0);
+
+            if self.sequencer.instruments.is_empty() {
+                Self::tinted_frame(&palette, ui, palette.panel_alt, |ui| {
+                    ui.label(
+                        RichText::new("Add an instrument to begin sequencing.")
+                            .color(palette.text_muted),
+                    );
+                    ui.label(
+                        RichText::new(
+                            "Each instrument can open the piano roll with a right click.",
+                        )
+                        .color(palette.text_muted)
+                        .small(),
+                    );
+                });
+            } else {
+                for index in 0..self.sequencer.instruments.len() {
+                    let fill = if self.focused_instrument == Some(index) {
+                        palette.panel_alt.gamma_multiply(1.12)
+                    } else {
+                        palette.panel_alt
+                    };
+                    Self::tinted_frame(&palette, ui, fill, |ui| {
+                        self.draw_sequencer_instrument(ui, index);
+                    });
+                    ui.add_space(8.0);
+                }
+            }
+
+            let drop_rect = ui.min_rect();
+            if dragging_sample {
+                if let Some(pos) = pointer_pos {
+                    if drop_rect.contains(pos) {
+                        ui.painter().rect_stroke(
+                            drop_rect.expand(6.0),
+                            12.0,
+                            Stroke::new(2.0, palette.accent_alt.gamma_multiply(0.7)),
+                        );
                     }
                 }
-            });
-            if ui.button("Refresh Clips").clicked() {
-                self.refresh_sequencer_clips();
+            }
+
+            if pointer_released {
+                if let Some(DragPayload::Sample(path)) = self.drag_payload.take() {
+                    if pointer_pos.map_or(false, |pos| drop_rect.contains(pos)) {
+                        self.insert_sample_instrument(path);
+                    } else {
+                        self.status_message = Some(
+                            "Drag samples onto the channel rack to create sampler channels".into(),
+                        );
+                    }
+                }
             }
         });
-
-        let drop_rect = ui.min_rect();
-        if dragging_sample {
-            if let Some(pos) = pointer_pos {
-                if drop_rect.contains(pos) {
-                    ui.painter().rect_stroke(
-                        drop_rect.expand(6.0),
-                        12.0,
-                        Stroke::new(2.0, palette.accent_alt.gamma_multiply(0.7)),
-                    );
-                }
-            }
-        }
-
-        if pointer_released {
-            if let Some(DragPayload::Sample(path)) = self.drag_payload.take() {
-                if pointer_pos.map_or(false, |pos| drop_rect.contains(pos)) {
-                    self.insert_sample_instrument(path);
-                } else {
-                    self.status_message = Some(
-                        "Drag samples onto the channel rack to create sampler channels".into(),
-                    );
-                }
-            }
-        }
     }
 
     fn draw_sequencer_instrument(&mut self, ui: &mut egui::Ui, instrument_idx: usize) {
@@ -7018,65 +7041,76 @@ impl App for HarmoniqStudioApp {
                     .rounding(Rounding::same(18.0)),
             )
             .show(ctx, |ui| {
-                let available_width = ui.available_width();
                 let total_height = ui.available_height();
-                let min_sequencer = 220.0;
-                let min_playlist = 220.0;
-                let handle_height = 6.0;
-                let gutter = handle_height + 6.0;
-                let max_sequencer = (total_height - min_playlist - gutter).max(min_sequencer);
-                let stored_height = self.layout.sequencer_height();
-                let mut sequencer_height = stored_height.clamp(min_sequencer, max_sequencer);
-
-                let sequencer_area = ui.allocate_ui_with_layout(
-                    Vec2::new(available_width, sequencer_height),
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| {
-                        egui::ScrollArea::vertical()
-                            .id_source("sequencer_scroll")
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| self.draw_sequencer(ui));
-                    },
-                );
-                sequencer_height = sequencer_area
-                    .response
-                    .rect
-                    .height()
-                    .clamp(min_sequencer, max_sequencer);
-
-                let (handle_rect, handle_response_raw) = ui
-                    .allocate_exact_size(Vec2::new(available_width, handle_height), Sense::drag());
-                let handle_response =
-                    handle_response_raw.on_hover_cursor(CursorIcon::ResizeVertical);
-                let handle_color = if handle_response.dragged() || handle_response.hovered() {
-                    palette.toolbar_outline.gamma_multiply(0.8)
+                let total_width = ui.available_width();
+                let min_channel_rack = 260.0;
+                let min_playlist = 320.0;
+                let handle_width = 6.0;
+                let spacing = 8.0;
+                let gutter = handle_width + spacing;
+                let available_for_rack = total_width - min_playlist - gutter;
+                let min_rack = if available_for_rack < min_channel_rack {
+                    available_for_rack.max(180.0)
                 } else {
-                    palette.toolbar_outline.gamma_multiply(0.45)
+                    min_channel_rack
                 };
-                ui.painter_at(handle_rect)
-                    .rect_filled(handle_rect, 3.0, handle_color);
+                let max_channel_rack = (total_width - gutter).max(min_rack);
+                let stored_width = self.layout.channel_rack_width();
+                let mut channel_rack_width = stored_width.clamp(min_rack, max_channel_rack);
 
-                if handle_response.drag_started() {
-                    self.sequencer_resize_start = Some(sequencer_height);
-                }
-                if handle_response.dragged() {
-                    let start = self.sequencer_resize_start.unwrap_or(sequencer_height);
-                    let target = (start + handle_response.drag_delta().y)
-                        .clamp(min_sequencer, max_sequencer);
-                    self.layout.set_sequencer_height(target);
-                } else {
-                    self.layout.set_sequencer_height(sequencer_height);
-                    self.sequencer_resize_start = None;
-                }
+                ui.horizontal(|ui| {
+                    ui.set_height(total_height);
 
-                ui.add_space(6.0);
+                    let channel_rack_area = ui.allocate_ui_with_layout(
+                        Vec2::new(channel_rack_width, total_height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            egui::ScrollArea::vertical()
+                                .id_source("sequencer_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| self.draw_sequencer(ui));
+                        },
+                    );
+                    channel_rack_width = channel_rack_area
+                        .response
+                        .rect
+                        .width()
+                        .clamp(min_rack, max_channel_rack);
 
-                let playlist_size = ui.available_size();
-                ui.allocate_ui_with_layout(
-                    playlist_size,
-                    egui::Layout::top_down(egui::Align::Min),
-                    |ui| self.draw_playlist(ui),
-                );
+                    let (handle_rect, handle_response_raw) = ui
+                        .allocate_exact_size(Vec2::new(handle_width, total_height), Sense::drag());
+                    let handle_response =
+                        handle_response_raw.on_hover_cursor(CursorIcon::ResizeHorizontal);
+                    let handle_color = if handle_response.dragged() || handle_response.hovered() {
+                        palette.toolbar_outline.gamma_multiply(0.8)
+                    } else {
+                        palette.toolbar_outline.gamma_multiply(0.45)
+                    };
+                    ui.painter_at(handle_rect)
+                        .rect_filled(handle_rect, 3.0, handle_color);
+
+                    if handle_response.drag_started() {
+                        self.channel_rack_resize_start = Some(channel_rack_width);
+                    }
+                    if handle_response.dragged() {
+                        let start = self.channel_rack_resize_start.unwrap_or(channel_rack_width);
+                        let target = (start + handle_response.drag_delta().x)
+                            .clamp(min_rack, max_channel_rack);
+                        self.layout.set_channel_rack_width(target);
+                    } else {
+                        self.layout.set_channel_rack_width(channel_rack_width);
+                        self.channel_rack_resize_start = None;
+                    }
+
+                    ui.add_space(spacing);
+
+                    let playlist_size = Vec2::new(ui.available_width(), total_height);
+                    ui.allocate_ui_with_layout(
+                        playlist_size,
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| self.draw_playlist(ui),
+                    );
+                });
             });
 
         self.draw_mixer_window(ctx, &palette);
