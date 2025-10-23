@@ -223,7 +223,7 @@ fn build_output_stream<T>(
 where
     T: Sample + cpal::SizedSample,
 {
-    let silence = T::from(&0.0f32);
+    let silence = T::from(0.0f32);
     let stream = device.build_output_stream(
         config,
         move |output: &mut [T], _info| {
@@ -237,7 +237,7 @@ where
 
             for sample in output.iter_mut() {
                 if let Some(value) = queue.pop() {
-                    *sample = T::from(&value);
+                    *sample = T::from(value);
                 } else {
                     *sample = silence;
                 }
