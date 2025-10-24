@@ -2,12 +2,12 @@ use crate::{AudioBuffer, AudioProcessor, BufferConfig, ChannelLayout, PluginDesc
 
 /// White noise source backed by a linear congruential generator.
 #[derive(Debug, Clone, Copy)]
-pub struct NoiseNode {
+pub struct NodeNoise {
     seed: u64,
     amplitude: f32,
 }
 
-impl NoiseNode {
+impl NodeNoise {
     pub fn new(amplitude: f32) -> Self {
         Self {
             seed: 0xDEADBEEFCAFEBABE,
@@ -25,7 +25,7 @@ impl NoiseNode {
     }
 }
 
-impl AudioProcessor for NoiseNode {
+impl AudioProcessor for NodeNoise {
     fn descriptor(&self) -> PluginDescriptor {
         PluginDescriptor::new("harmoniq.noise", "Noise", "Harmoniq Labs")
             .with_description("Zero-allocation noise source for default graphs")
@@ -57,3 +57,6 @@ impl AudioProcessor for NoiseNode {
         true
     }
 }
+
+/// Backwards compatible alias for the previous name.
+pub type NoiseNode = NodeNoise;

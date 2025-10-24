@@ -79,7 +79,7 @@ struct Cli {
     #[arg(long, default_value_t = 120.0)]
     tempo: f32,
 
-    /// Enable Harmoniq Ultra runtime profile heuristics
+    /// Enable Harmoniq Ultra runtime profile heuristics (prefers OpenASIO when available)
     #[arg(long, default_value_t = false)]
     ultra: bool,
 
@@ -605,7 +605,14 @@ fn main() -> anyhow::Result<()> {
     }
 
     if ultra_mode && runtime_options.backend() == AudioBackend::Auto {
-        runtime_options.set_backend(AudioBackend::Harmoniq);
+        #[cfg(feature = "openasio")]
+        {
+            runtime_options.set_backend(AudioBackend::OpenAsio);
+        }
+        #[cfg(not(feature = "openasio"))]
+        {
+            runtime_options.set_backend(AudioBackend::Harmoniq);
+        }
     }
 
     let selected_backend = runtime_options.backend();

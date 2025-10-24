@@ -23,7 +23,7 @@ pub use buffer::{AudioBuffer, BufferConfig, ChannelLayout};
 pub use dsp::RealtimeDspEngine;
 pub use engine::{AudioClip, EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
 pub use graph::{GraphBuilder, GraphHandle, NodeHandle};
-pub use nodes::{GainNode, NoiseNode, SineNode};
+pub use nodes::{GainNode, NodeNoise, NodeOsc, NoiseNode, SineNode};
 pub use plugin::{AudioProcessor, MidiEvent, MidiProcessor, PluginDescriptor, PluginId};
 pub use rt::{AudioMetrics, AudioMetricsCollector};
 

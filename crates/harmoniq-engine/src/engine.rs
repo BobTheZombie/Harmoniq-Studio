@@ -10,7 +10,7 @@ use ringbuf::{HeapConsumer, HeapProducer, HeapRb};
 
 use crate::{
     graph::{self, GraphBuilder, GraphHandle},
-    nodes::{GainNode as BuiltinGain, NoiseNode as BuiltinNoise, SineNode as BuiltinSine},
+    nodes::{GainNode as BuiltinGain, NodeNoise as BuiltinNoise, NodeOsc as BuiltinSine},
     plugin::{MidiEvent, PluginId},
     rt::{AudioMetrics, AudioMetricsCollector},
     tone::ToneShaper,

@@ -11,7 +11,7 @@ use crate::{AudioBuffer, AudioProcessor, BufferConfig, ChannelLayout, PluginDesc
 /// # Examples
 /// ```no_run
 /// use harmoniq_engine::{
-///     BufferConfig, ChannelLayout, GraphBuilder, HarmoniqEngine, SineNode,
+///     BufferConfig, ChannelLayout, GraphBuilder, HarmoniqEngine, NodeOsc,
 ///     start_realtime,
 /// };
 /// use std::error::Error;
@@ -22,7 +22,7 @@ use crate::{AudioBuffer, AudioProcessor, BufferConfig, ChannelLayout, PluginDesc
 ///     let config = BufferConfig::new(48_000.0, 256, ChannelLayout::Stereo);
 ///     let mut engine = HarmoniqEngine::new(config.clone())?;
 ///
-///     let sine = engine.register_processor(Box::new(SineNode::new(440.0).with_amplitude(0.2)))?;
+///     let sine = engine.register_processor(Box::new(NodeOsc::new(440.0).with_amplitude(0.2)))?;
 ///     let mut graph = GraphBuilder::new();
 ///     let node = graph.add_node(sine);
 ///     graph.connect_to_mixer(node, 1.0)?;
@@ -36,7 +36,7 @@ use crate::{AudioBuffer, AudioProcessor, BufferConfig, ChannelLayout, PluginDesc
 ///     Ok(())
 /// }
 /// ```
-pub struct SineNode {
+pub struct NodeOsc {
     frequency: f32,
     amplitude: f32,
     phase: f32,
@@ -44,7 +44,7 @@ pub struct SineNode {
     sample_rate: f32,
 }
 
-impl SineNode {
+impl NodeOsc {
     /// Creates a new oscillator running at the provided frequency in hertz.
     pub fn new(frequency: f32) -> Self {
         Self {
@@ -77,7 +77,7 @@ impl SineNode {
     }
 }
 
-impl AudioProcessor for SineNode {
+impl AudioProcessor for NodeOsc {
     fn descriptor(&self) -> PluginDescriptor {
         PluginDescriptor::new("harmoniq.sine", "Sine", "Harmoniq Labs")
             .with_description("Simple sine oscillator for testing the audio engine")
@@ -119,3 +119,6 @@ impl AudioProcessor for SineNode {
         matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
     }
 }
+
+/// Backwards compatible alias for the previous name.
+pub type SineNode = NodeOsc;

@@ -103,7 +103,7 @@ impl AudioMetricsCollector {
                 xruns: AtomicU64::new(0),
                 last_block_ns: AtomicU64::new(0),
                 max_block_ns: AtomicU64::new(0),
-                history: ArrayQueue::new(history_capacity.max(16)),
+                history: MetricsRing::new(history_capacity),
             }),
         }
     }
@@ -159,7 +159,7 @@ impl AudioMetricsCollector {
         self.inner.xruns.store(0, Ordering::Relaxed);
         self.inner.last_block_ns.store(0, Ordering::Relaxed);
         self.inner.max_block_ns.store(0, Ordering::Relaxed);
-        while self.inner.history.pop().is_some() {}
+        self.inner.history.clear();
     }
 }
 
@@ -167,16 +167,13 @@ struct AudioMetricsInner {
     xruns: AtomicU64,
     last_block_ns: AtomicU64,
     max_block_ns: AtomicU64,
-    history: ArrayQueue<AudioMetrics>,
+    history: MetricsRing,
 }
 
 impl AudioMetricsInner {
     #[inline]
     fn push_history(&self, metrics: AudioMetrics) {
-        if self.history.push(metrics).is_err() {
-            let _ = self.history.pop();
-            let _ = self.history.push(metrics);
-        }
+        self.history.push(metrics);
     }
 
     #[inline]
@@ -194,5 +191,40 @@ impl AudioMetricsInner {
             }
         }
         current
+    }
+}
+
+/// Minimal lock-free ring buffer specialised for audio metrics snapshots.
+///
+/// The ring is single-producer multi-consumer: only the realtime audio thread
+/// writes metrics, while any control thread may drain snapshots. Internally it
+/// leverages [`ArrayQueue`], which performs all operations with atomics and no
+/// dynamic allocations after construction.
+struct MetricsRing {
+    queue: ArrayQueue<AudioMetrics>,
+}
+
+impl MetricsRing {
+    fn new(capacity: usize) -> Self {
+        Self {
+            queue: ArrayQueue::new(capacity.max(16)),
+        }
+    }
+
+    #[inline]
+    fn push(&self, metrics: AudioMetrics) {
+        if self.queue.push(metrics).is_err() {
+            let _ = self.queue.pop();
+            let _ = self.queue.push(metrics);
+        }
+    }
+
+    #[inline]
+    fn pop(&self) -> Option<AudioMetrics> {
+        self.queue.pop()
+    }
+
+    fn clear(&self) {
+        while self.queue.pop().is_some() {}
     }
 }
