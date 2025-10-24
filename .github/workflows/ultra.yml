@@ -1,0 +1,15 @@
+name: Harmoniq Ultra CI
+on: [push, pull_request]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install ALSA development headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Build (ultra + openasio)
+        run: cargo build --workspace --features "ultra openasio"
+      - name: Tests
+        run: cargo test -p harmoniq-engine --features "ultra openasio" -- --nocapture

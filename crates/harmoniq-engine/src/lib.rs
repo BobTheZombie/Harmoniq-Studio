@@ -11,6 +11,7 @@ pub mod engine;
 pub mod graph;
 pub mod nodes;
 pub mod plugin;
+pub mod rt;
 pub mod sound_server;
 pub mod time;
 mod tone;
@@ -22,8 +23,9 @@ pub use buffer::{AudioBuffer, BufferConfig, ChannelLayout};
 pub use dsp::RealtimeDspEngine;
 pub use engine::{AudioClip, EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
 pub use graph::{GraphBuilder, GraphHandle, NodeHandle};
-pub use nodes::SineNode;
+pub use nodes::{GainNode, NoiseNode, SineNode};
 pub use plugin::{AudioProcessor, MidiEvent, MidiProcessor, PluginDescriptor, PluginId};
+pub use rt::{AudioMetrics, AudioMetricsCollector};
 
 #[cfg(feature = "openasio")]
 pub mod backend;
@@ -34,6 +36,7 @@ pub use realtime::{start_realtime, EngineHandle};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::AutomationEvent;
     use rand::Rng;
 
     struct NoiseGenerator;

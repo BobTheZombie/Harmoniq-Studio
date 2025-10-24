@@ -10,12 +10,15 @@ harmoniq-plugins = { path = "../harmoniq-plugins" }
 harmoniq-plugin-host = { path = "../harmoniq-plugin-host" }
 harmoniq-ui = { path = "../harmoniq-ui" }
 anyhow.workspace = true
-clap = { version = "4.5", features = ["derive"] }
+clap.workspace = true
 eframe = { version = "0.27", features = ["wgpu"] }
 egui_extras = { version = "0.27", features = ["image", "svg"] }
 egui_dock = { version = "0.12", features = ["serde"] }
 parking_lot.workspace = true
 crossbeam-channel = "0.5"
+crossbeam-queue.workspace = true
+once_cell.workspace = true
+ringbuf.workspace = true
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 hound = "3.5"
@@ -30,6 +33,7 @@ openasio = { git = "https://github.com/BobTheZombie/OpenASIO-SDK", package = "op
 [features]
 default = []
 openasio = ["harmoniq-engine/openasio", "dep:openasio"]
+ultra = ["harmoniq-engine/ultra", "openasio"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 cpal = "0.16"

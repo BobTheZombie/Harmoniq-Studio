@@ -134,8 +134,10 @@ mod tests {
         let mut buffer = buffer_with_value(&config, 0.5);
         shaper.process(&mut buffer);
 
-        for sample in buffer.iter() {
-            assert!((*sample - 0.5).abs() < f32::EPSILON);
+        for channel in buffer.as_slice() {
+            for sample in channel {
+                assert!((*sample - 0.5).abs() < f32::EPSILON);
+            }
         }
     }
 }

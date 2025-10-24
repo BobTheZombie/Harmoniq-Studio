@@ -293,6 +293,10 @@ pub struct AudioRuntimeOptions {
     #[cfg(feature = "openasio")]
     pub openasio_noninterleaved: bool,
     #[cfg(feature = "openasio")]
+    pub openasio_sample_rate: Option<u32>,
+    #[cfg(feature = "openasio")]
+    pub openasio_buffer_frames: Option<u32>,
+    #[cfg(feature = "openasio")]
     pub openasio_in_channels: Option<u16>,
     #[cfg(feature = "openasio")]
     pub openasio_out_channels: Option<u16>,
@@ -311,6 +315,10 @@ impl AudioRuntimeOptions {
             openasio_device: None,
             #[cfg(feature = "openasio")]
             openasio_noninterleaved: false,
+            #[cfg(feature = "openasio")]
+            openasio_sample_rate: None,
+            #[cfg(feature = "openasio")]
+            openasio_buffer_frames: None,
             #[cfg(feature = "openasio")]
             openasio_in_channels: None,
             #[cfg(feature = "openasio")]
@@ -555,8 +563,13 @@ impl RealtimeAudio {
                     .output_device
                     .clone()
                     .or_else(|| Some("default".to_string()));
-                let base_options = harmoniq_engine::sound_server::UltraLowLatencyOptions::default()
-                    .with_device(device.clone());
+                let mut base_options =
+                    harmoniq_engine::sound_server::UltraLowLatencyOptions::default()
+                        .with_device(device.clone());
+                #[cfg(feature = "openasio")]
+                {
+                    base_options = base_options.with_buffer_frames(options.openasio_buffer_frames);
+                }
 
                 #[cfg(feature = "openasio")]
                 let openasio_request = {
