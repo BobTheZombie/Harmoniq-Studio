@@ -6,9 +6,9 @@ use std::time::Instant;
 use crossbeam::queue::ArrayQueue;
 use parking_lot::{Mutex, RwLock};
 use rayon::prelude::*;
-use ringbuf::{HeapConsumer, HeapProducer, HeapRb};
 
 use crate::{
+    automation::{AutomationEvent, AutomationLane, AutomationSender, ParameterSpec},
     graph::{self, GraphBuilder, GraphHandle},
     nodes::{GainNode as BuiltinGain, NodeNoise as BuiltinNoise, NodeOsc as BuiltinSine},
     plugin::{MidiEvent, PluginId},
@@ -119,6 +119,7 @@ pub struct HarmoniqEngine {
     sound_test: Option<ClipPlayback>,
     metrics: AudioMetricsCollector,
     block_period_ns: u64,
+    automation_cursor: u64,
 }
 
 impl HarmoniqEngine {
@@ -150,6 +151,7 @@ impl HarmoniqEngine {
             sound_test: None,
             metrics,
             block_period_ns,
+            automation_cursor: 0,
         };
         engine.install_default_graph()?;
         Ok(engine)
@@ -185,6 +187,7 @@ impl HarmoniqEngine {
             self.register_processor(Box::new(BuiltinSine::new(220.0).with_amplitude(0.35)))?;
         let noise = self.register_processor(Box::new(BuiltinNoise::new(0.08)))?;
         let gain = self.register_processor(Box::new(BuiltinGain::new(0.6)))?;
+        self.register_automation_parameter(gain, ParameterSpec::new(0, "Gain", 0.0, 2.0, 0.6))?;
 
         let mut builder = GraphBuilder::new();
         let sine_node = builder.add_node(sine);
@@ -268,6 +271,7 @@ impl HarmoniqEngine {
             self.transport_metrics
                 .sample_pos
                 .store(0, Ordering::Relaxed);
+            self.automation_cursor = 0;
         }
         if !now_playing {
             self.transport_metrics
@@ -294,9 +298,7 @@ impl HarmoniqEngine {
         self.latencies.write().insert(id, latency);
         self.delay_lines.insert(id, DelayCompensator::new());
         let mut lanes = self.automations.write();
-        let ring = HeapRb::new(256);
-        let (producer, consumer) = ring.split();
-        lanes.insert(id, AutomationLane::new(producer, consumer));
+        lanes.insert(id, AutomationLane::new(id, 1024));
         Ok(id)
     }
 
@@ -333,6 +335,8 @@ impl HarmoniqEngine {
     pub fn process_block(&mut self, output: &mut AudioBuffer) -> anyhow::Result<()> {
         let start = Instant::now();
         let period_ns = self.block_period_ns;
+        let block_start = self.automation_cursor;
+        let block_len = output.len() as u32;
 
         let result = (|| -> anyhow::Result<()> {
             self.drain_command_queue()?;
@@ -377,7 +381,8 @@ impl HarmoniqEngine {
             drop(latencies_guard);
 
             let max_latency = latencies.iter().copied().max().unwrap_or(0);
-            let automation_by_index = self.automation_events_for_block(&plugin_ids);
+            let automation_by_index =
+                self.automation_events_for_block(&plugin_ids, block_start, block_len);
 
             let scratch_len = processor_handles.len();
             self.ensure_scratch_buffers(scratch_len);
@@ -444,6 +449,7 @@ impl HarmoniqEngine {
             self.transport_metrics
                 .sample_pos
                 .fetch_add(output.len() as u64, Ordering::Relaxed);
+            self.automation_cursor = self.automation_cursor.saturating_add(output.len() as u64);
         }
         result
     }
@@ -469,33 +475,19 @@ impl HarmoniqEngine {
     fn automation_events_for_block(
         &mut self,
         plugin_ids: &[PluginId],
+        block_start: u64,
+        block_len: u32,
     ) -> Vec<Vec<AutomationEvent>> {
-        if plugin_ids.is_empty() {
-            return Vec::new();
-        }
-
         let mut buckets = vec![Vec::new(); plugin_ids.len()];
-        let mut index_map = HashMap::new();
+        if plugin_ids.is_empty() || block_len == 0 {
+            return buckets;
+        }
+
+        let mut lanes = self.automations.write();
         for (index, plugin_id) in plugin_ids.iter().enumerate() {
-            index_map.insert(*plugin_id, index);
-        }
-
-        for mut event in self.drain_automation_events() {
-            if let Some(&index) = index_map.get(&event.plugin_id) {
-                if self.config.block_size > 0 {
-                    let max_offset = (self.config.block_size - 1) as u32;
-                    if event.sample_offset > max_offset {
-                        event.sample_offset = max_offset;
-                    }
-                } else {
-                    event.sample_offset = 0;
-                }
-                buckets[index].push(event);
+            if let Some(lane) = lanes.get_mut(plugin_id) {
+                lane.render(block_start, block_len, &mut buckets[index]);
             }
-        }
-
-        for bucket in &mut buckets {
-            bucket.sort_by_key(|event| event.sample_offset);
         }
 
         buckets
@@ -720,41 +712,6 @@ impl DelayCompensator {
     }
 }
 
-#[derive(Clone)]
-pub struct AutomationSender {
-    producer: Arc<Mutex<HeapProducer<AutomationEvent>>>,
-}
-
-impl AutomationSender {
-    pub fn send(&self, event: AutomationEvent) -> Result<(), AutomationEvent> {
-        let mut producer = self.producer.lock();
-        producer.push(event).map_err(|event| event)
-    }
-}
-
-struct AutomationLane {
-    producer: Arc<Mutex<HeapProducer<AutomationEvent>>>,
-    consumer: HeapConsumer<AutomationEvent>,
-}
-
-impl AutomationLane {
-    fn new(
-        producer: HeapProducer<AutomationEvent>,
-        consumer: HeapConsumer<AutomationEvent>,
-    ) -> Self {
-        Self {
-            producer: Arc::new(Mutex::new(producer)),
-            consumer,
-        }
-    }
-
-    fn sender(&self) -> AutomationSender {
-        AutomationSender {
-            producer: Arc::clone(&self.producer),
-        }
-    }
-}
-
 impl HarmoniqEngine {
     pub fn automation_sender(&self, plugin_id: PluginId) -> Option<AutomationSender> {
         self.automations
@@ -763,17 +720,34 @@ impl HarmoniqEngine {
             .map(|lane| lane.sender())
     }
 
-    fn drain_automation_events(&self) -> Vec<AutomationEvent> {
-        let mut events = Vec::new();
+    pub fn register_automation_parameter(
+        &self,
+        plugin_id: PluginId,
+        spec: ParameterSpec,
+    ) -> anyhow::Result<()> {
         let mut lanes = self.automations.write();
-        for (plugin_id, lane) in lanes.iter_mut() {
-            while let Some(mut event) = lane.consumer.pop() {
-                if event.plugin_id.0 == 0 {
-                    event.plugin_id = *plugin_id;
-                }
-                events.push(event);
-            }
-        }
-        events
+        let lane = lanes
+            .get_mut(&plugin_id)
+            .ok_or_else(|| anyhow::anyhow!("missing automation lane for plugin"))?;
+        lane.register_parameter(spec);
+        Ok(())
+    }
+
+    pub fn automation_parameter_index(&self, plugin_id: PluginId, name: &str) -> Option<usize> {
+        self.automations
+            .read()
+            .get(&plugin_id)
+            .and_then(|lane| lane.parameter_index_by_name(name))
+    }
+
+    pub fn automation_parameter_spec(
+        &self,
+        plugin_id: PluginId,
+        parameter: usize,
+    ) -> Option<ParameterSpec> {
+        self.automations
+            .read()
+            .get(&plugin_id)
+            .and_then(|lane| lane.parameter_spec(parameter))
     }
 }

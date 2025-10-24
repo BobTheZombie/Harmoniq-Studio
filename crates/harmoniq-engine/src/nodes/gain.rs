@@ -45,4 +45,16 @@ impl AudioProcessor for GainNode {
     fn supports_layout(&self, _layout: ChannelLayout) -> bool {
         true
     }
+
+    fn handle_automation_event(
+        &mut self,
+        parameter: usize,
+        value: f32,
+        _sample_offset: usize,
+    ) -> anyhow::Result<()> {
+        if parameter == 0 {
+            self.gain = value.clamp(0.0, 2.0);
+        }
+        Ok(())
+    }
 }
