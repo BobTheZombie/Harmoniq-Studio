@@ -13,6 +13,7 @@ use crate::{
     nodes::{GainNode as BuiltinGain, NodeNoise as BuiltinNoise, NodeOsc as BuiltinSine},
     plugin::{MidiEvent, PluginId},
     rt::{AudioMetrics, AudioMetricsCollector},
+    scratch::RtAllocGuard,
     tone::ToneShaper,
     AudioBuffer, AudioProcessor, BufferConfig,
 };
@@ -126,7 +127,7 @@ impl HarmoniqEngine {
         let block_period_ns = Self::block_period_from_config(&config);
 
         let mut engine = Self {
-            master_buffer: Mutex::new(AudioBuffer::from_config(config.clone())),
+            master_buffer: Mutex::new(AudioBuffer::from_config(&config)),
             processors: RwLock::new(HashMap::new()),
             graph: RwLock::new(None),
             next_plugin_id: AtomicU64::new(1),
@@ -192,7 +193,7 @@ impl HarmoniqEngine {
     pub fn reconfigure(&mut self, config: BufferConfig) -> anyhow::Result<()> {
         let tone_enabled = self.tone_shaper.is_enabled();
         self.config = config.clone();
-        self.master_buffer = Mutex::new(AudioBuffer::from_config(config.clone()));
+        self.master_buffer = Mutex::new(AudioBuffer::from_config(&config));
         self.tone_shaper = ToneShaper::new(&self.config);
         self.tone_shaper.set_enabled(tone_enabled);
         self.block_period_ns = Self::block_period_from_config(&self.config);
@@ -368,6 +369,7 @@ impl HarmoniqEngine {
                         if !pending_midi.is_empty() {
                             processor.process_midi(&pending_midi)?;
                         }
+                        let _guard = RtAllocGuard::enter();
                         processor.process(buffer)?;
                         Ok(())
                     },
@@ -382,6 +384,7 @@ impl HarmoniqEngine {
                 let scratch_buffers = &self.scratch_buffers[..scratch_len];
                 let mut master = self.master_buffer.lock();
                 graph::mixdown(&graph, &mut master, scratch_buffers);
+                let _guard = RtAllocGuard::enter();
                 self.tone_shaper.process(&mut master);
                 for (target_channel, source_channel) in output.channels_mut().zip(master.channels())
                 {
@@ -416,7 +419,7 @@ impl HarmoniqEngine {
 
         for _ in self.scratch_buffers.len()..len {
             self.scratch_buffers
-                .push(AudioBuffer::from_config(self.config.clone()));
+                .push(AudioBuffer::from_config(&self.config));
         }
     }
 
@@ -521,25 +524,33 @@ impl ClipPlayback {
 
         let clip_samples = self.clip.samples();
         let mut position = self.position;
-        let output_channels = buffer.as_mut_slice();
-        if output_channels.is_empty() {
+        let channel_count = buffer.channel_count();
+        if channel_count == 0 {
             return true;
         }
 
-        let available_frames = output_channels[0].len();
+        let available_frames = buffer.len();
+        if available_frames == 0 {
+            return true;
+        }
+
+        let data = buffer.as_mut_slice();
 
         for frame_index in 0..available_frames {
             if position >= total_frames {
                 break;
             }
 
-            for (channel_index, channel) in output_channels.iter_mut().enumerate() {
+            for channel_index in 0..channel_count {
                 let source_channel = channel_index.min(clip_channels - 1);
                 if let Some(value) = clip_samples
                     .get(source_channel)
                     .and_then(|channel| channel.get(position))
                 {
-                    channel[frame_index] += *value;
+                    let dest_index = channel_index * available_frames + frame_index;
+                    if dest_index < data.len() {
+                        data[dest_index] += *value;
+                    }
                 }
             }
 

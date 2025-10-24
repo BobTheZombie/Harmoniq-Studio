@@ -8,7 +8,7 @@ fn render_default_graph_without_xruns() {
     let config = BufferConfig::new(48_000.0, 128, ChannelLayout::Stereo);
     let mut engine = HarmoniqEngine::new(config.clone()).expect("engine");
     let metrics = engine.metrics_collector();
-    let mut buffer = AudioBuffer::from_config(config.clone());
+    let mut buffer = AudioBuffer::from_config(&config);
 
     for _ in 0..8 {
         engine.process_block(&mut buffer).expect("warm-up block");

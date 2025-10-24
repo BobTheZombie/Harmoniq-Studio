@@ -499,21 +499,26 @@ fn offline_bounce_to_file(
     configure_demo_graph(&mut engine, graph_config)?;
     engine.set_transport(TransportState::Playing);
 
-    let mut buffer = AudioBuffer::from_config(config.clone());
+    let mut buffer = AudioBuffer::from_config(&config);
     let mut frames_written = 0usize;
     let mut samples: Vec<i16> = Vec::with_capacity(total_frames * channels);
 
     while frames_written < total_frames {
         engine.process_block(&mut buffer)?;
         let block_len = buffer.len();
-        let channel_data = buffer.as_slice();
+        let channel_count = buffer.channel_count();
 
         for frame in 0..block_len {
             if frames_written >= total_frames {
                 break;
             }
             for channel in 0..channels {
-                let sample = channel_data[channel][frame].clamp(-1.0, 1.0);
+                let sample = if channel < channel_count {
+                    buffer.channel(channel)[frame]
+                } else {
+                    0.0
+                }
+                .clamp(-1.0, 1.0);
                 let quantized = (sample * i16::MAX as f32) as i16;
                 samples.push(quantized);
             }
@@ -729,7 +734,7 @@ fn run_headless_offline_preview(
     config: &BufferConfig,
     tempo: f32,
 ) -> anyhow::Result<()> {
-    let mut buffer = AudioBuffer::from_config(config.clone());
+    let mut buffer = AudioBuffer::from_config(config);
     for _ in 0..10 {
         {
             let mut engine = engine.lock();
@@ -944,7 +949,7 @@ impl OfflineLoop {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = Arc::clone(&running);
         let handle = std::thread::spawn(move || {
-            let mut buffer = AudioBuffer::from_config(config);
+            let mut buffer = AudioBuffer::from_config(&config);
             while running_clone.load(AtomicOrdering::SeqCst) {
                 {
                     let mut engine = engine.lock();

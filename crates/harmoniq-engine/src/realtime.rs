@@ -161,7 +161,7 @@ fn spawn_render_thread(
         .name("harmoniq-realtime-render".into())
         .spawn(move || {
             ensure_denormals_disabled();
-            let mut buffer = AudioBuffer::from_config(config.clone());
+            let mut buffer = AudioBuffer::from_config(&config);
             let stride = output_channels.max(1);
             let mut interleaved = vec![0.0f32; stride.saturating_mul(cmp::max(1, buffer.len()))];
 
@@ -294,9 +294,8 @@ fn choose_stream_config(
 }
 
 fn interleave_buffer(buffer: &AudioBuffer, output_channels: usize, target: &mut [f32]) -> usize {
-    let channels = buffer.as_slice();
     let frames = buffer.len();
-    let channel_count = channels.len();
+    let channel_count = buffer.channel_count();
     let mut index = 0;
 
     for frame in 0..frames {
@@ -306,7 +305,7 @@ fn interleave_buffer(buffer: &AudioBuffer, output_channels: usize, target: &mut 
             }
 
             let value = if channel < channel_count {
-                channels[channel][frame]
+                buffer.channel(channel)[frame]
             } else {
                 0.0
             };

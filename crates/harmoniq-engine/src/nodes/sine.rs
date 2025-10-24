@@ -98,14 +98,15 @@ impl AudioProcessor for NodeOsc {
         let amplitude = self.amplitude;
         let mut phase = self.phase;
         let phase_delta = self.phase_delta;
-        let channels = buffer.as_mut_slice();
-        let channel_count = channels.len();
+        let channel_count = buffer.channel_count();
+        let data = buffer.as_mut_slice();
 
         for frame in 0..frames {
             let value = (phase).sin() * amplitude;
-            for channel in channels.iter_mut().take(channel_count) {
-                if frame < channel.len() {
-                    channel[frame] = value;
+            for channel in 0..channel_count {
+                let index = channel * frames + frame;
+                if index < data.len() {
+                    data[index] = value;
                 }
             }
             phase = (phase + phase_delta).rem_euclid(TAU);

@@ -12,6 +12,7 @@ pub mod graph;
 pub mod nodes;
 pub mod plugin;
 pub mod rt;
+mod scratch;
 pub mod sound_server;
 pub mod time;
 mod tone;
@@ -79,7 +80,7 @@ mod tests {
             .replace_graph(handle)
             .expect("graph should be accepted");
 
-        let mut buffer = AudioBuffer::from_config(config.clone());
+        let mut buffer = AudioBuffer::from_config(&config);
         engine.process_block(&mut buffer).expect("process");
 
         let rms = buffer
@@ -113,7 +114,7 @@ mod tests {
             .try_send(EngineCommand::SetTransport(TransportState::Playing))
             .expect("queue should accept transport command");
 
-        let mut buffer = AudioBuffer::from_config(config.clone());
+        let mut buffer = AudioBuffer::from_config(&config);
         engine.process_block(&mut buffer).expect("process");
 
         assert_eq!(engine.transport(), TransportState::Playing);
@@ -209,10 +210,10 @@ mod tests {
             .replace_graph(builder.build())
             .expect("graph should be accepted");
 
-        let mut buffer = AudioBuffer::from_config(config.clone());
+        let mut buffer = AudioBuffer::from_config(&config);
         engine.process_block(&mut buffer).expect("process");
 
-        let left = &buffer.as_slice()[0];
+        let left = buffer.channel(0);
         assert!(left.iter().take(32).all(|sample| sample.abs() < 1e-6));
         assert!((left[32] - 2.0).abs() < 1e-6);
     }
@@ -294,11 +295,33 @@ mod tests {
             })
             .expect("send automation");
 
-        let mut buffer = AudioBuffer::from_config(config.clone());
+        let mut buffer = AudioBuffer::from_config(&config);
         engine.process_block(&mut buffer).expect("process");
 
-        let left = &buffer.as_slice()[0];
+        let left = buffer.channel(0);
         assert!((left[0] - 0.25).abs() < f32::EPSILON);
         assert!((left[16] - 0.75).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn processes_ten_thousand_blocks_without_allocations() {
+        let config = BufferConfig::new(48_000.0, 64, ChannelLayout::Stereo);
+        let mut engine = HarmoniqEngine::new(config.clone()).expect("engine");
+
+        let pulse_id = engine
+            .register_processor(Box::new(PulseGenerator))
+            .expect("register pulse");
+
+        let mut builder = GraphBuilder::new();
+        let pulse_node = builder.add_node(pulse_id);
+        builder.connect_to_mixer(pulse_node, 1.0).unwrap();
+        engine
+            .replace_graph(builder.build())
+            .expect("graph should be accepted");
+
+        let mut buffer = AudioBuffer::from_config(&config);
+        for _ in 0..10_000 {
+            engine.process_block(&mut buffer).expect("process");
+        }
     }
 }

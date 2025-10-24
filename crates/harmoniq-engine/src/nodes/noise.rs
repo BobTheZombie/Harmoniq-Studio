@@ -36,18 +36,9 @@ impl AudioProcessor for NodeNoise {
     }
 
     fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
-        let frames = buffer.len();
-        if frames == 0 {
-            return Ok(());
-        }
-        let channels = buffer.as_mut_slice();
-        let channel_count = channels.len();
-        for frame in 0..frames {
-            let sample = self.next_sample();
-            for channel in channels.iter_mut().take(channel_count) {
-                if frame < channel.len() {
-                    channel[frame] = sample;
-                }
+        for channel in buffer.channels_mut() {
+            for sample in channel.iter_mut() {
+                *sample = self.next_sample();
             }
         }
         Ok(())
