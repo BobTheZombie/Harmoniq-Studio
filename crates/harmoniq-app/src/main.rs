@@ -829,7 +829,16 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    if args.headless {
+    let ui_requested = !args.headless;
+    let ui_supported = ui_requested && environment_supports_native_ui();
+
+    if ui_requested && !ui_supported {
+        eprintln!(
+            "No graphical display detected – falling back to --headless mode. Set the DISPLAY or WAYLAND_DISPLAY environment variables to use the native UI."
+        );
+    }
+
+    if args.headless || !ui_supported {
         run_headless(
             &args,
             runtime_options,
@@ -914,6 +923,37 @@ fn run_headless(
     }
 
     Ok(())
+}
+
+fn environment_supports_native_ui() -> bool {
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    {
+        std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some()
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    {
+        true
+    }
+
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "netbsd",
+        target_os = "openbsd",
+        target_os = "windows",
+        target_os = "macos"
+    )))]
+    {
+        false
+    }
 }
 
 fn run_headless_offline_preview(
