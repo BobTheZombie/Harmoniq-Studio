@@ -8,10 +8,21 @@ use super::commands::{
     Command, CommandId, FileCommand, HelpCommand, InsertCommand, MidiCommand, OptionsCommand,
     PluginCategory, ThemeMode, TrackCommand, TransportCommand, ViewCommand,
 };
+use super::menu_plugins::PluginsMenuState;
 use super::shortcuts::ShortcutMap;
 
-#[derive(Debug, Default, Clone)]
-pub struct MenuBarState;
+#[derive(Debug, Clone)]
+pub struct MenuBarState {
+    pub plugins_menu: PluginsMenuState,
+}
+
+impl Default for MenuBarState {
+    fn default() -> Self {
+        Self {
+            plugins_menu: PluginsMenuState::default(),
+        }
+    }
+}
 
 pub struct MenuBarSnapshot<'a> {
     pub mixer_visible: bool,
@@ -75,6 +86,7 @@ impl MenuBarState {
             self.track_menu(ui, shortcuts, commands, snapshot);
             self.midi_menu(ui, shortcuts, commands, snapshot);
             self.transport_menu(ui, shortcuts, commands, snapshot);
+            self.plugins_menu.render(ui, palette, commands);
             self.options_menu(ui, shortcuts, commands, snapshot);
             self.help_menu(ui, commands);
         });
@@ -573,5 +585,17 @@ fn with_shortcut(label: &str, shortcuts: &ShortcutMap, id: CommandId) -> String 
         format!("{label}\t{shortcut}")
     } else {
         label.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_menu_state_defaults_closed() {
+        let state = MenuBarState::default();
+        assert!(!state.plugins_menu.scanner_open);
+        assert!(!state.plugins_menu.library_open);
     }
 }

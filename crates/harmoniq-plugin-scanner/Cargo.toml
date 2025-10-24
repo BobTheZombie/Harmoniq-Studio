@@ -1,0 +1,21 @@
+[package]
+name = "harmoniq-plugin-scanner"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["Harmoniq Studio Contributors"]
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+tracing = "0.1"
+walkdir = "2.5"
+dirs = { workspace = true }
+
+harmoniq-plugin-db = { path = "../harmoniq-plugin-db" }
+
+[dev-dependencies]
+pretty_assertions = "1.4"
+assert_cmd = "2.0"
