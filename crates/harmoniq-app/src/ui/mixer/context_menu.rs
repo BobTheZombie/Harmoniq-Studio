@@ -1,4 +1,4 @@
-use eframe::egui::{self, RichText, Ui};
+use eframe::egui::{RichText, Ui};
 
 pub fn strip_context_menu(ui: &mut Ui) {
     ui.label(RichText::new("Mixer Strip").strong());

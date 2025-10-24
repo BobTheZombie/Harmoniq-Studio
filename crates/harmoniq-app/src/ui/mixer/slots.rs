@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align, Id, Response, RichText, Ui};
+use eframe::egui::{self, Align, Response, RichText, Ui};
 
 use crate::ui::mixer::theme::MixerTheme;
 
@@ -27,8 +27,7 @@ impl<'a> SlotView<'a> {
             self.label
         };
 
-        let id = Id::new(("slot", self.kind as u8, self.index));
-        let mut frame = egui::Frame::none()
+        let frame = egui::Frame::none()
             .fill(if self.active {
                 theme.active_slot
             } else {
@@ -37,7 +36,7 @@ impl<'a> SlotView<'a> {
             .stroke(theme.slot_border)
             .rounding(theme.rounding_small);
 
-        let mut response = frame.show(ui, |ui| {
+        let frame_response = frame.show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(2.0);
                 ui.label(RichText::new(label).size(11.0).color(theme.header_text));
@@ -54,6 +53,8 @@ impl<'a> SlotView<'a> {
                 ui.add_space(1.0);
             });
         });
+
+        let mut response = frame_response.response;
 
         if ui.ui_contains_pointer() && response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);

@@ -115,7 +115,6 @@ impl MixerView {
                     let x = index as f32 * strip_size.x + visible.offset;
                     let strip_rect =
                         Rect::from_min_size(pos2(viewport.min.x + x, viewport.min.y), strip_size);
-                    let meter_state = &mut self.meters[index];
                     let insert_labels = (0..info.inserts)
                         .map(|slot| self.api.insert_label(index, slot))
                         .collect::<Vec<_>>();
@@ -123,32 +122,41 @@ impl MixerView {
                         .map(|slot| self.api.send_label(index, slot))
                         .collect::<Vec<_>>();
 
+                    let api = Arc::clone(&self.api);
+                    let theme = self.theme.clone();
+                    let density = self.density;
                     let is_selected = self.selection.contains(&info.id);
-                    ui.allocate_ui_at_rect(strip_rect, |ui| {
-                        let response = render_strip(StripRenderArgs {
-                            ui,
-                            api: self.api.as_ref(),
-                            info: &info,
-                            index,
-                            density: self.density,
-                            theme: &self.theme,
-                            width: strip_size.x,
-                            height: strip_size.y,
-                            is_selected,
-                            meter: meter_state,
-                            insert_labels,
-                            send_labels,
+
+                    let response = {
+                        let meter_state = &mut self.meters[index];
+                        ui.allocate_ui_at_rect(strip_rect, move |ui| {
+                            render_strip(StripRenderArgs {
+                                ui,
+                                api: api.as_ref(),
+                                info: &info,
+                                index,
+                                density,
+                                theme: &theme,
+                                width: strip_size.x,
+                                height: strip_size.y,
+                                is_selected,
+                                meter: meter_state,
+                                insert_labels,
+                                send_labels,
+                            })
+                        })
+                        .inner
+                    };
+
+                    if response.clicked {
+                        self.handle_selection(ui, info.id);
+                    }
+                    if response.double_clicked {
+                        self.rename = Some(RenameState {
+                            id: info.id,
+                            name: info.name.clone(),
                         });
-                        if response.clicked {
-                            self.handle_selection(ui, info.id);
-                        }
-                        if response.double_clicked {
-                            self.rename = Some(RenameState {
-                                id: info.id,
-                                name: info.name.clone(),
-                            });
-                        }
-                    });
+                    }
                 }
 
                 self.draw_master_strip(ui, viewport, strip_size, master_index);
@@ -202,7 +210,7 @@ impl MixerView {
         }
         if ui
             .ctx()
-            .input(|i| i.key_pressed(Key::PlusEquals) || i.key_pressed(Key::Equals))
+            .input(|i| i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals))
         {
             self.zoom = clamp_zoom(self.zoom + 0.05);
         }
@@ -257,7 +265,14 @@ impl MixerView {
     }
 
     fn show_rename_dialog(&mut self, ctx: &egui::Context) {
-        if let Some(rename) = &mut self.rename {
+        if self.rename.is_none() {
+            return;
+        }
+
+        let mut close_dialog = false;
+        let mut apply_change: Option<(u32, String)> = None;
+
+        if let Some(rename) = self.rename.as_mut() {
             let mut open = true;
             egui::Window::new("Rename Track")
                 .open(&mut open)
@@ -268,19 +283,28 @@ impl MixerView {
                     ui.text_edit_singleline(&mut rename.name);
                     ui.horizontal(|ui| {
                         if ui.button("Cancel").clicked() {
-                            open = false;
+                            close_dialog = true;
                         }
                         if ui.button("OK").clicked() {
-                            if let Some(index) = self.index_for_id(rename.id) {
-                                self.api.set_name(index, &rename.name);
-                            }
-                            open = false;
+                            apply_change = Some((rename.id, rename.name.clone()));
+                            close_dialog = true;
                         }
                     });
                 });
+
             if !open {
-                self.rename = None;
+                close_dialog = true;
             }
+        }
+
+        if let Some((id, name)) = apply_change {
+            if let Some(index) = self.index_for_id(id) {
+                self.api.set_name(index, &name);
+            }
+        }
+
+        if close_dialog {
+            self.rename = None;
         }
     }
 

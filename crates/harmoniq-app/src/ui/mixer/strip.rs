@@ -1,5 +1,4 @@
 use eframe::egui::{self, Align, Align2, Layout, RichText, Sense, Ui, Vec2};
-use egui::epaint::Shadow;
 use harmoniq_engine::mixer::api::{MixerUiApi, UiStripInfo};
 
 use crate::ui::mixer::context_menu::strip_context_menu;
@@ -35,6 +34,7 @@ pub fn render_strip(mut args: StripRenderArgs<'_>) -> StripResponse {
         ui,
         api,
         info,
+        index,
         density,
         theme,
         width,
@@ -52,7 +52,7 @@ pub fn render_strip(mut args: StripRenderArgs<'_>) -> StripResponse {
     if is_selected {
         fill = theme.strip_bg.linear_multiply(1.2);
     }
-    painter.rect(rect, theme.rounding_large, fill, Shadow::NONE);
+    painter.rect_filled(rect, theme.rounding_large, fill);
 
     if response.hovered() {
         painter.rect_stroke(rect, theme.rounding_large, theme.strip_border);
@@ -80,7 +80,7 @@ pub fn render_strip(mut args: StripRenderArgs<'_>) -> StripResponse {
     child.add_space(6.0);
     render_meter(&mut child, meter, theme, height * 0.35);
 
-    response = response.context_menu(|ui| {
+    response.context_menu(|ui| {
         strip_context_menu(ui);
     });
 
@@ -94,7 +94,7 @@ pub fn render_strip(mut args: StripRenderArgs<'_>) -> StripResponse {
 fn render_header(ui: &mut Ui, info: &UiStripInfo, density: StripDensity, theme: &MixerTheme) {
     ui.allocate_ui_with_layout(
         Vec2::new(ui.available_width(), 24.0),
-        Layout::left_to_right(),
+        Layout::left_to_right(Align::Center),
         |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
 
@@ -174,12 +174,16 @@ fn render_fader(
     index: usize,
 ) {
     let mut slider_value = gain_db_to_slider(info.gain_db).max(0.001);
-    let slider = egui::Slider::new(&mut slider_value, 0.001..=1.0)
+    let slider = egui::Slider::new(&mut slider_value, 0.001_f32..=1.0)
         .vertical()
         .logarithmic(true)
         .text("dB")
-        .custom_formatter(|v, _| format!("{:.1} dB", slider_to_gain_db(v)))
-        .custom_parser(|text| text.parse::<f32>().map(gain_db_to_slider).ok());
+        .custom_formatter(|v, _| format!("{:.1} dB", slider_to_gain_db(v as f32)))
+        .custom_parser(|text| {
+            text.parse::<f32>()
+                .map(|db| gain_db_to_slider(db) as f64)
+                .ok()
+        });
     let response = ui.add(slider);
     if response.changed() {
         api.set_gain_db(index, slider_to_gain_db(slider_value));
@@ -239,7 +243,7 @@ fn render_inserts(
         StripDensity::Wide => 10,
     };
     let total = info.inserts;
-    let mut grid = egui::Grid::new(("insert_grid", info.id)).spacing(Vec2::splat(4.0));
+    let grid = egui::Grid::new(("insert_grid", info.id)).spacing(Vec2::splat(4.0));
     grid.show(ui, |ui| {
         for idx in 0..visible.min(total) {
             SlotView {
@@ -273,7 +277,7 @@ fn render_sends(
         StripDensity::Wide => 4,
     };
     let total = info.sends;
-    let mut grid = egui::Grid::new(("send_grid", info.id)).spacing(Vec2::splat(4.0));
+    let grid = egui::Grid::new(("send_grid", info.id)).spacing(Vec2::splat(4.0));
     grid.show(ui, |ui| {
         for idx in 0..visible.min(total) {
             SlotView {
