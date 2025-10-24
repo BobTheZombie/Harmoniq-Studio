@@ -144,11 +144,11 @@ impl MixerView {
                         let theme = self.theme.clone();
                         let density = self.density;
                         let is_selected = self.selection.contains(&info.id);
+                        let zoom = self.zoom;
+                        let group_highlight = self.group_highlight;
 
                         let response = {
                             let meter_state = &mut self.meters[index];
-                            let insert_labels = insert_labels;
-                            let send_labels = send_labels;
                             clip_ui
                                 .allocate_ui_at_rect(strip_rect, move |ui| {
                                     render_strip(StripRenderArgs {
@@ -160,12 +160,12 @@ impl MixerView {
                                         theme: &theme,
                                         width: strip_size.x,
                                         height: strip_size.y,
-                                        zoom: self.zoom,
+                                        zoom,
                                         is_selected,
                                         meter: meter_state,
                                         insert_labels,
                                         send_labels,
-                                        group_highlight: self.group_highlight,
+                                        group_highlight,
                                     })
                                 })
                                 .inner
