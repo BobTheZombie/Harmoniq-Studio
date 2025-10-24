@@ -15,6 +15,7 @@ use crate::{
     rt::{AudioMetrics, AudioMetricsCollector},
     scratch::RtAllocGuard,
     tone::ToneShaper,
+    transport::Transport as TransportMetrics,
     AudioBuffer, AudioProcessor, BufferConfig,
 };
 
@@ -108,6 +109,7 @@ pub struct HarmoniqEngine {
     tone_shaper: ToneShaper,
     next_plugin_id: AtomicU64,
     transport: RwLock<TransportState>,
+    transport_metrics: Arc<TransportMetrics>,
     command_queue: Arc<ArrayQueue<EngineCommand>>,
     pending_midi: Mutex<Vec<MidiEvent>>,
     automations: RwLock<HashMap<PluginId, AutomationLane>>,
@@ -125,6 +127,10 @@ impl HarmoniqEngine {
         let tone_shaper = ToneShaper::new(&config);
         let metrics = AudioMetricsCollector::new(METRICS_HISTORY_CAPACITY);
         let block_period_ns = Self::block_period_from_config(&config);
+        let transport_metrics = Arc::new(TransportMetrics::default());
+        transport_metrics
+            .sample_rate
+            .store(config.sample_rate.round() as u64, Ordering::Relaxed);
 
         let mut engine = Self {
             master_buffer: Mutex::new(AudioBuffer::from_config(&config)),
@@ -132,6 +138,7 @@ impl HarmoniqEngine {
             graph: RwLock::new(None),
             next_plugin_id: AtomicU64::new(1),
             transport: RwLock::new(TransportState::Stopped),
+            transport_metrics: Arc::clone(&transport_metrics),
             command_queue,
             pending_midi: Mutex::new(Vec::new()),
             config,
@@ -198,6 +205,9 @@ impl HarmoniqEngine {
         self.tone_shaper.set_enabled(tone_enabled);
         self.block_period_ns = Self::block_period_from_config(&self.config);
         self.metrics.reset();
+        self.transport_metrics
+            .sample_rate
+            .store(self.config.sample_rate.round() as u64, Ordering::Relaxed);
 
         self.scratch_buffers.clear();
 
@@ -242,7 +252,32 @@ impl HarmoniqEngine {
     }
 
     pub fn set_transport(&self, state: TransportState) {
-        *self.transport.write() = state;
+        let mut current = self.transport.write();
+        let was_playing = matches!(
+            *current,
+            TransportState::Playing | TransportState::Recording
+        );
+        let now_playing = matches!(state, TransportState::Playing | TransportState::Recording);
+        *current = state;
+        drop(current);
+
+        self.transport_metrics
+            .playing
+            .store(now_playing, Ordering::Relaxed);
+        if now_playing && !was_playing {
+            self.transport_metrics
+                .sample_pos
+                .store(0, Ordering::Relaxed);
+        }
+        if !now_playing {
+            self.transport_metrics
+                .playing
+                .store(false, Ordering::Relaxed);
+        }
+    }
+
+    pub fn transport_metrics(&self) -> Arc<TransportMetrics> {
+        Arc::clone(&self.transport_metrics)
     }
 
     pub fn register_processor(
@@ -402,6 +437,14 @@ impl HarmoniqEngine {
         })();
 
         self.metrics.record_block(start.elapsed(), period_ns);
+        if matches!(
+            self.transport(),
+            TransportState::Playing | TransportState::Recording
+        ) {
+            self.transport_metrics
+                .sample_pos
+                .fetch_add(output.len() as u64, Ordering::Relaxed);
+        }
         result
     }
 

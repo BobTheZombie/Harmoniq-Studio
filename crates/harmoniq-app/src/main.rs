@@ -19,8 +19,8 @@ use eframe::{App, CreationContext, NativeOptions};
 use egui_dock::{DockArea, DockState, Style as DockStyle, TabViewer};
 use egui_extras::{image::load_svg_bytes, install_image_loaders};
 use harmoniq_engine::{
-    AudioBuffer, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine,
-    TransportState,
+    transport::Transport as EngineTransport, AudioBuffer, BufferConfig, ChannelLayout,
+    EngineCommand, GraphBuilder, HarmoniqEngine, TransportState,
 };
 use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth};
 use harmoniq_ui::{HarmoniqPalette, HarmoniqTheme};
@@ -1008,6 +1008,26 @@ struct OfflineLoop {
 
 impl OfflineLoop {
     fn start(engine: Arc<Mutex<HarmoniqEngine>>, config: BufferConfig) -> Self {
+        let (transport_handle, playing_state) = {
+            let engine_guard = engine.lock();
+            (
+                engine_guard.transport_metrics(),
+                matches!(
+                    engine_guard.transport(),
+                    TransportState::Playing | TransportState::Recording
+                ),
+            )
+        };
+        transport_handle
+            .sample_rate
+            .store(config.sample_rate.round() as u64, AtomicOrdering::Relaxed);
+        transport_handle
+            .sample_pos
+            .store(0, AtomicOrdering::Relaxed);
+        transport_handle
+            .playing
+            .store(playing_state, AtomicOrdering::Relaxed);
+
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = Arc::clone(&running);
         let handle = std::thread::spawn(move || {
@@ -1061,6 +1081,7 @@ struct HarmoniqStudioApp {
     event_bus: EventBus,
     engine_runner: EngineRunner,
     command_queue: harmoniq_engine::EngineCommandQueue,
+    transport: Arc<EngineTransport>,
     engine_context: Arc<Mutex<EngineContext>>,
     tempo: f32,
     time_signature: TimeSignature,
@@ -1091,6 +1112,7 @@ impl HarmoniqStudioApp {
         engine.execute_command(EngineCommand::SetTempo(initial_tempo))?;
 
         let command_queue = engine.command_queue();
+        let transport = engine.transport_metrics();
         let engine = Arc::new(Mutex::new(engine));
         let engine_runner = EngineRunner::start(
             Arc::clone(&engine),
@@ -1153,6 +1175,7 @@ impl HarmoniqStudioApp {
             event_bus,
             engine_runner,
             command_queue,
+            transport,
             engine_context,
             tempo: initial_tempo,
             time_signature: initial_time_signature,
@@ -1292,10 +1315,12 @@ impl HarmoniqStudioApp {
         match event {
             TransportEvent::Play => {
                 self.transport_state = TransportState::Playing;
+                self.transport.sample_pos.store(0, AtomicOrdering::Relaxed);
                 self.send_command(EngineCommand::SetTransport(TransportState::Playing));
             }
             TransportEvent::Stop => {
                 self.transport_state = TransportState::Stopped;
+                self.transport.sample_pos.store(0, AtomicOrdering::Relaxed);
                 self.send_command(EngineCommand::SetTransport(TransportState::Stopped));
             }
             TransportEvent::Record(armed) => {
@@ -1310,12 +1335,22 @@ impl HarmoniqStudioApp {
     }
 
     fn update_engine_context(&mut self) {
+        let sample_rate = self
+            .transport
+            .sample_rate
+            .load(AtomicOrdering::Relaxed)
+            .max(1);
+        let sample_pos = self.transport.sample_pos.load(AtomicOrdering::Relaxed);
+        let is_playing = self.transport.playing.load(AtomicOrdering::Relaxed);
+        let seconds = sample_pos as f64 / sample_rate as f64;
+        let beats = (seconds * (self.tempo.max(1.0) as f64 / 60.0)) as f32;
+        self.transport_clock = TransportClock::from_beats(beats, self.time_signature);
+        self.playlist.set_playhead(beats, is_playing);
+
         if self.last_engine_update.elapsed() < Duration::from_millis(100) {
             return;
         }
         self.last_engine_update = Instant::now();
-        self.transport_clock =
-            TransportClock::from_beats(self.playlist.playhead_position(), self.time_signature);
         let mut ctx = self.engine_context.lock();
         ctx.tempo = self.tempo;
         ctx.time_signature = self.time_signature;
@@ -1362,6 +1397,7 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
 
 impl App for HarmoniqStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ctx.request_repaint_after(Duration::from_millis(16));
         self.process_events();
         self.update_engine_context();
 

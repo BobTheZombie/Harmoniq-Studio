@@ -16,6 +16,7 @@ mod scratch;
 pub mod sound_server;
 pub mod time;
 mod tone;
+pub mod transport;
 
 #[cfg(feature = "native")]
 pub mod realtime;
@@ -29,7 +30,11 @@ pub use plugin::{
     AudioProcessor, MidiEvent, MidiProcessor, MidiTimestamp, PluginDescriptor, PluginId,
 };
 pub use rt::{AudioMetrics, AudioMetricsCollector};
-pub use time::{BeatInfo, LoopRegion, Tempo, TempoMap, TempoSegment, TimeSignature, Transport};
+pub use time::{
+    BeatInfo, LoopRegion, Tempo, TempoMap, TempoSegment, TimeSignature,
+    Transport as TimelineTransport,
+};
+pub use transport::Transport as RealtimeTransport;
 
 #[cfg(feature = "openasio")]
 pub mod backend;
