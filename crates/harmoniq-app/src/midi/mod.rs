@@ -10,7 +10,7 @@ use harmoniq_engine::{EngineCommand, EngineCommandQueue, MidiEvent, MidiTimestam
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use ringbuf::{HeapConsumer, HeapRb};
 use tracing::{info, warn};
-use winit::event::{ModifiersState, VirtualKeyCode};
+use winit::keyboard::{KeyCode, ModifiersState};
 
 pub mod qwerty;
 pub use qwerty::QwertyKeyboardInput;
@@ -23,13 +23,7 @@ pub trait MidiInputDevice: Send {
     fn name(&self) -> &str;
     fn enabled(&self) -> bool;
     fn set_enabled(&mut self, on: bool);
-    fn push_key_event(
-        &mut self,
-        key: VirtualKeyCode,
-        pressed: bool,
-        mods: ModifiersState,
-        time: Instant,
-    );
+    fn push_key_event(&mut self, key: KeyCode, pressed: bool, mods: ModifiersState, time: Instant);
     fn drain_events<'a>(&'a mut self, out: &mut dyn FnMut(MidiEvent, Instant));
     fn panic(&mut self, time: Instant);
 }

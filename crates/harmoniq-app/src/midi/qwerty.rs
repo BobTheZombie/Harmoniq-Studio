@@ -1,49 +1,50 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::Instant;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use harmoniq_engine::{MidiEvent, MidiTimestamp};
 use ringbuf::{HeapConsumer, HeapProducer, HeapRb};
-use winit::event::{ModifiersState, VirtualKeyCode};
+use winit::keyboard::{KeyCode, ModifiersState};
 
 use crate::config::qwerty::{KeyboardLayout, QwertyConfigFile, SustainKey, VelocityCurveSetting};
 
 use super::MidiInputDevice;
 
-const QWERTY_WHITE_KEYS: [VirtualKeyCode; 7] = [
-    VirtualKeyCode::Q,
-    VirtualKeyCode::W,
-    VirtualKeyCode::E,
-    VirtualKeyCode::R,
-    VirtualKeyCode::T,
-    VirtualKeyCode::Y,
-    VirtualKeyCode::U,
+const QWERTY_WHITE_KEYS: [KeyCode; 7] = [
+    KeyCode::KeyQ,
+    KeyCode::KeyW,
+    KeyCode::KeyE,
+    KeyCode::KeyR,
+    KeyCode::KeyT,
+    KeyCode::KeyY,
+    KeyCode::KeyU,
 ];
 
-const QWERTY_BLACK_KEYS: [VirtualKeyCode; 5] = [
-    VirtualKeyCode::Key2,
-    VirtualKeyCode::Key3,
-    VirtualKeyCode::Key5,
-    VirtualKeyCode::Key6,
-    VirtualKeyCode::Key7,
+const QWERTY_BLACK_KEYS: [KeyCode; 5] = [
+    KeyCode::Digit2,
+    KeyCode::Digit3,
+    KeyCode::Digit5,
+    KeyCode::Digit6,
+    KeyCode::Digit7,
 ];
 
-const ALT_WHITE_KEYS: [VirtualKeyCode; 8] = [
-    VirtualKeyCode::Z,
-    VirtualKeyCode::X,
-    VirtualKeyCode::C,
-    VirtualKeyCode::V,
-    VirtualKeyCode::B,
-    VirtualKeyCode::N,
-    VirtualKeyCode::M,
-    VirtualKeyCode::Comma,
+const ALT_WHITE_KEYS: [KeyCode; 8] = [
+    KeyCode::KeyZ,
+    KeyCode::KeyX,
+    KeyCode::KeyC,
+    KeyCode::KeyV,
+    KeyCode::KeyB,
+    KeyCode::KeyN,
+    KeyCode::KeyM,
+    KeyCode::Comma,
 ];
 
-const ALT_BLACK_KEYS: [VirtualKeyCode; 5] = [
-    VirtualKeyCode::S,
-    VirtualKeyCode::D,
-    VirtualKeyCode::G,
-    VirtualKeyCode::H,
-    VirtualKeyCode::J,
+const ALT_BLACK_KEYS: [KeyCode; 5] = [
+    KeyCode::KeyS,
+    KeyCode::KeyD,
+    KeyCode::KeyG,
+    KeyCode::KeyH,
+    KeyCode::KeyJ,
 ];
 
 const PANIC_CC: u8 = 123;
@@ -53,28 +54,43 @@ fn is_velocity_modifier(modifiers: ModifiersState) -> bool {
     modifiers.control_key() || modifiers.alt_key() || modifiers.super_key()
 }
 
+fn midi_timestamp_from_instant(instant: Instant) -> MidiTimestamp {
+    static BASE_INSTANT: OnceLock<Instant> = OnceLock::new();
+    let base = BASE_INSTANT.get_or_init(|| {
+        let now_instant = Instant::now();
+        let now_timestamp = MidiTimestamp::now();
+        now_instant
+            .checked_sub(now_timestamp.as_duration())
+            .unwrap_or(now_instant)
+    });
+    let duration = instant
+        .checked_duration_since(*base)
+        .unwrap_or_else(|| Duration::from_micros(0));
+    MidiTimestamp::from_duration(duration)
+}
+
 #[derive(Debug, Clone)]
 struct PendingNoteOff {
     channel: u8,
     note: u8,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct QwertyKeyboardInput {
     name: String,
     enabled: bool,
     config: QwertyConfigFile,
     octave: i8,
     channel: u8,
-    held_keys: HashSet<VirtualKeyCode>,
-    sustained: HashSet<VirtualKeyCode>,
+    held_keys: HashSet<KeyCode>,
+    sustained: HashSet<KeyCode>,
     pending_off: VecDeque<PendingNoteOff>,
     sustain_latched: bool,
     velocity_index: usize,
     velocity_cycle: Vec<u8>,
     queue_tx: HeapProducer<(Instant, MidiEvent)>,
     queue_rx: HeapConsumer<(Instant, MidiEvent)>,
-    note_lookup: HashMap<VirtualKeyCode, u8>,
+    note_lookup: HashMap<KeyCode, u8>,
 }
 
 impl QwertyKeyboardInput {
@@ -143,14 +159,14 @@ impl QwertyKeyboardInput {
     }
 
     fn emit(&mut self, timestamp: Instant, event: MidiEvent) {
-        if self.queue_tx.push((timestamp, event)).is_err() {
+        if let Err((ts, evt)) = self.queue_tx.push((timestamp, event)) {
             // drop oldest event if queue full
             let _ = self.queue_rx.pop();
-            let _ = self.queue_tx.push((timestamp, event));
+            let _ = self.queue_tx.push((ts, evt));
         }
     }
 
-    fn note_on(&mut self, key: VirtualKeyCode, timestamp: Instant, modifiers: ModifiersState) {
+    fn note_on(&mut self, key: KeyCode, timestamp: Instant, modifiers: ModifiersState) {
         if self.held_keys.contains(&key) {
             return;
         }
@@ -161,13 +177,13 @@ impl QwertyKeyboardInput {
                 channel: self.channel,
                 note,
                 velocity,
-                timestamp: MidiTimestamp::from_instant(timestamp),
+                timestamp: midi_timestamp_from_instant(timestamp),
             };
             self.emit(timestamp, event);
         }
     }
 
-    fn note_off(&mut self, key: VirtualKeyCode, timestamp: Instant) {
+    fn note_off(&mut self, key: KeyCode, timestamp: Instant) {
         if !self.held_keys.remove(&key) {
             return;
         }
@@ -183,7 +199,7 @@ impl QwertyKeyboardInput {
             let event = MidiEvent::NoteOff {
                 channel: self.channel,
                 note,
-                timestamp: MidiTimestamp::from_instant(timestamp),
+                timestamp: midi_timestamp_from_instant(timestamp),
             };
             self.emit(timestamp, event);
         }
@@ -225,7 +241,7 @@ impl QwertyKeyboardInput {
             channel: self.channel,
             control: SUSTAIN_CC,
             value,
-            timestamp: MidiTimestamp::from_instant(timestamp),
+            timestamp: midi_timestamp_from_instant(timestamp),
         };
         self.emit(timestamp, event);
         if !pressed {
@@ -233,7 +249,7 @@ impl QwertyKeyboardInput {
                 let event = MidiEvent::NoteOff {
                     channel: note.channel,
                     note: note.note,
-                    timestamp: MidiTimestamp::from_instant(timestamp),
+                    timestamp: midi_timestamp_from_instant(timestamp),
                 };
                 self.emit(timestamp, event);
             }
@@ -246,7 +262,7 @@ impl QwertyKeyboardInput {
             channel: self.channel,
             control: PANIC_CC,
             value: 0,
-            timestamp: MidiTimestamp::from_instant(timestamp),
+            timestamp: midi_timestamp_from_instant(timestamp),
         };
         self.emit(timestamp, event);
         for key in self.held_keys.drain() {
@@ -254,7 +270,7 @@ impl QwertyKeyboardInput {
                 let event = MidiEvent::NoteOff {
                     channel: self.channel,
                     note,
-                    timestamp: MidiTimestamp::from_instant(timestamp),
+                    timestamp: midi_timestamp_from_instant(timestamp),
                 };
                 self.emit(timestamp, event);
             }
@@ -274,10 +290,10 @@ impl QwertyKeyboardInput {
         }
     }
 
-    fn sustain_key(&self) -> VirtualKeyCode {
+    fn sustain_key(&self) -> KeyCode {
         match self.config.sustain_key {
-            SustainKey::Space => VirtualKeyCode::Space,
-            SustainKey::CapsLock => VirtualKeyCode::Capital,
+            SustainKey::Space => KeyCode::Space,
+            SustainKey::CapsLock => KeyCode::CapsLock,
         }
     }
 }
@@ -297,7 +313,7 @@ impl MidiInputDevice for QwertyKeyboardInput {
 
     fn push_key_event(
         &mut self,
-        key: VirtualKeyCode,
+        key: KeyCode,
         pressed: bool,
         modifiers: ModifiersState,
         time: Instant,
@@ -310,19 +326,19 @@ impl MidiInputDevice for QwertyKeyboardInput {
             return;
         }
         match key {
-            VirtualKeyCode::Z => {
+            KeyCode::KeyZ => {
                 if pressed {
                     self.adjust_octave(-1);
                 }
                 return;
             }
-            VirtualKeyCode::X => {
+            KeyCode::KeyX => {
                 if pressed {
                     self.adjust_octave(1);
                 }
                 return;
             }
-            VirtualKeyCode::C => {
+            KeyCode::KeyC => {
                 let require_mod = matches!(self.config.layout, KeyboardLayout::DualManual);
                 if pressed && (!require_mod || is_velocity_modifier(modifiers)) {
                     self.handle_velocity_cycle(false);
@@ -334,7 +350,7 @@ impl MidiInputDevice for QwertyKeyboardInput {
                     return;
                 }
             }
-            VirtualKeyCode::V => {
+            KeyCode::KeyV => {
                 let require_mod = matches!(self.config.layout, KeyboardLayout::DualManual);
                 if pressed && (!require_mod || is_velocity_modifier(modifiers)) {
                     self.handle_velocity_cycle(true);
@@ -346,47 +362,47 @@ impl MidiInputDevice for QwertyKeyboardInput {
                     return;
                 }
             }
-            VirtualKeyCode::Key1
-            | VirtualKeyCode::Key2
-            | VirtualKeyCode::Key3
-            | VirtualKeyCode::Key4
-            | VirtualKeyCode::Key5
-            | VirtualKeyCode::Key6
-            | VirtualKeyCode::Key7
-            | VirtualKeyCode::Key8
-            | VirtualKeyCode::Key9
-            | VirtualKeyCode::Key0 => {
+            KeyCode::Digit1
+            | KeyCode::Digit2
+            | KeyCode::Digit3
+            | KeyCode::Digit4
+            | KeyCode::Digit5
+            | KeyCode::Digit6
+            | KeyCode::Digit7
+            | KeyCode::Digit8
+            | KeyCode::Digit9
+            | KeyCode::Digit0 => {
                 if pressed && is_velocity_modifier(modifiers) {
                     let index = match key {
-                        VirtualKeyCode::Key1 => 0,
-                        VirtualKeyCode::Key2 => 1,
-                        VirtualKeyCode::Key3 => 2,
-                        VirtualKeyCode::Key4 => 3,
-                        VirtualKeyCode::Key5 => 4,
-                        VirtualKeyCode::Key6 => 5,
-                        VirtualKeyCode::Key7 => 6,
-                        VirtualKeyCode::Key8 => 7,
-                        VirtualKeyCode::Key9 => 8,
-                        VirtualKeyCode::Key0 => 9,
+                        KeyCode::Digit1 => 0,
+                        KeyCode::Digit2 => 1,
+                        KeyCode::Digit3 => 2,
+                        KeyCode::Digit4 => 3,
+                        KeyCode::Digit5 => 4,
+                        KeyCode::Digit6 => 5,
+                        KeyCode::Digit7 => 6,
+                        KeyCode::Digit8 => 7,
+                        KeyCode::Digit9 => 8,
+                        KeyCode::Digit0 => 9,
                         _ => 0,
                     };
                     self.set_velocity_preset(index);
                     return;
                 }
             }
-            VirtualKeyCode::LBracket => {
+            KeyCode::BracketLeft => {
                 if pressed {
                     self.change_channel(-1);
                 }
                 return;
             }
-            VirtualKeyCode::Slash => {
+            KeyCode::Slash => {
                 if pressed {
                     self.change_channel(1);
                 }
                 return;
             }
-            VirtualKeyCode::Escape => {
+            KeyCode::Escape => {
                 if pressed {
                     self.panic_all(time);
                 }
@@ -422,8 +438,8 @@ mod tests {
     fn note_on_then_off_is_enqueued_once() {
         let mut device = QwertyKeyboardInput::new(QwertyConfigFile::default());
         let now = Instant::now();
-        device.push_key_event(VirtualKeyCode::Q, true, ModifiersState::empty(), now);
-        device.push_key_event(VirtualKeyCode::Q, false, ModifiersState::empty(), now);
+        device.push_key_event(KeyCode::KeyQ, true, ModifiersState::empty(), now);
+        device.push_key_event(KeyCode::KeyQ, false, ModifiersState::empty(), now);
 
         let mut events = Vec::new();
         device.drain_events(&mut |event, _| events.push(event));
@@ -437,7 +453,7 @@ mod tests {
     fn panic_clears_active_notes() {
         let mut device = QwertyKeyboardInput::new(QwertyConfigFile::default());
         let now = Instant::now();
-        device.push_key_event(VirtualKeyCode::Q, true, ModifiersState::empty(), now);
+        device.push_key_event(KeyCode::KeyQ, true, ModifiersState::empty(), now);
         device.panic(now);
 
         let mut events = Vec::new();
