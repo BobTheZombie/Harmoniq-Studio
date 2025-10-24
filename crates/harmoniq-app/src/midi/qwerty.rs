@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -75,7 +76,6 @@ struct PendingNoteOff {
     note: u8,
 }
 
-#[derive(Debug)]
 pub struct QwertyKeyboardInput {
     name: String,
     enabled: bool,
@@ -91,6 +91,25 @@ pub struct QwertyKeyboardInput {
     queue_tx: HeapProducer<(Instant, MidiEvent)>,
     queue_rx: HeapConsumer<(Instant, MidiEvent)>,
     note_lookup: HashMap<KeyCode, u8>,
+}
+
+impl fmt::Debug for QwertyKeyboardInput {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("QwertyKeyboardInput")
+            .field("name", &self.name)
+            .field("enabled", &self.enabled)
+            .field("config", &self.config)
+            .field("octave", &self.octave)
+            .field("channel", &self.channel)
+            .field("held_keys", &self.held_keys)
+            .field("sustained", &self.sustained)
+            .field("pending_off", &self.pending_off)
+            .field("sustain_latched", &self.sustain_latched)
+            .field("velocity_index", &self.velocity_index)
+            .field("velocity_cycle", &self.velocity_cycle)
+            .field("note_lookup", &self.note_lookup)
+            .finish()
+    }
 }
 
 impl QwertyKeyboardInput {
@@ -265,7 +284,8 @@ impl QwertyKeyboardInput {
             timestamp: midi_timestamp_from_instant(timestamp),
         };
         self.emit(timestamp, event);
-        for key in self.held_keys.drain() {
+        let drained_keys: Vec<_> = self.held_keys.drain().collect();
+        for key in drained_keys {
             if let Some(&note) = self.note_lookup.get(&key) {
                 let event = MidiEvent::NoteOff {
                     channel: self.channel,
