@@ -111,8 +111,9 @@ impl MixerPane {
     ) {
         let ctx = ui.ctx().clone();
         let time = ctx.input(|i| i.time);
-        if let Some(stable_dt) = ctx.input(|i| i.stable_dt) {
-            let hz = (1.0 / stable_dt).clamp(60.0, 144.0);
+        let stable_dt = ctx.input(|i| i.stable_dt);
+        if stable_dt > f32::EPSILON {
+            let hz = (1.0_f32 / stable_dt).clamp(60.0_f32, 144.0_f32);
             self.meter_refresh = Duration::from_secs_f64((1.0 / hz) as f64);
         }
         let refresh_due =
