@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io::Cursor;
 use std::sync::Arc;
+use std::sync::atomic::Ordering as AtomicOrdering;
 
 #[cfg(target_os = "linux")]
 use std::env;
@@ -785,28 +786,28 @@ impl RealtimeAudio {
         let stream = match supported_config.sample_format() {
             SampleFormat::F32 => Self::build_stream::<f32>(
                 &device,
-                stream_config,
+                &stream_config,
                 Arc::clone(&engine),
                 config.clone(),
                 err_fn,
             )?,
             SampleFormat::I16 => Self::build_stream::<i16>(
                 &device,
-                stream_config,
+                &stream_config,
                 Arc::clone(&engine),
                 config.clone(),
                 err_fn,
             )?,
             SampleFormat::U16 => Self::build_stream::<u16>(
                 &device,
-                stream_config,
+                &stream_config,
                 Arc::clone(&engine),
                 config.clone(),
                 err_fn,
             )?,
             SampleFormat::U8 => Self::build_stream::<u8>(
                 &device,
-                stream_config,
+                &stream_config,
                 Arc::clone(&engine),
                 config.clone(),
                 err_fn,
@@ -908,7 +909,7 @@ impl RealtimeAudio {
 
     fn build_stream<T>(
         device: &cpal::Device,
-        stream_config: StreamConfig,
+        stream_config: &StreamConfig,
         engine: Arc<Mutex<HarmoniqEngine>>,
         buffer_config: BufferConfig,
         err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
@@ -919,7 +920,7 @@ impl RealtimeAudio {
         let channels = stream_config.channels as usize;
         let mut local_buffer = AudioBuffer::from_config(&buffer_config);
         let stream = device.build_output_stream(
-            &stream_config,
+            stream_config,
             move |output: &mut [T], _| {
                 Self::render_output(&engine, &mut local_buffer, channels, output);
             },
