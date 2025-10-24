@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use eframe::egui::{pos2, Color32, Painter, Rect, Vec2};
+use eframe::egui::{pos2, Color32, Id, Painter, Rect, Sense, Shape, Stroke, Ui, Vec2};
 
 use crate::ui::mixer::theme::MixerTheme;
 
@@ -32,6 +32,7 @@ pub struct MeterState {
     hold_time: [f32; 2],
     hold_decay: f32,
     last_update: Instant,
+    clip_latched: bool,
 }
 
 impl Default for MeterState {
@@ -42,6 +43,7 @@ impl Default for MeterState {
             hold_time: [0.0; 2],
             hold_decay: 1.5,
             last_update: Instant::now(),
+            clip_latched: false,
         }
     }
 }
@@ -52,6 +54,9 @@ impl MeterState {
         let dt = now.duration_since(self.last_update).as_secs_f32();
         self.last_update = now;
         self.last_levels = new_levels;
+        if new_levels.clipped {
+            self.clip_latched = true;
+        }
 
         for (channel, peak) in [new_levels.left_peak, new_levels.right_peak]
             .into_iter()
@@ -63,20 +68,21 @@ impl MeterState {
             } else {
                 self.hold_time[channel] += dt;
                 let decay = (self.hold_time[channel] / self.hold_decay).clamp(0.0, 1.0);
-                let hold_linear = 10.0f32.powf(self.hold_levels[channel] / 20.0);
-                let peak_linear = 10.0f32.powf(peak / 20.0);
-                let mixed = hold_linear * (1.0 - decay) + peak_linear * decay;
-                self.hold_levels[channel] = if mixed.abs() < f32::EPSILON {
-                    f32::NEG_INFINITY
-                } else {
-                    20.0 * mixed.log10()
-                };
+                self.hold_levels[channel] = lerp_db(self.hold_levels[channel], peak, decay);
             }
         }
     }
 
     pub fn hold_levels(&self) -> [f32; 2] {
         self.hold_levels
+    }
+
+    pub fn clear_clip(&mut self) {
+        self.clip_latched = false;
+    }
+
+    pub fn clip_latched(&self) -> bool {
+        self.clip_latched
     }
 }
 
@@ -87,68 +93,134 @@ impl MeterState {
     }
 }
 
-pub fn paint_meter(painter: &Painter, rect: Rect, levels: &MeterState, theme: &MixerTheme) {
-    let bg_rect = rect.expand2(Vec2::new(0.0, 0.0));
-    painter.rect_filled(bg_rect, 2.0, theme.meter_bg);
+pub fn paint_meter(
+    ui: &mut Ui,
+    rect: Rect,
+    meter_id: Id,
+    state: &mut MeterState,
+    theme: &MixerTheme,
+) {
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, theme.rounding_small, theme.meter_bg);
 
-    let left_rect = Rect::from_min_max(bg_rect.min, pos2(bg_rect.center().x - 2.0, bg_rect.max.y));
-    let right_rect = Rect::from_min_max(pos2(bg_rect.center().x + 2.0, bg_rect.min.y), bg_rect.max);
+    let channel_width = rect.width() * 0.5 - 1.0;
+    let left_rect = Rect::from_min_max(rect.min, pos2(rect.min.x + channel_width, rect.max.y));
+    let right_rect = Rect::from_min_max(pos2(rect.max.x - channel_width, rect.min.y), rect.max);
 
-    paint_channel_meter(
-        painter,
+    paint_channel(
+        &painter,
         left_rect,
-        levels.last_levels.left_peak,
-        levels.hold_levels[0],
+        state.last_levels.left_peak,
+        state.last_levels.left_true_peak,
+        state.hold_levels[0],
         theme,
     );
-    paint_channel_meter(
-        painter,
+    paint_channel(
+        &painter,
         right_rect,
-        levels.last_levels.right_peak,
-        levels.hold_levels[1],
+        state.last_levels.right_peak,
+        state.last_levels.right_true_peak,
+        state.hold_levels[1],
         theme,
     );
 
-    if levels.last_levels.clipped {
-        let clip_rect = Rect::from_min_size(
-            pos2(bg_rect.center().x - 8.0, bg_rect.min.y - 16.0),
-            Vec2::new(16.0, 12.0),
-        );
-        painter.rect_filled(clip_rect, 4.0, theme.clip);
+    let clip_rect = Rect::from_min_size(
+        pos2(rect.center().x - 7.0, rect.min.y - 14.0),
+        Vec2::new(14.0, 10.0),
+    );
+    let clip_color = if state.clip_latched() {
+        theme.clip
+    } else {
+        theme.icon_bg
+    };
+    painter.rect_filled(clip_rect, theme.rounding_small, clip_color);
+
+    let clip_id = meter_id.with("clip");
+    if ui.interact(clip_rect, clip_id, Sense::click()).clicked() {
+        state.clear_clip();
     }
 }
 
-fn paint_channel_meter(
+fn paint_channel(
     painter: &Painter,
     rect: Rect,
     peak_db: f32,
+    true_peak_db: f32,
     hold_db: f32,
     theme: &MixerTheme,
 ) {
-    let peak_linear = 10.0f32.powf(peak_db / 20.0).clamp(0.0, 1.0);
-    let hold_linear = 10.0f32.powf(hold_db / 20.0).clamp(0.0, 1.0);
+    let peak_ratio = db_to_ratio(peak_db);
+    let true_ratio = db_to_ratio(true_peak_db);
+    let hold_ratio = db_to_ratio(hold_db);
 
-    let peak_height = rect.height() * peak_linear;
+    let peak_height = rect.height() * peak_ratio;
     let peak_rect = Rect::from_min_max(pos2(rect.min.x, rect.max.y - peak_height), rect.max);
+    if peak_height > 0.0 {
+        let top_color = meter_color_for_db(peak_db, theme);
+        let bottom_color = theme.meter_bg.linear_multiply(0.4);
+        let mut mesh = egui::epaint::Mesh::default();
+        mesh.colored_vertex(peak_rect.left_top(), top_color);
+        mesh.colored_vertex(peak_rect.right_top(), top_color);
+        mesh.colored_vertex(peak_rect.right_bottom(), bottom_color);
+        mesh.colored_vertex(peak_rect.left_bottom(), bottom_color);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        painter.add(Shape::mesh(mesh));
+    }
 
-    painter.rect_filled(peak_rect, 2.0, lerp_meter_color(peak_linear, theme));
+    if hold_ratio > 0.0 {
+        let y = rect.max.y - rect.height() * hold_ratio;
+        painter.line_segment(
+            [pos2(rect.min.x, y), pos2(rect.max.x, y)],
+            Stroke::new(1.5, theme.meter_true_peak),
+        );
+    }
 
-    let hold_height = rect.height() * hold_linear;
-    let hold_y = rect.max.y - hold_height;
-    let hold_rect = Rect::from_min_max(
-        pos2(rect.min.x, hold_y - 1.0),
-        pos2(rect.max.x, hold_y + 1.0),
-    );
-    painter.rect_filled(hold_rect, 1.0, theme.meter_true_peak);
+    if true_ratio > 0.0 {
+        let y = rect.max.y - rect.height() * true_ratio;
+        painter.line_segment(
+            [pos2(rect.min.x, y), pos2(rect.max.x, y)],
+            Stroke::new(1.0, meter_color_for_db(true_peak_db, theme)),
+        );
+    }
 }
 
-fn lerp_meter_color(t: f32, theme: &MixerTheme) -> Color32 {
+fn db_to_ratio(db: f32) -> f32 {
+    if db <= -90.0 {
+        0.0
+    } else {
+        (10.0f32.powf(db / 20.0)).clamp(0.0, 1.0)
+    }
+}
+
+fn meter_color_for_db(db: f32, theme: &MixerTheme) -> Color32 {
+    let clamped = db.clamp(-60.0, 6.0);
+    if clamped >= -1.0 {
+        theme.meter_red
+    } else if clamped >= -6.0 {
+        let t = (clamped + 6.0) / 5.0;
+        lerp_color(theme.meter_yellow, theme.meter_red, t)
+    } else {
+        let t = (clamped + 60.0) / 54.0;
+        lerp_color(theme.meter_green, theme.meter_yellow, t)
+    }
+}
+
+fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = t.clamp(0.0, 1.0);
-    let r = theme.meter_grad_low.r() as f32
-        + (theme.meter_grad_high.r() as f32 - theme.meter_grad_low.r() as f32) * t;
-    let g = theme.meter_grad_low.g() as f32
-        + (theme.meter_grad_high.g() as f32 - theme.meter_grad_low.g() as f32) * t;
-    let b = theme.meter_grad_low.b() as f32
-        + (theme.meter_grad_high.b() as f32 - theme.meter_grad_low.b() as f32) * t;
+    let r = a.r() as f32 + (b.r() as f32 - a.r() as f32) * t;
+    let g = a.g() as f32 + (b.g() as f32 - a.g() as f32) * t;
+    let b = a.b() as f32 + (b.b() as f32 - a.b() as f32) * t;
     Color32::from_rgb(r as u8, g as u8, b as u8)
+}
+
+fn lerp_db(a: f32, b: f32, t: f32) -> f32 {
+    let a_lin = db_to_ratio(a);
+    let b_lin = db_to_ratio(b);
+    let mixed = a_lin * (1.0 - t) + b_lin * t;
+    if mixed <= 0.0 {
+        f32::NEG_INFINITY
+    } else {
+        20.0 * mixed.log10()
+    }
 }

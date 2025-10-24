@@ -1,7 +1,8 @@
-mod context_menu;
+mod context;
+mod inserts;
 mod layout;
 mod meter;
-mod slots;
+mod sends;
 mod strip;
 mod theme;
 
@@ -10,6 +11,7 @@ mod tests;
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use eframe::egui::{self, pos2, Align, Key, Rect, Ui, Vec2};
 use harmoniq_engine::mixer::api::MixerUiApi;
@@ -53,7 +55,7 @@ impl MixerView {
             theme: MixerTheme::dark(),
             pending_focus: None,
             rename: None,
-            group_highlight: false,
+            group_highlight: true,
         }
     }
 
@@ -72,6 +74,7 @@ impl MixerView {
     pub fn ui(&mut self, ui: &mut Ui, palette: &HarmoniqPalette) {
         self.theme = theme_from_palette(palette);
         self.handle_shortcuts(ui);
+        ui.ctx().request_repaint_after(Duration::from_millis(16));
 
         let total = self.api.strips_len();
         if total <= 1 {
@@ -107,6 +110,14 @@ impl MixerView {
                     viewport.min.x,
                 );
 
+                let content_clip = Rect::from_min_max(
+                    viewport.min,
+                    pos2(
+                        viewport.max.x - MASTER_STRIP_WIDTH * self.zoom,
+                        viewport.max.y,
+                    ),
+                );
+                let clip_guard = ui.push_clip_rect(content_clip);
                 for index in visible.first..visible.last {
                     let info = self.api.strip_info(index);
                     let info_for_render = info.clone();
@@ -116,10 +127,13 @@ impl MixerView {
                     let x = index as f32 * strip_size.x + visible.offset;
                     let strip_rect =
                         Rect::from_min_size(pos2(viewport.min.x + x, viewport.min.y), strip_size);
-                    let insert_labels = (0..info.inserts)
+                    if !strip_rect.intersects(content_clip) {
+                        continue;
+                    }
+                    let insert_labels = (0..info.insert_count)
                         .map(|slot| self.api.insert_label(index, slot))
                         .collect::<Vec<_>>();
-                    let send_labels = (0..info.sends)
+                    let send_labels = (0..info.send_count)
                         .map(|slot| self.api.send_label(index, slot))
                         .collect::<Vec<_>>();
 
@@ -142,10 +156,12 @@ impl MixerView {
                                 theme: &theme,
                                 width: strip_size.x,
                                 height: strip_size.y,
+                                zoom: self.zoom,
                                 is_selected,
                                 meter: meter_state,
                                 insert_labels,
                                 send_labels,
+                                group_highlight: self.group_highlight,
                             })
                         })
                         .inner
@@ -161,6 +177,7 @@ impl MixerView {
                         });
                     }
                 }
+                drop(clip_guard);
 
                 self.draw_master_strip(ui, viewport, strip_size, master_index);
             });
@@ -181,10 +198,10 @@ impl MixerView {
 
         let rect = master_rect(viewport, MASTER_STRIP_WIDTH * self.zoom);
         ui.allocate_ui_at_rect(rect, |ui| {
-            let insert_labels = (0..info.inserts)
+            let insert_labels = (0..info.insert_count)
                 .map(|slot| self.api.insert_label(master_index, slot))
                 .collect::<Vec<_>>();
-            let send_labels = (0..info.sends)
+            let send_labels = (0..info.send_count)
                 .map(|slot| self.api.send_label(master_index, slot))
                 .collect::<Vec<_>>();
             let _ = render_strip(StripRenderArgs {
@@ -196,10 +213,12 @@ impl MixerView {
                 theme: &self.theme,
                 width: rect.width(),
                 height: strip_size.y,
+                zoom: self.zoom,
                 is_selected: false,
                 meter: &mut self.meters[master_index],
                 insert_labels,
                 send_labels,
+                group_highlight: self.group_highlight,
             });
         });
     }
@@ -211,13 +230,15 @@ impl MixerView {
         if ui.ctx().input(|i| i.key_pressed(Key::W)) {
             self.density = StripDensity::Wide;
         }
-        if ui
-            .ctx()
-            .input(|i| i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals))
-        {
+        if ui.ctx().input(|i| {
+            i.modifiers.command && (i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals))
+        }) {
             self.zoom = clamp_zoom(self.zoom + 0.05);
         }
-        if ui.ctx().input(|i| i.key_pressed(Key::Minus)) {
+        if ui
+            .ctx()
+            .input(|i| i.modifiers.command && i.key_pressed(Key::Minus))
+        {
             self.zoom = clamp_zoom(self.zoom - 0.05);
         }
         if ui.ctx().input(|i| i.key_pressed(Key::G)) {
@@ -352,6 +373,10 @@ fn theme_from_palette(palette: &HarmoniqPalette) -> MixerTheme {
     theme.strip_bg = palette.panel_alt;
     theme.header_text = palette.text_primary;
     theme.accent = palette.accent;
+    theme.selection = palette.accent;
+    theme.icon_bg = palette.panel_alt.linear_multiply(1.05);
+    theme.knob_bg = palette.panel_alt.linear_multiply(0.9);
+    theme.fader_track = palette.panel_alt.linear_multiply(0.85);
     theme
 }
 

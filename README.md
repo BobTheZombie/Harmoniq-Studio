@@ -73,27 +73,34 @@ Options → Audio Device… opens the realtime device dialog, and Transport menu
 items mirror the transport buttons along the top bar. Shortcuts are consumed so
 text inputs remain unaffected when invoking global commands.
 
-### Mixer (compact)
+### Mixer (Reaper-style)
 
-The redesigned mixer mirrors FL Studio’s space-efficient layout. Channel strips
-render in narrow (72 px) or wide (120 px) densities with GPU-accelerated meters
-and virtualization so hundreds of tracks scroll smoothly. Key interactions:
+The mixer now embraces a dense, Reaper-inspired presentation. Strips default to
+76 px “narrow” lanes and expand to 120 px “wide” lanes, with zoomable geometry
+(80 %–150 %) so you can dial in the perfect density on high-DPI displays. The
+master bus remains pinned on the right at 1.8× width and always renders its
+dual true-peak meters, latency, and CPU/PDC readouts.
 
-- `N` / `W` toggle narrow and wide strip densities. `+` / `−` or the View → Zoom
-  commands adjust zoom between 80 % and 150 %.
-- Hold `Ctrl` while dragging faders, pan, or width controls for fine moves;
-  press `Alt` to reset; double-click to enter values. Shift-click selects
-  multiple strips.
-- Channel meters display oversampled true-peak with peak-hold and clip
-  indicators. Clicking the clip lamp clears latches.
-- Inserts expose ten slots with drag-ready overflow menus; sends present four
-  aux slots with pre/post toggles.
-- The master strip stays pinned on the right and shows latency, CPU usage, and
-  peak status for the mix bus.
+A capture gallery for the mixer will be published under `docs/mixer/` as the UI
+stabilizes.
 
-Use View → Toggle Mixer (M) to hide or reveal the panel. Scroll with the mouse
-wheel to bank through strips; Ctrl + ←/→ jumps eight tracks at a time, and `G`
-highlights groups.
+Quick interactions:
+
+- `N` / `W` toggle density. Hold `⌘`/`Ctrl` and tap `+` or `−` (or use View →
+  Zoom) to scale strips between 80 % and 150 %.
+- Mouse wheel scrolls the bank; `Ctrl`/`⌘` + `←`/`→` jumps eight tracks; `G`
+  toggles per-track tinting. Shift-click extends selection.
+- Pan and width knobs support fine adjust with `Ctrl`/`⌘`, `Alt` to reset, and
+  double-click for numeric entry. Faders expose the same gesture set plus a
+  context menu for reset and trim actions.
+- Inserts surface eight (narrow) or twelve (wide) visible slots with bypass
+  dots, drag reordering, and overflow popovers. Sends list four or six targets
+  with compact level sliders and pre/post toggles.
+- GPU meters approximate true-peak with peak-hold and clip latching—click the
+  clip LED to clear. Virtualization ensures only visible strips render so
+  sessions with hundreds of tracks stay responsive.
+
+Toggle the panel with View → Mixer or the `M` shortcut.
 
 ### Realtime audio and MIDI
 
