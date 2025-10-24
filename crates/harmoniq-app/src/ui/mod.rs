@@ -1,7 +1,10 @@
 pub mod audio_settings;
 pub mod browser;
 pub mod channel_rack;
+pub mod console;
 pub mod event_bus;
+pub mod focus;
+pub mod inspector;
 pub mod layout;
 pub mod menu;
 pub mod mixer;

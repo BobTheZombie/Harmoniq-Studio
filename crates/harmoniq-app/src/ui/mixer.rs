@@ -1,7 +1,11 @@
+use std::time::{Duration, Instant};
+
 use eframe::egui::{self, RichText, Slider};
 use harmoniq_ui::{Fader, HarmoniqPalette, Knob, LevelMeter};
 
 use crate::ui::event_bus::{AppEvent, EventBus};
+use crate::ui::focus::InputFocus;
+use crate::ui::workspace::WorkspacePane;
 
 struct MixerTrack {
     name: String,
@@ -66,6 +70,16 @@ impl MixerTrack {
 pub struct MixerPane {
     tracks: Vec<MixerTrack>,
     master: MixerTrack,
+    meter_cache: Vec<MeterSnapshot>,
+    meter_refresh: Duration,
+    last_meter_refresh: Instant,
+}
+
+#[derive(Clone, Copy, Default)]
+struct MeterSnapshot {
+    left: f32,
+    right: f32,
+    rms: f32,
 }
 
 impl Default for MixerPane {
@@ -77,17 +91,60 @@ impl Default for MixerPane {
             MixerTrack::new("Pads", 0.65),
         ];
         let master = MixerTrack::new("Master", 0.9);
-        Self { tracks, master }
+        Self {
+            tracks,
+            master,
+            meter_cache: Vec::new(),
+            meter_refresh: Duration::from_secs_f64(1.0 / 144.0),
+            last_meter_refresh: Instant::now(),
+        }
     }
 }
 
 impl MixerPane {
-    pub fn ui(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette, event_bus: &EventBus) {
-        let time = ui.ctx().input(|i| i.time);
-        for track in &mut self.tracks {
-            track.update_meter(time);
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &HarmoniqPalette,
+        event_bus: &EventBus,
+        focus: &mut InputFocus,
+    ) {
+        let ctx = ui.ctx().clone();
+        let time = ctx.input(|i| i.time);
+        if let Some(stable_dt) = ctx.input(|i| i.stable_dt) {
+            let hz = (1.0 / stable_dt).clamp(60.0, 144.0);
+            self.meter_refresh = Duration::from_secs_f64((1.0 / hz) as f64);
         }
-        self.master.update_meter(time);
+        let refresh_due =
+            self.last_meter_refresh.elapsed() >= self.meter_refresh || self.meter_cache.is_empty();
+        self.ensure_meter_cache();
+
+        if refresh_due {
+            self.last_meter_refresh = Instant::now();
+        }
+
+        for (index, track) in self.tracks.iter_mut().enumerate() {
+            if refresh_due {
+                track.update_meter(time);
+                self.meter_cache[index] = MeterSnapshot {
+                    left: track.meter_left,
+                    right: track.meter_right,
+                    rms: (track.meter_left + track.meter_right) * 0.5,
+                };
+            }
+        }
+
+        if refresh_due {
+            self.master.update_meter(time);
+            let master_index = self.tracks.len();
+            if let Some(entry) = self.meter_cache.get_mut(master_index) {
+                *entry = MeterSnapshot {
+                    left: self.master.meter_left,
+                    right: self.master.meter_right,
+                    rms: (self.master.meter_left + self.master.meter_right) * 0.5,
+                };
+            }
+        }
 
         ui.vertical(|ui| {
             ui.heading(RichText::new("Mixer").color(palette.text_primary));
@@ -96,14 +153,29 @@ impl MixerPane {
                 .id_source("mixer_scroll")
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        for track in &mut self.tracks {
-                            Self::draw_channel_strip(ui, palette, track, event_bus);
+                        for (index, track) in self.tracks.iter_mut().enumerate() {
+                            let meter = self.meter_cache.get(index).copied().unwrap_or_default();
+                            Self::draw_channel_strip(ui, palette, track, event_bus, meter);
                         }
                         ui.add_space(24.0);
-                        Self::draw_channel_strip(ui, palette, &mut self.master, event_bus);
+                        let master_index = self.tracks.len();
+                        let master_meter = self
+                            .meter_cache
+                            .get(master_index)
+                            .copied()
+                            .unwrap_or_default();
+                        Self::draw_channel_strip(
+                            ui,
+                            palette,
+                            &mut self.master,
+                            event_bus,
+                            master_meter,
+                        );
                     });
                 });
         });
+
+        focus.track_pane_interaction(&ctx, ui.min_rect(), WorkspacePane::Mixer);
     }
 
     fn draw_channel_strip(
@@ -111,6 +183,7 @@ impl MixerPane {
         palette: &HarmoniqPalette,
         track: &mut MixerTrack,
         event_bus: &EventBus,
+        meter: MeterSnapshot,
     ) {
         egui::Frame::none()
             .fill(palette.panel_alt)
@@ -157,9 +230,9 @@ impl MixerPane {
                     }
                     ui.add_space(12.0);
                     ui.add(LevelMeter::new(palette).with_levels(
-                        track.meter_left,
-                        track.meter_right,
-                        (track.meter_left + track.meter_right) * 0.5,
+                        meter.left,
+                        meter.right,
+                        meter.rms,
                     ));
                     ui.add_space(8.0);
                     let mut invert = track.phase_invert;
@@ -204,5 +277,12 @@ impl MixerPane {
 
     pub fn master_meter(&self) -> (f32, f32) {
         (self.master.meter_left, self.master.meter_right)
+    }
+
+    fn ensure_meter_cache(&mut self) {
+        let required = self.tracks.len() + 1;
+        if self.meter_cache.len() != required {
+            self.meter_cache.resize(required, MeterSnapshot::default());
+        }
     }
 }
