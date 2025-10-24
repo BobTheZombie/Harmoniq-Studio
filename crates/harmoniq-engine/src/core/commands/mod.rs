@@ -13,16 +13,14 @@ use std::any::Any;
 use crate::core::state::ProjectState;
 use crate::core::CommandError;
 
-pub trait ProjectCommand: Send + Sync + Any {
+pub trait ProjectCommand: Send + Sync + 'static {
     fn label(&self) -> &'static str;
     fn apply(&self, state: &mut ProjectState) -> Result<CommandOutcome, CommandError>;
     fn should_merge(&self, _previous: &dyn ProjectCommand) -> bool {
         false
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
+    fn as_any(&self) -> &dyn Any;
 }
 
 pub struct CommandOutcome {

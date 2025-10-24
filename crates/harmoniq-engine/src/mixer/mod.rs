@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use harmoniq_dsp::gain::db_to_linear;
@@ -21,7 +22,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MixerInsertState {
     pub id: Option<String>,
     pub bypassed: bool,
@@ -36,7 +37,7 @@ impl Default for MixerInsertState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MixerAuxSendState {
     pub aux_index: usize,
     pub level_db: f32,
@@ -53,7 +54,7 @@ impl Default for MixerAuxSendState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum MixerTargetState {
     Master,
     Bus(usize),
@@ -65,7 +66,7 @@ impl Default for MixerTargetState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MixerTrackState {
     pub name: String,
     pub fader_db: f32,
@@ -92,7 +93,7 @@ impl Default for MixerTrackState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MixerBusState {
     pub name: String,
     pub fader_db: f32,
@@ -100,6 +101,7 @@ pub struct MixerBusState {
     pub phase_invert: bool,
     pub aux_sends: Vec<MixerAuxSendState>,
     pub post_inserts: Vec<MixerInsertState>,
+    pub target: MixerTargetState,
 }
 
 impl Default for MixerBusState {
@@ -111,11 +113,12 @@ impl Default for MixerBusState {
             phase_invert: false,
             aux_sends: Vec::new(),
             post_inserts: Vec::new(),
+            target: MixerTargetState::Master,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MixerAuxState {
     pub name: String,
     pub return_db: f32,
@@ -130,7 +133,7 @@ impl Default for MixerAuxState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MixerMasterState {
     pub fader_db: f32,
     pub width: f32,
@@ -147,7 +150,7 @@ impl Default for MixerMasterState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MixerState {
     pub tracks: Vec<MixerTrackState>,
     pub buses: Vec<MixerBusState>,
@@ -461,6 +464,7 @@ struct BusEngine {
     meter: MeterTapNode,
     sends: Vec<TrackSend>,
     post_inserts: Vec<Option<Arc<Mutex<Box<dyn MixerInsertProcessor>>>>>,
+    target: MixerTarget,
 }
 
 impl BusEngine {
@@ -486,21 +490,21 @@ impl BusEngine {
             .collect();
         let mut width = StereoWidthNode::new(state.width);
         width.set_width(state.width);
+        let target = match state.target {
+            MixerTargetState::Master => MixerTarget::Master,
+            MixerTargetState::Bus(index) => MixerTarget::Bus(index),
+        };
         Self {
             fader,
             width,
             meter,
             sends,
             post_inserts,
+            target,
         }
     }
 
-    fn process(
-        &mut self,
-        buffer: &mut AudioBuffer,
-        master: &mut AudioBuffer,
-        aux_buffers: &mut [AudioBuffer],
-    ) {
+    fn process(&mut self, buffer: &mut AudioBuffer, aux_buffers: &mut [AudioBuffer]) {
         if buffer.is_empty() {
             return;
         }
@@ -519,7 +523,10 @@ impl BusEngine {
                 add_scaled(aux, buffer, send.gain);
             }
         }
-        add_scaled(master, buffer, 1.0);
+    }
+
+    fn target(&self) -> MixerTarget {
+        self.target
     }
 }
 
@@ -645,8 +652,50 @@ impl MixerEngine {
         for (engine, input) in self.tracks.iter_mut().zip(track_inputs.iter()) {
             engine.process(input, &mut self.bus_buffers, output, &mut self.aux_buffers);
         }
-        for (bus_engine, buffer) in self.buses.iter_mut().zip(self.bus_buffers.iter_mut()) {
-            bus_engine.process(buffer, output, &mut self.aux_buffers);
+        if !self.buses.is_empty() {
+            let mut indegree = vec![0usize; self.buses.len()];
+            for bus_index in 0..self.buses.len() {
+                if let MixerTarget::Bus(target) = self.buses[bus_index].target() {
+                    if target < indegree.len() {
+                        indegree[target] += 1;
+                    }
+                }
+            }
+            let mut queue: VecDeque<usize> = indegree
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, &deg)| if deg == 0 { Some(idx) } else { None })
+                .collect();
+            let mut order = Vec::with_capacity(self.buses.len());
+            while let Some(index) = queue.pop_front() {
+                order.push(index);
+                if let MixerTarget::Bus(target) = self.buses[index].target() {
+                    if target < indegree.len() {
+                        indegree[target] = indegree[target].saturating_sub(1);
+                        if indegree[target] == 0 {
+                            queue.push_back(target);
+                        }
+                    }
+                }
+            }
+
+            for index in order {
+                let target = self.buses[index].target();
+                let mut buffer = std::mem::take(&mut self.bus_buffers[index]);
+                {
+                    let bus_engine = &mut self.buses[index];
+                    bus_engine.process(&mut buffer, &mut self.aux_buffers);
+                }
+                match target {
+                    MixerTarget::Master => add_scaled(output, &buffer, 1.0),
+                    MixerTarget::Bus(target_idx) => {
+                        if target_idx < self.bus_buffers.len() {
+                            add_scaled(&mut self.bus_buffers[target_idx], &buffer, 1.0);
+                        }
+                    }
+                }
+                self.bus_buffers[index] = buffer;
+            }
         }
         for (aux_engine, buffer) in self.auxes.iter_mut().zip(self.aux_buffers.iter_mut()) {
             aux_engine.process(buffer, output);

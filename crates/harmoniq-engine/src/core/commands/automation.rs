@@ -52,6 +52,10 @@ impl ProjectCommand for WriteAutomationPointCommand {
             }),
         })
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 struct RestoreAutomationPointCommand {
@@ -95,5 +99,9 @@ impl ProjectCommand for RestoreAutomationPointCommand {
                 value: redo_value.unwrap_or(0.0),
             }),
         })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }

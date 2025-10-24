@@ -124,7 +124,12 @@ pub struct ProjectDocument {
 
 impl ProjectDocument {
     pub fn new(metadata: ProjectMetadata, media: Vec<MediaAsset>) -> Self {
-        Self::with_state(metadata, media, ProjectState::default())
+        Self {
+            version: CURRENT_VERSION,
+            metadata,
+            media,
+            state: ProjectState::default(),
+        }
     }
 
     pub fn with_media(mut self, media: Vec<MediaAsset>) -> Self {
