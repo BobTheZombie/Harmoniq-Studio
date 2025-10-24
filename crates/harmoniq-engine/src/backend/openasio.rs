@@ -12,22 +12,15 @@ use crate::{
 pub struct OpenAsioBackend {
     driver_path: String,
     device_name: Option<String>,
-    noninterleaved: bool,
     desired: StreamConfig,
     driver: Option<OaDriver>,
 }
 
 impl OpenAsioBackend {
-    pub fn new(
-        driver_path: String,
-        device_name: Option<String>,
-        noninterleaved: bool,
-        desired: StreamConfig,
-    ) -> Self {
+    pub fn new(driver_path: String, device_name: Option<String>, desired: StreamConfig) -> Self {
         Self {
             driver_path,
             device_name,
-            noninterleaved,
             desired,
             driver: None,
         }
@@ -103,7 +96,7 @@ impl HostProcess for RtThunk {
 
 impl AudioBackend for OpenAsioBackend {
     fn start(&mut self, rt: Box<dyn EngineRt>) -> Result<()> {
-        let interleaved = !self.noninterleaved;
+        let interleaved = self.desired.interleaved;
         let oa_cfg = OaCfg {
             sample_rate: self.desired.sample_rate,
             buffer_frames: self.desired.buffer_frames,

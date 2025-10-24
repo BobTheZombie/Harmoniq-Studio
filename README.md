@@ -69,7 +69,9 @@ To run against the bundled CPAL reference driver:
 ```bash
 cargo run -p harmoniq-app --features openasio -- \
   --audio-backend openasio \
-  --openasio-driver target/debug/libopenasio_driver_cpal.so
+  --openasio-driver target/debug/libopenasio_driver_cpal.so \
+  --openasio-sr 48000 \
+  --openasio-buffer 128
 ```
 
 To use the AMD Family 17h ALSA OpenASIO driver, point the CLI at the shared
@@ -79,7 +81,8 @@ library and device name:
 cargo run -p harmoniq-app --features openasio -- \
   --audio-backend openasio \
   --openasio-driver /path/to/libopenasio_driver_alsa17h.so \
-  --openasio-device "hw:0,0"
+  --openasio-device "hw:0,0" \
+  --openasio-buffer 128
 ```
 
 ### Desktop integration (Linux)
