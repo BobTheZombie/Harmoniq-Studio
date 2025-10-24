@@ -7,15 +7,18 @@
 pub mod automation;
 pub mod buffer;
 pub mod buffers;
+pub mod clips;
 pub mod dsp;
 pub mod engine;
 pub mod graph;
+pub mod media;
 pub mod nodes;
 pub mod plugin;
 pub mod rt;
 mod scratch;
 pub mod sound_server;
 pub mod time;
+pub mod timeline;
 mod tone;
 pub mod transport;
 
@@ -27,8 +30,9 @@ pub use automation::{
     ParameterSpec,
 };
 pub use buffer::{AudioBuffer, BufferConfig, ChannelLayout};
+pub use clips::{AudioClip, ClipError, CrossfadeSpec, FadeCurve, FadeSpec, StretchQuality};
 pub use dsp::RealtimeDspEngine;
-pub use engine::{AudioClip, EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
+pub use engine::{EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
 pub use graph::{GraphBuilder, GraphHandle, NodeHandle};
 pub use nodes::{GainNode, NodeNoise, NodeOsc, NoiseNode, SineNode};
 pub use plugin::{
@@ -39,6 +43,7 @@ pub use time::{
     BeatInfo, LoopRegion, Tempo, TempoMap, TempoSegment, TimeSignature,
     Transport as TimelineTransport,
 };
+pub use timeline::{ClipEvent, Timeline, TimelineError};
 pub use transport::Transport as RealtimeTransport;
 
 #[cfg(feature = "openasio")]

@@ -16,7 +16,7 @@ use crate::{
     scratch::RtAllocGuard,
     tone::ToneShaper,
     transport::Transport as TransportMetrics,
-    AudioBuffer, AudioProcessor, BufferConfig,
+    AudioBuffer, AudioClip, AudioProcessor, BufferConfig,
 };
 
 const COMMAND_QUEUE_CAPACITY: usize = 1024;
@@ -58,35 +58,6 @@ impl EngineCommandQueue {
     /// Returns `true` when there are no pending commands.
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
-    }
-}
-
-/// Immutable clip of audio data that can be scheduled for playback.
-#[derive(Clone, Debug)]
-pub struct AudioClip {
-    samples: Arc<Vec<Vec<f32>>>,
-}
-
-impl AudioClip {
-    pub fn from_channels(channels: Vec<Vec<f32>>) -> Self {
-        Self {
-            samples: Arc::new(channels),
-        }
-    }
-
-    fn channels(&self) -> usize {
-        self.samples.len()
-    }
-
-    fn frames(&self) -> usize {
-        self.samples
-            .first()
-            .map(|channel| channel.len())
-            .unwrap_or(0)
-    }
-
-    fn samples(&self) -> &[Vec<f32>] {
-        &self.samples
     }
 }
 
