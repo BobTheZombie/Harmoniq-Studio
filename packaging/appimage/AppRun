@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HERE="$(dirname "$(readlink -f "$0")")"
+export HARMONIQ_MINIDUMP_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/HarmoniqStudio/minidumps"
+mkdir -p "${HARMONIQ_MINIDUMP_DIR}"
+if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+  export LD_LIBRARY_PATH="$HERE/usr/lib:$LD_LIBRARY_PATH"
+else
+  export LD_LIBRARY_PATH="$HERE/usr/lib"
+fi
+export PIPEWIRE_LATENCY="${PIPEWIRE_LATENCY:-128/48000}"
+exec "$HERE/usr/bin/harmoniq-studio" "$@"

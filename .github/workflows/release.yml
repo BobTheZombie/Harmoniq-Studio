@@ -1,0 +1,97 @@
+name: Release packaging
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  appimage:
+    name: Build AppImage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2 jq
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+      - name: Prepare appimagetool
+        run: |
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+          ./appimagetool-x86_64.AppImage --appimage-extract
+          mv squashfs-root/AppRun appimagetool
+          chmod +x appimagetool
+          rm -rf squashfs-root
+      - name: Build AppImage
+        run: |
+          APPIMAGE_TOOL=$PWD/appimagetool ./packaging/appimage/build-appimage.sh
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Harmoniq-Studio-AppImage-${{ github.ref_name }}
+          path: dist/*.AppImage
+          if-no-files-found: error
+
+  flatpak:
+    name: Build Flatpak
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flatpak/flatpak-builder:stable
+    steps:
+      - uses: actions/checkout@v4
+      - name: Allow Git in container workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Add Flathub
+        run: flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+      - name: Build Flatpak bundle
+        shell: bash
+        run: |
+          VERSION=$(python3 - <<'PY'
+import tomllib
+with open('Cargo.toml', 'rb') as fh:
+    data = tomllib.load(fh)
+print(data['workspace']['package']['version'])
+PY
+)
+          mkdir -p build-dir repo dist
+          flatpak-builder --user --install-deps-from=flathub --force-clean build-dir packaging/flatpak/com.harmoniq.Studio.yml
+          flatpak build-export repo build-dir
+          flatpak build-bundle repo "dist/Harmoniq-Studio-${VERSION}.flatpak" com.harmoniq.Studio "${VERSION}" --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+      - name: Upload Flatpak artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Harmoniq-Studio-Flatpak-${{ github.ref_name }}
+          path: dist/*.flatpak
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs:
+      - appimage
+      - flatpak
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Harmoniq-Studio-*
+          merge-multiple: true
+          path: release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,41 @@
+app-id: com.harmoniq.Studio
+runtime: org.freedesktop.Platform
+runtime-version: '23.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: harmoniq-studio
+finish-args:
+  - --share=network
+  - --socket=pulseaudio
+  - --socket=pipewire-0
+  - --socket=wayland
+  - --socket=x11
+  - --share=ipc
+  - --device=dri
+  - --filesystem=xdg-run/pipewire-0
+  - --filesystem=xdg-config/PulseAudio:ro
+  - --filesystem=home
+modules:
+  - name: harmoniq-studio
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        CARGO_HOME: /run/build/harmoniq-studio/cargo
+    build-commands:
+      - source /usr/lib/sdk/rust-stable/enable.sh
+      - install -Dm644 packaging/flatpak/cargo-config.toml .cargo/config
+      - cargo fetch --locked --offline
+      - cargo build --release --frozen -p harmoniq-app
+      - install -Dm755 target/release/harmoniq-app /app/lib/harmoniq-studio/harmoniq-studio-bin
+      - install -Dm755 packaging/flatpak/run-harmoniq-studio.sh /app/bin/harmoniq-studio
+      - install -Dm644 resources/desktop/harmoniq-studio.desktop /app/share/applications/com.harmoniq.Studio.desktop
+      - install -Dm644 resources/icons/harmoniq-studio.svg /app/share/icons/hicolor/scalable/apps/com.harmoniq.Studio.svg
+      - install -Dm644 packaging/flatpak/udev-permissions.md /app/share/doc/harmoniq-studio/udev-permissions.md
+      - install -Dm644 packaging/flatpak/pipewire-notes.md /app/share/doc/harmoniq-studio/pipewire-notes.md
+    sources:
+      - type: dir
+        path: .
+      - type: json
+        path: packaging/flatpak/cargo-sources.json
