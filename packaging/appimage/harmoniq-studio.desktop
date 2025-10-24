@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Harmoniq Studio
+Comment=Launch Harmoniq Studio in UI mode
+Exec=harmoniq-studio
+Icon=harmoniq-studio
+Categories=AudioVideo;Audio;Midi;
+Keywords=DAW;Audio;Music;Production;
+Terminal=false
+StartupWMClass=Harmoniq Studio
