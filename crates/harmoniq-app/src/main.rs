@@ -79,6 +79,10 @@ struct Cli {
     #[arg(long, default_value_t = 120.0)]
     tempo: f32,
 
+    /// Enable Harmoniq Ultra runtime profile heuristics
+    #[arg(long, default_value_t = false)]
+    ultra: bool,
+
     /// Preferred realtime audio backend
     #[arg(long, default_value_t = AudioBackend::Auto)]
     audio_backend: AudioBackend,
@@ -97,6 +101,16 @@ struct Cli {
     #[cfg(feature = "openasio")]
     #[arg(long, default_value_t = false)]
     openasio_noninterleaved: bool,
+
+    /// Override the OpenASIO sample rate when using the ultra runtime
+    #[cfg(feature = "openasio")]
+    #[arg(long)]
+    openasio_sr: Option<u32>,
+
+    /// Override the OpenASIO buffer size in frames when using the ultra runtime
+    #[cfg(feature = "openasio")]
+    #[arg(long)]
+    openasio_buffer: Option<u32>,
 
     /// Number of input channels when using OpenASIO
     #[cfg(feature = "openasio")]
@@ -537,6 +551,19 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Cli::parse();
+    let ultra_mode = args.ultra || cfg!(feature = "ultra");
+    harmoniq_engine::rt::enable_ftz_daz();
+    if ultra_mode {
+        if let Err(err) = harmoniq_engine::rt::mlock_process() {
+            warn!(?err, "mlockall failed; continuing without locked memory");
+        }
+        if let Err(err) = harmoniq_engine::rt::pin_current_thread(0) {
+            warn!(
+                ?err,
+                "failed to pin main thread; realtime threads will attempt pinning separately"
+            );
+        }
+    }
 
     if args.list_audio_backends {
         let backends = available_backends();
@@ -571,12 +598,62 @@ fn main() -> anyhow::Result<()> {
         runtime_options.openasio_driver = args.openasio_driver.clone();
         runtime_options.openasio_device = args.openasio_device.clone();
         runtime_options.openasio_noninterleaved = args.openasio_noninterleaved;
+        runtime_options.openasio_sample_rate = args.openasio_sr;
+        runtime_options.openasio_buffer_frames = args.openasio_buffer;
         runtime_options.openasio_in_channels = args.openasio_in;
         runtime_options.openasio_out_channels = args.openasio_out;
     }
 
+    if ultra_mode && runtime_options.backend() == AudioBackend::Auto {
+        runtime_options.set_backend(AudioBackend::Harmoniq);
+    }
+
+    let selected_backend = runtime_options.backend();
+
+    let sample_rate = {
+        #[cfg(feature = "openasio")]
+        {
+            if matches!(
+                selected_backend,
+                AudioBackend::OpenAsio | AudioBackend::Harmoniq
+            ) {
+                runtime_options
+                    .openasio_sample_rate
+                    .map(|sr| sr as f32)
+                    .unwrap_or(args.sample_rate)
+            } else {
+                args.sample_rate
+            }
+        }
+        #[cfg(not(feature = "openasio"))]
+        {
+            args.sample_rate
+        }
+    };
+
+    let block_size = {
+        #[cfg(feature = "openasio")]
+        {
+            if matches!(
+                selected_backend,
+                AudioBackend::OpenAsio | AudioBackend::Harmoniq
+            ) {
+                runtime_options
+                    .openasio_buffer_frames
+                    .map(|frames| frames as usize)
+                    .unwrap_or(args.block_size)
+            } else {
+                args.block_size
+            }
+        }
+        #[cfg(not(feature = "openasio"))]
+        {
+            args.block_size
+        }
+    };
+
     if let Some(path) = args.bounce.clone() {
-        let config = BufferConfig::new(args.sample_rate, args.block_size, ChannelLayout::Stereo);
+        let config = BufferConfig::new(sample_rate, block_size, ChannelLayout::Stereo);
         let bounced_path = offline_bounce_to_file(
             path,
             config,
@@ -589,14 +666,19 @@ fn main() -> anyhow::Result<()> {
     }
 
     if args.headless {
-        run_headless(&args, runtime_options)
+        run_headless(&args, runtime_options, sample_rate, block_size)
     } else {
-        run_ui(&args, runtime_options)
+        run_ui(&args, runtime_options, sample_rate, block_size)
     }
 }
 
-fn run_headless(args: &Cli, runtime: AudioRuntimeOptions) -> anyhow::Result<()> {
-    let config = BufferConfig::new(args.sample_rate, args.block_size, ChannelLayout::Stereo);
+fn run_headless(
+    args: &Cli,
+    runtime: AudioRuntimeOptions,
+    sample_rate: f32,
+    block_size: usize,
+) -> anyhow::Result<()> {
+    let config = BufferConfig::new(sample_rate, block_size, ChannelLayout::Stereo);
     let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
     configure_demo_graph(&mut engine, &DemoGraphConfig::headless_default())?;
     engine.set_transport(TransportState::Playing);
@@ -677,13 +759,18 @@ fn run_headless_offline_preview(
     Ok(())
 }
 
-fn run_ui(args: &Cli, runtime: AudioRuntimeOptions) -> anyhow::Result<()> {
+fn run_ui(
+    args: &Cli,
+    runtime: AudioRuntimeOptions,
+    sample_rate: f32,
+    block_size: usize,
+) -> anyhow::Result<()> {
     let native_options = NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
         ..Default::default()
     };
 
-    let config = BufferConfig::new(args.sample_rate, args.block_size, ChannelLayout::Stereo);
+    let config = BufferConfig::new(sample_rate, block_size, ChannelLayout::Stereo);
     let config_for_app = config.clone();
     let tempo_for_app = args.tempo;
     let runtime_for_app = runtime.clone();

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crossbeam::queue::ArrayQueue;
 use parking_lot::{Mutex, RwLock};
@@ -8,13 +9,16 @@ use rayon::prelude::*;
 use ringbuf::{HeapConsumer, HeapProducer, HeapRb};
 
 use crate::{
-    graph::{self, GraphHandle},
+    graph::{self, GraphBuilder, GraphHandle},
+    nodes::{GainNode as BuiltinGain, NoiseNode as BuiltinNoise, SineNode as BuiltinSine},
     plugin::{MidiEvent, PluginId},
+    rt::{AudioMetrics, AudioMetricsCollector},
     tone::ToneShaper,
     AudioBuffer, AudioProcessor, BufferConfig,
 };
 
 const COMMAND_QUEUE_CAPACITY: usize = 1024;
+const METRICS_HISTORY_CAPACITY: usize = 512;
 
 /// Transport state shared with UI and sequencing components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,14 +114,18 @@ pub struct HarmoniqEngine {
     delay_lines: HashMap<PluginId, DelayCompensator>,
     scratch_buffers: Vec<AudioBuffer>,
     sound_test: Option<ClipPlayback>,
+    metrics: AudioMetricsCollector,
+    block_period_ns: u64,
 }
 
 impl HarmoniqEngine {
     pub fn new(config: BufferConfig) -> anyhow::Result<Self> {
         let command_queue = Arc::new(ArrayQueue::new(COMMAND_QUEUE_CAPACITY));
         let tone_shaper = ToneShaper::new(&config);
+        let metrics = AudioMetricsCollector::new(METRICS_HISTORY_CAPACITY);
+        let block_period_ns = Self::block_period_from_config(&config);
 
-        Ok(Self {
+        let mut engine = Self {
             master_buffer: Mutex::new(AudioBuffer::from_config(config.clone())),
             processors: RwLock::new(HashMap::new()),
             graph: RwLock::new(None),
@@ -132,11 +140,53 @@ impl HarmoniqEngine {
             delay_lines: HashMap::new(),
             scratch_buffers: Vec::new(),
             sound_test: None,
-        })
+            metrics,
+            block_period_ns,
+        };
+        engine.install_default_graph()?;
+        Ok(engine)
     }
 
     pub fn config(&self) -> &BufferConfig {
         &self.config
+    }
+
+    pub fn metrics(&self) -> AudioMetrics {
+        self.metrics.snapshot()
+    }
+
+    pub fn metrics_collector(&self) -> AudioMetricsCollector {
+        self.metrics.clone()
+    }
+
+    fn block_period_from_config(config: &BufferConfig) -> u64 {
+        if config.block_size == 0 {
+            return 0;
+        }
+        let sr = config.sample_rate.max(f32::EPSILON) as f64;
+        let frames = config.block_size as f64;
+        ((frames / sr) * 1_000_000_000.0).round() as u64
+    }
+
+    fn install_default_graph(&mut self) -> anyhow::Result<()> {
+        if self.graph.read().is_some() {
+            return Ok(());
+        }
+
+        let sine =
+            self.register_processor(Box::new(BuiltinSine::new(220.0).with_amplitude(0.35)))?;
+        let noise = self.register_processor(Box::new(BuiltinNoise::new(0.08)))?;
+        let gain = self.register_processor(Box::new(BuiltinGain::new(0.6)))?;
+
+        let mut builder = GraphBuilder::new();
+        let sine_node = builder.add_node(sine);
+        builder.connect_to_mixer(sine_node, 0.85)?;
+        let noise_node = builder.add_node(noise);
+        builder.connect_to_mixer(noise_node, 0.25)?;
+        let gain_node = builder.add_node(gain);
+        builder.connect_to_mixer(gain_node, 0.0)?;
+
+        self.replace_graph(builder.build())
     }
 
     pub fn reconfigure(&mut self, config: BufferConfig) -> anyhow::Result<()> {
@@ -145,6 +195,8 @@ impl HarmoniqEngine {
         self.master_buffer = Mutex::new(AudioBuffer::from_config(config.clone()));
         self.tone_shaper = ToneShaper::new(&self.config);
         self.tone_shaper.set_enabled(tone_enabled);
+        self.block_period_ns = Self::block_period_from_config(&self.config);
+        self.metrics.reset();
 
         self.scratch_buffers.clear();
 
@@ -243,102 +295,111 @@ impl HarmoniqEngine {
     }
 
     pub fn process_block(&mut self, output: &mut AudioBuffer) -> anyhow::Result<()> {
-        self.drain_command_queue()?;
-        let pending_midi = {
-            let mut queue = self.pending_midi.lock();
-            if queue.is_empty() {
-                Vec::new()
-            } else {
-                std::mem::take(&mut *queue)
-            }
-        };
-        let graph = match self.graph.read().clone() {
-            Some(graph) => graph,
-            None => {
+        let start = Instant::now();
+        let period_ns = self.block_period_ns;
+
+        let result = (|| -> anyhow::Result<()> {
+            self.drain_command_queue()?;
+            let pending_midi = {
+                let mut queue = self.pending_midi.lock();
+                if queue.is_empty() {
+                    Vec::new()
+                } else {
+                    std::mem::take(&mut *queue)
+                }
+            };
+            let graph = match self.graph.read().clone() {
+                Some(graph) => graph,
+                None => {
+                    output.clear();
+                    return Ok(());
+                }
+            };
+
+            let plugin_ids = graph.plugin_ids();
+            if plugin_ids.is_empty() {
                 output.clear();
                 return Ok(());
             }
-        };
 
-        let plugin_ids = graph.plugin_ids();
-        if plugin_ids.is_empty() {
-            output.clear();
-            return Ok(());
-        }
-
-        let processors_guard = self.processors.read();
-        let processor_handles: Vec<_> = plugin_ids
-            .iter()
-            .map(|plugin_id| {
-                processors_guard.get(plugin_id).cloned().ok_or_else(|| {
-                    anyhow::anyhow!("Missing processor for plugin ID: {:?}", plugin_id)
+            let processors_guard = self.processors.read();
+            let processor_handles: Vec<_> = plugin_ids
+                .iter()
+                .map(|plugin_id| {
+                    processors_guard.get(plugin_id).cloned().ok_or_else(|| {
+                        anyhow::anyhow!("Missing processor for plugin ID: {:?}", plugin_id)
+                    })
                 })
-            })
-            .collect::<anyhow::Result<_>>()?;
-        drop(processors_guard);
+                .collect::<anyhow::Result<_>>()?;
+            drop(processors_guard);
 
-        let latencies_guard = self.latencies.read();
-        let latencies: Vec<usize> = plugin_ids
-            .iter()
-            .map(|plugin_id| *latencies_guard.get(plugin_id).unwrap_or(&0))
-            .collect();
-        drop(latencies_guard);
+            let latencies_guard = self.latencies.read();
+            let latencies: Vec<usize> = plugin_ids
+                .iter()
+                .map(|plugin_id| *latencies_guard.get(plugin_id).unwrap_or(&0))
+                .collect();
+            drop(latencies_guard);
 
-        let max_latency = latencies.iter().copied().max().unwrap_or(0);
-        let automation_by_index = self.automation_events_for_block(&plugin_ids);
+            let max_latency = latencies.iter().copied().max().unwrap_or(0);
+            let automation_by_index = self.automation_events_for_block(&plugin_ids);
 
-        let scratch_len = processor_handles.len();
-        self.ensure_scratch_buffers(scratch_len);
+            let scratch_len = processor_handles.len();
+            self.ensure_scratch_buffers(scratch_len);
 
-        {
-            let scratch_buffers = &mut self.scratch_buffers[..scratch_len];
-            scratch_buffers.iter_mut().for_each(|buffer| buffer.clear());
+            {
+                let scratch_buffers = &mut self.scratch_buffers[..scratch_len];
+                scratch_buffers.iter_mut().for_each(|buffer| buffer.clear());
 
-            scratch_buffers.par_iter_mut().enumerate().try_for_each(
-                |(index, buffer)| -> anyhow::Result<()> {
-                    let processor_handle = &processor_handles[index];
-                    let mut processor = processor_handle.lock();
+                scratch_buffers.par_iter_mut().enumerate().try_for_each(
+                    |(index, buffer)| -> anyhow::Result<()> {
+                        let processor_handle = &processor_handles[index];
+                        let mut processor = processor_handle.lock();
 
-                    if let Some(events) = automation_by_index.get(index) {
-                        for event in events {
-                            processor.handle_automation_event(
-                                event.parameter,
-                                event.value,
-                                event.sample_offset as usize,
-                            )?;
+                        if let Some(events) = automation_by_index.get(index) {
+                            for event in events {
+                                processor.handle_automation_event(
+                                    event.parameter,
+                                    event.value,
+                                    event.sample_offset as usize,
+                                )?;
+                            }
                         }
-                    }
 
-                    if !pending_midi.is_empty() {
-                        processor.process_midi(&pending_midi)?;
-                    }
-                    processor.process(buffer)?;
-                    Ok(())
-                },
-            )?;
-        }
-
-        {
-            self.apply_delay_compensation(&plugin_ids, &latencies, scratch_len, max_latency);
-        }
-
-        {
-            let scratch_buffers = &self.scratch_buffers[..scratch_len];
-            let mut master = self.master_buffer.lock();
-            graph::mixdown(&graph, &mut master, scratch_buffers);
-            self.tone_shaper.process(&mut master);
-            for (target_channel, source_channel) in output.channels_mut().zip(master.channels()) {
-                target_channel.copy_from_slice(source_channel);
+                        if !pending_midi.is_empty() {
+                            processor.process_midi(&pending_midi)?;
+                        }
+                        processor.process(buffer)?;
+                        Ok(())
+                    },
+                )?;
             }
-        }
 
-        if let Some(player) = self.sound_test.as_mut() {
-            if player.mix_into(output) {
-                self.sound_test = None;
+            {
+                self.apply_delay_compensation(&plugin_ids, &latencies, scratch_len, max_latency);
             }
-        }
 
-        Ok(())
+            {
+                let scratch_buffers = &self.scratch_buffers[..scratch_len];
+                let mut master = self.master_buffer.lock();
+                graph::mixdown(&graph, &mut master, scratch_buffers);
+                self.tone_shaper.process(&mut master);
+                for (target_channel, source_channel) in output.channels_mut().zip(master.channels())
+                {
+                    target_channel.copy_from_slice(source_channel);
+                }
+            }
+
+            if let Some(player) = self.sound_test.as_mut() {
+                if player.mix_into(output) {
+                    self.sound_test = None;
+                }
+            }
+
+            Ok(())
+        })();
+
+        self.metrics.record_block(start.elapsed(), period_ns);
+        result
     }
 
     fn drain_command_queue(&mut self) -> anyhow::Result<()> {

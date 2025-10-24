@@ -11,7 +11,7 @@ use crossbeam::channel::{self, Receiver, Sender};
 use crossbeam::queue::ArrayQueue;
 use parking_lot::Mutex;
 
-use crate::{AudioBuffer, BufferConfig, HarmoniqEngine};
+use crate::{rt, AudioBuffer, AudioMetricsCollector, BufferConfig, HarmoniqEngine};
 
 #[cfg(feature = "openasio")]
 use crate::backend::{openasio::OpenAsioBackend, StreamConfig as EngineStreamConfig};
@@ -180,12 +180,17 @@ impl UltraLowLatencyServer {
         let queue_capacity = queue_capacity(config.block_size, channels, options.queue_depth);
         let queue = Arc::new(ArrayQueue::new(queue_capacity));
         let running = Arc::new(AtomicBool::new(true));
+        let metrics = {
+            let guard = engine.lock();
+            guard.metrics_collector()
+        };
 
         let render_queue = Arc::clone(&queue);
         let render_running = Arc::clone(&running);
         let (control_tx, control_rx) = channel::bounded(1);
         let render_config = config.clone();
         let render_options = options.clone();
+        let render_metrics = metrics.clone();
 
         let stream = build_stream(
             &device,
@@ -193,6 +198,7 @@ impl UltraLowLatencyServer {
             supported.sample_format(),
             Arc::clone(&queue),
             Arc::clone(&running),
+            metrics.clone(),
         )?;
         stream.play()?;
 
@@ -207,6 +213,7 @@ impl UltraLowLatencyServer {
                     render_running,
                     render_options,
                     channels,
+                    render_metrics,
                 ) {
                     tracing::error!(?err, "sound server render loop terminated with error");
                 }
@@ -260,12 +267,17 @@ impl UltraLowLatencyServer {
             let _ = queue.push(0.0);
         }
         let running = Arc::new(AtomicBool::new(true));
+        let metrics = {
+            let guard = engine.lock();
+            guard.metrics_collector()
+        };
 
         let render_queue = Arc::clone(&queue);
         let render_running = Arc::clone(&running);
         let (control_tx, control_rx) = channel::bounded(1);
         let render_config = config.clone();
         let render_options = options.clone();
+        let render_metrics = metrics.clone();
         let render_handle = thread::Builder::new()
             .name("harmoniq-ultra-render".into())
             .spawn(move || {
@@ -277,6 +289,7 @@ impl UltraLowLatencyServer {
                     render_running,
                     render_options,
                     out_channels_usize,
+                    render_metrics,
                 ) {
                     tracing::error!(?err, "sound server render loop terminated with error");
                 }
@@ -302,8 +315,12 @@ impl UltraLowLatencyServer {
             openasio.noninterleaved,
             desired,
         );
-        let process =
-            QueueProcess::new(Arc::clone(&queue), Arc::clone(&running), out_channels_usize);
+        let process = QueueProcess::new(
+            Arc::clone(&queue),
+            Arc::clone(&running),
+            out_channels_usize,
+            metrics.clone(),
+        );
         backend.start(Box::new(process))?;
 
         Ok(Self {
@@ -410,52 +427,83 @@ fn build_stream(
     sample_format: SampleFormat,
     queue: Arc<ArrayQueue<f32>>,
     running: Arc<AtomicBool>,
+    metrics: AudioMetricsCollector,
 ) -> anyhow::Result<cpal::Stream> {
     let err_fn = |err| tracing::error!(?err, "audio stream error");
 
     match sample_format {
-        SampleFormat::F32 => Ok(device.build_output_stream(
-            config,
-            move |output: &mut [f32], _| fill_from_queue(output, &queue, &running),
-            err_fn,
-            None,
-        )?),
-        SampleFormat::I16 => Ok(device.build_output_stream(
-            config,
-            move |output: &mut [i16], _| fill_from_queue(output, &queue, &running),
-            err_fn,
-            None,
-        )?),
-        SampleFormat::U16 => Ok(device.build_output_stream(
-            config,
-            move |output: &mut [u16], _| fill_from_queue(output, &queue, &running),
-            err_fn,
-            None,
-        )?),
-        SampleFormat::U8 => Ok(device.build_output_stream(
-            config,
-            move |output: &mut [u8], _| fill_from_queue(output, &queue, &running),
-            err_fn,
-            None,
-        )?),
+        SampleFormat::F32 => {
+            let metrics_clone = metrics.clone();
+            Ok(device.build_output_stream(
+                config,
+                move |output: &mut [f32], _| {
+                    fill_from_queue(output, &queue, &running, &metrics_clone)
+                },
+                err_fn,
+                None,
+            )?)
+        }
+        SampleFormat::I16 => {
+            let metrics_clone = metrics.clone();
+            Ok(device.build_output_stream(
+                config,
+                move |output: &mut [i16], _| {
+                    fill_from_queue(output, &queue, &running, &metrics_clone)
+                },
+                err_fn,
+                None,
+            )?)
+        }
+        SampleFormat::U16 => {
+            let metrics_clone = metrics.clone();
+            Ok(device.build_output_stream(
+                config,
+                move |output: &mut [u16], _| {
+                    fill_from_queue(output, &queue, &running, &metrics_clone)
+                },
+                err_fn,
+                None,
+            )?)
+        }
+        SampleFormat::U8 => {
+            let metrics_clone = metrics;
+            Ok(device.build_output_stream(
+                config,
+                move |output: &mut [u8], _| {
+                    fill_from_queue(output, &queue, &running, &metrics_clone)
+                },
+                err_fn,
+                None,
+            )?)
+        }
         other => Err(anyhow!("unsupported sample format: {other:?}")),
     }
 }
 
-fn fill_from_queue<T>(output: &mut [T], queue: &ArrayQueue<f32>, running: &AtomicBool)
-where
+fn fill_from_queue<T>(
+    output: &mut [T],
+    queue: &ArrayQueue<f32>,
+    running: &AtomicBool,
+    metrics: &AudioMetricsCollector,
+) where
     T: Sample + cpal::FromSample<f32>,
 {
+    let mut underflow = false;
     for sample in output.iter_mut() {
         if let Some(value) = queue.pop() {
             *sample = T::from_sample(value);
         } else {
             *sample = T::from_sample(0.0);
+            underflow = true;
         }
     }
 
     if !running.load(Ordering::Relaxed) {
         output.fill(T::from_sample(0.0));
+    }
+
+    if underflow {
+        metrics.register_xrun();
     }
 }
 
@@ -464,20 +512,33 @@ struct QueueProcess {
     queue: Arc<ArrayQueue<f32>>,
     running: Arc<AtomicBool>,
     channels: usize,
+    metrics: AudioMetricsCollector,
 }
 
 #[cfg(feature = "openasio")]
 impl QueueProcess {
-    fn new(queue: Arc<ArrayQueue<f32>>, running: Arc<AtomicBool>, channels: usize) -> Self {
+    fn new(
+        queue: Arc<ArrayQueue<f32>>,
+        running: Arc<AtomicBool>,
+        channels: usize,
+        metrics: AudioMetricsCollector,
+    ) -> Self {
         Self {
             queue,
             running,
             channels: channels.max(1),
+            metrics,
         }
     }
 
-    fn pop_sample(&self) -> f32 {
-        self.queue.pop().unwrap_or(0.0)
+    fn pop_sample(&self, underflow: &mut bool) -> f32 {
+        match self.queue.pop() {
+            Some(value) => value,
+            None => {
+                *underflow = true;
+                0.0
+            }
+        }
     }
 }
 
@@ -496,18 +557,21 @@ impl crate::backend::EngineRt for QueueProcess {
         }
 
         let total_samples = frames.saturating_mul(channels);
+        let mut underflow = false;
         if let Some(out) = outputs.interleaved_mut() {
             let len = out.len();
             let samples_to_fill = len.min(total_samples);
             for sample in &mut out[..samples_to_fill] {
-                *sample = self.pop_sample();
+                *sample = self.pop_sample(&mut underflow);
             }
             for sample in &mut out[samples_to_fill..] {
                 *sample = 0.0;
             }
             if samples_to_fill < total_samples {
                 for _ in samples_to_fill..total_samples {
-                    let _ = self.queue.pop();
+                    if self.queue.pop().is_none() {
+                        underflow = true;
+                    }
                 }
             }
             if !self.running.load(Ordering::Relaxed) {
@@ -522,7 +586,7 @@ impl crate::backend::EngineRt for QueueProcess {
 
             for frame_idx in 0..frames_to_write {
                 for ch in 0..active {
-                    let sample = self.pop_sample();
+                    let sample = self.pop_sample(&mut underflow);
                     let plane_ptr = plane_ptrs[ch];
                     if !plane_ptr.is_null() {
                         unsafe {
@@ -539,7 +603,9 @@ impl crate::backend::EngineRt for QueueProcess {
                     }
                 }
                 for _ in active..channels {
-                    let _ = self.queue.pop();
+                    if self.queue.pop().is_none() {
+                        underflow = true;
+                    }
                 }
             }
 
@@ -556,7 +622,9 @@ impl crate::backend::EngineRt for QueueProcess {
             let consumed = frames_to_write.saturating_mul(channels);
             if consumed < total_samples {
                 for _ in consumed..total_samples {
-                    let _ = self.queue.pop();
+                    if self.queue.pop().is_none() {
+                        underflow = true;
+                    }
                 }
             }
 
@@ -574,8 +642,14 @@ impl crate::backend::EngineRt for QueueProcess {
             }
         } else {
             for _ in 0..total_samples {
-                let _ = self.queue.pop();
+                if self.queue.pop().is_none() {
+                    underflow = true;
+                }
             }
+        }
+
+        if underflow {
+            self.metrics.register_xrun();
         }
 
         true
@@ -590,7 +664,15 @@ fn render_loop(
     running: Arc<AtomicBool>,
     options: UltraLowLatencyOptions,
     target_channels: usize,
+    metrics: AudioMetricsCollector,
 ) -> anyhow::Result<()> {
+    rt::enable_ftz_daz();
+    if let Err(err) = rt::pin_current_thread(0) {
+        tracing::warn!(?err, "failed to set realtime thread affinity");
+    }
+    if let Err(err) = rt::mlock_process() {
+        tracing::warn!(?err, "mlockall failed for realtime engine");
+    }
     lock_memory()?;
     if let Some(priority) = options.realtime_priority {
         if let Err(err) = apply_realtime_priority(priority) {
@@ -626,10 +708,15 @@ fn render_loop(
 
         write_interleaved(&buffer, &mut interleaved[..required], output_channels);
 
+        let mut dropped_samples = 0usize;
         for &sample in &interleaved[..required] {
             while queue.push(sample).is_err() {
+                dropped_samples += 1;
                 let _ = queue.pop();
             }
+        }
+        if dropped_samples > 0 {
+            metrics.register_xrun();
         }
     }
 
@@ -668,16 +755,7 @@ fn queue_capacity(block_size: usize, channels: usize, depth: usize) -> usize {
 }
 
 fn lock_memory() -> anyhow::Result<()> {
-    unsafe {
-        let flags = libc::MCL_CURRENT | libc::MCL_FUTURE;
-        if libc::mlockall(flags) != 0 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() != Some(libc::EPERM) {
-                return Err(anyhow!("mlockall failed: {err}"));
-            }
-        }
-    }
-    Ok(())
+    rt::mlock_process().map_err(|err| anyhow!("mlockall failed: {err}"))
 }
 
 fn apply_realtime_priority(priority: i32) -> anyhow::Result<()> {
