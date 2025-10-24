@@ -1,21 +1,66 @@
 use std::time::{Duration, Instant};
 
-use super::layout::compute_visible_range;
+use eframe::egui;
+
+use super::layout::{LayoutState, MASTER_STRIP_WIDTH_PX, STRIP_GAP_PX};
 use super::meter::{MeterLevels, MeterState};
 use super::{gain_db_to_slider, slider_to_gain_db};
 
 #[test]
-fn virtualization_computes_visible_range() {
-    let strip_width = 76.0;
+fn visible_range_advances_with_scroll() {
+    let strip_w_pt = 80.0;
+    let gap_pt = 4.0;
+    let ls = LayoutState {
+        strip_w_pt,
+        gap_pt,
+        master_w_pt: 120.0,
+        zoom: 1.0,
+        total: 200,
+        content_w_pt: 200.0 * (strip_w_pt + gap_pt),
+    };
     let viewport = 400.0;
-    let range = compute_visible_range(128, strip_width, viewport, 0.0);
-    assert_eq!(range.first, 0);
-    assert!(range.last > range.first);
+    let (first, last) = ls.visible_range(0.0, viewport);
+    assert_eq!(first, 0);
+    assert!(last > first);
 
-    let scrolled = compute_visible_range(128, strip_width, viewport, 360.0);
-    assert_eq!(scrolled.first, 4);
-    assert!(scrolled.last > scrolled.first);
-    assert!(scrolled.offset.abs() <= strip_width);
+    let pitch = ls.strip_pitch_pt();
+    let (f2, _) = ls.visible_range(pitch, viewport);
+    assert_eq!(f2, first + 1);
+
+    let near_end_scroll = ls.content_w_pt - viewport;
+    let (f_end, l_end) = ls.visible_range(near_end_scroll, viewport);
+    assert!(l_end <= ls.total);
+    assert!(f_end <= f2 + (viewport / pitch).ceil() as usize);
+}
+
+#[test]
+fn clamp_scroll_stays_in_bounds() {
+    let ls = LayoutState {
+        strip_w_pt: 70.0,
+        gap_pt: 3.0,
+        master_w_pt: 100.0,
+        zoom: 1.0,
+        total: 64,
+        content_w_pt: 64.0 * 73.0,
+    };
+    let view = 600.0;
+    assert_eq!(ls.clamp_scroll(-100.0, view), 0.0);
+    let max = (ls.content_w_pt - view).max(0.0);
+    assert_eq!(ls.clamp_scroll(ls.content_w_pt + 100.0, view), max);
+}
+
+#[test]
+fn layout_new_respects_zoom_and_dpi() {
+    let ctx = egui::Context::default();
+    ctx.set_pixels_per_point(2.0);
+    let zoom = 1.2;
+    let ls = LayoutState::new(&ctx, 60.0, 100.0, true, zoom, 8, MASTER_STRIP_WIDTH_PX);
+    assert!(ls.strip_w_pt > 0.0);
+    assert!(ls.gap_pt > 0.0);
+    let expected_strip = (60.0 * zoom) / 2.0;
+    assert!((ls.strip_w_pt - expected_strip).abs() < f32::EPSILON * 100.0);
+    let expected_gap = (STRIP_GAP_PX * zoom) / 2.0;
+    assert!((ls.gap_pt - expected_gap).abs() < 1e-3);
 }
 
 #[test]

@@ -13,15 +13,15 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use eframe::egui::{self, pos2, Align, Key, Rect, Ui, Vec2};
+use eframe::egui::{self, pos2, Align, Align2, FontId, Key, Layout, Rect, Sense, Ui, Vec2};
 use harmoniq_engine::mixer::api::MixerUiApi;
 use harmoniq_ui::HarmoniqPalette;
 
-pub use layout::{clamp_zoom, strip_dimensions, StripDensity};
+pub use layout::{clamp_zoom, strip_height_pt, LayoutState, StripDensity};
 pub use meter::{MeterLevels, MeterState};
 pub use theme::MixerTheme;
 
-use crate::ui::mixer::layout::{compute_visible_range, master_rect, MASTER_STRIP_WIDTH};
+use crate::ui::mixer::layout::{MASTER_STRIP_WIDTH_PX, NARROW_STRIP_WIDTH_PX, WIDE_STRIP_WIDTH_PX};
 use crate::ui::mixer::strip::{render_strip, StripRenderArgs};
 
 pub struct MixerView {
@@ -35,6 +35,7 @@ pub struct MixerView {
     pending_focus: Option<usize>,
     rename: Option<RenameState>,
     group_highlight: bool,
+    debug_overlay: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +57,7 @@ impl MixerView {
             pending_focus: None,
             rename: None,
             group_highlight: true,
+            debug_overlay: false,
         }
     }
 
@@ -85,106 +87,138 @@ impl MixerView {
         let master_index = total - 1;
         let strip_count = master_index;
 
-        let strip_size = strip_dimensions(self.density, self.zoom);
-        let total_width = strip_size.x * strip_count as f32;
+        let ctx = ui.ctx().clone();
+        let layout_state = LayoutState::new(
+            &ctx,
+            NARROW_STRIP_WIDTH_PX,
+            WIDE_STRIP_WIDTH_PX,
+            matches!(self.density, StripDensity::Narrow),
+            self.zoom,
+            strip_count,
+            MASTER_STRIP_WIDTH_PX,
+        );
+        let strip_height = strip_height_pt(&ctx, self.zoom);
+
+        let available_width = ui.available_width();
+        let master_width_pt = layout_state.master_w_pt.min(available_width);
+        let scroll_width = (available_width - master_width_pt).max(0.0);
+        let pos = ui.next_widget_position();
+        let scroll_rect = Rect::from_min_size(pos, Vec2::new(scroll_width, strip_height));
+        let master_rect = Rect::from_min_size(
+            pos2(scroll_rect.max.x, scroll_rect.min.y),
+            Vec2::new(master_width_pt, strip_height),
+        );
+        let outer_rect = Rect::from_min_max(scroll_rect.min, master_rect.max);
+
+        ui.allocate_rect(outer_rect, Sense::hover());
+
+        let mut scroll_ui = ui.child_ui(scroll_rect, Layout::top_down(Align::Min));
+        let mut master_ui = ui.child_ui(master_rect, Layout::top_down(Align::Min));
 
         egui::ScrollArea::horizontal()
             .id_source("mixer_scroll")
-            .show_viewport(ui, |ui, viewport| {
+            .auto_shrink([false, false])
+            .show_viewport(&mut scroll_ui, |ui, viewport| {
                 ui.set_min_size(Vec2::new(
-                    total_width + MASTER_STRIP_WIDTH * self.zoom,
-                    strip_size.y,
+                    layout_state.content_w_pt.max(scroll_width),
+                    strip_height,
                 ));
+                ui.set_height(strip_height);
+
                 if let Some(target) = self.pending_focus.take() {
                     let focus_rect = Rect::from_min_size(
-                        pos2(target as f32 * strip_size.x, viewport.min.y),
-                        strip_size,
+                        pos2(layout_state.world_x(target), viewport.min.y),
+                        Vec2::new(layout_state.strip_w_pt, strip_height),
                     );
                     ui.scroll_to_rect(focus_rect, Some(Align::Center));
                 }
 
-                let visible = compute_visible_range(
-                    strip_count,
-                    strip_size.x,
-                    viewport.width(),
-                    viewport.min.x,
-                );
+                let scroll_x_pt = layout_state.clamp_scroll(viewport.min.x, viewport.width());
+                let view_w_pt = viewport.width();
+                let (first, last) = layout_state.visible_range(scroll_x_pt, view_w_pt);
+                let painter = ui.painter_at(viewport);
 
-                let content_clip = Rect::from_min_max(
-                    viewport.min,
-                    pos2(
-                        viewport.max.x - MASTER_STRIP_WIDTH * self.zoom,
-                        viewport.max.y,
-                    ),
-                );
-                ui.scope(|clip_ui| {
-                    clip_ui.set_clip_rect(content_clip);
-                    for index in visible.first..visible.last {
-                        let info = self.api.strip_info(index);
-                        let info_for_render = info.clone();
-                        let meter_levels = self.api.level_fetch(index);
-                        self.meters[index].update(levels_from_tuple(meter_levels));
+                for index in first..last {
+                    let info = self.api.strip_info(index);
+                    let info_for_render = info.clone();
+                    let meter_levels = self.api.level_fetch(index);
+                    self.meters[index].update(levels_from_tuple(meter_levels));
 
-                        let x = index as f32 * strip_size.x + visible.offset;
-                        let strip_rect = Rect::from_min_size(
-                            pos2(viewport.min.x + x, viewport.min.y),
-                            strip_size,
-                        );
-                        if !strip_rect.intersects(content_clip) {
-                            continue;
-                        }
-                        let insert_labels = (0..info.insert_count)
-                            .map(|slot| self.api.insert_label(index, slot))
-                            .collect::<Vec<_>>();
-                        let send_labels = (0..info.send_count)
-                            .map(|slot| self.api.send_label(index, slot))
-                            .collect::<Vec<_>>();
-
-                        let api = Arc::clone(&self.api);
-                        let theme = self.theme.clone();
-                        let density = self.density;
-                        let is_selected = self.selection.contains(&info.id);
-                        let zoom = self.zoom;
-                        let group_highlight = self.group_highlight;
-
-                        let response = {
-                            let meter_state = &mut self.meters[index];
-                            clip_ui
-                                .allocate_ui_at_rect(strip_rect, move |ui| {
-                                    render_strip(StripRenderArgs {
-                                        ui,
-                                        api: api.as_ref(),
-                                        info: &info_for_render,
-                                        index,
-                                        density,
-                                        theme: &theme,
-                                        width: strip_size.x,
-                                        height: strip_size.y,
-                                        zoom,
-                                        is_selected,
-                                        meter: meter_state,
-                                        insert_labels,
-                                        send_labels,
-                                        group_highlight,
-                                    })
-                                })
-                                .inner
-                        };
-
-                        if response.clicked {
-                            self.handle_selection(clip_ui, info.id);
-                        }
-                        if response.double_clicked {
-                            self.rename = Some(RenameState {
-                                id: info.id,
-                                name: info.name.clone(),
-                            });
-                        }
+                    let world_x = layout_state.world_x(index);
+                    let viewport_x = world_x - scroll_x_pt;
+                    let strip_rect = Rect::from_min_size(
+                        pos2(viewport.min.x + viewport_x, viewport.min.y),
+                        Vec2::new(layout_state.strip_w_pt, strip_height),
+                    );
+                    if !strip_rect.intersects(viewport) {
+                        continue;
                     }
-                });
 
-                self.draw_master_strip(ui, viewport, strip_size, master_index);
+                    let insert_labels = (0..info.insert_count)
+                        .map(|slot| self.api.insert_label(index, slot))
+                        .collect::<Vec<_>>();
+                    let send_labels = (0..info.send_count)
+                        .map(|slot| self.api.send_label(index, slot))
+                        .collect::<Vec<_>>();
+
+                    let api = Arc::clone(&self.api);
+                    let theme = self.theme.clone();
+                    let density = self.density;
+                    let is_selected = self.selection.contains(&info.id);
+                    let zoom = self.zoom;
+                    let group_highlight = self.group_highlight;
+
+                    let response = {
+                        let meter_state = &mut self.meters[index];
+                        ui.allocate_ui_at_rect(strip_rect, move |ui| {
+                            render_strip(StripRenderArgs {
+                                ui,
+                                api: api.as_ref(),
+                                info: &info_for_render,
+                                index,
+                                density,
+                                theme: &theme,
+                                width: strip_rect.width(),
+                                height: strip_height,
+                                zoom,
+                                is_selected,
+                                meter: meter_state,
+                                insert_labels,
+                                send_labels,
+                                group_highlight,
+                            })
+                        })
+                        .inner
+                    };
+
+                    if response.clicked {
+                        self.handle_selection(ui, info.id);
+                    }
+                    if response.double_clicked {
+                        self.rename = Some(RenameState {
+                            id: info.id,
+                            name: info.name.clone(),
+                        });
+                    }
+
+                    if self.debug_overlay {
+                        painter.rect_stroke(
+                            strip_rect,
+                            0.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 90)),
+                        );
+                        painter.text(
+                            strip_rect.left_top() + Vec2::new(4.0, 4.0),
+                            Align2::LEFT_TOP,
+                            format!("#{index}"),
+                            FontId::monospace(10.0),
+                            egui::Color32::LIGHT_GRAY,
+                        );
+                    }
+                }
             });
+
+        self.draw_master_strip(&mut master_ui, master_rect, strip_height, master_index);
 
         self.show_rename_dialog(ui.ctx());
     }
@@ -192,15 +226,14 @@ impl MixerView {
     fn draw_master_strip(
         &mut self,
         ui: &mut Ui,
-        viewport: Rect,
-        strip_size: Vec2,
+        rect: Rect,
+        strip_height: f32,
         master_index: usize,
     ) {
         let info = self.api.strip_info(master_index);
         let levels = self.api.level_fetch(master_index);
         self.meters[master_index].update(levels_from_tuple(levels));
 
-        let rect = master_rect(viewport, MASTER_STRIP_WIDTH * self.zoom);
         ui.allocate_ui_at_rect(rect, |ui| {
             let insert_labels = (0..info.insert_count)
                 .map(|slot| self.api.insert_label(master_index, slot))
@@ -216,7 +249,7 @@ impl MixerView {
                 density: StripDensity::Wide,
                 theme: &self.theme,
                 width: rect.width(),
-                height: strip_size.y,
+                height: strip_height,
                 zoom: self.zoom,
                 is_selected: false,
                 meter: &mut self.meters[master_index],
@@ -247,6 +280,12 @@ impl MixerView {
         }
         if ui.ctx().input(|i| i.key_pressed(Key::G)) {
             self.group_highlight = !self.group_highlight;
+        }
+        if ui
+            .ctx()
+            .input(|i| i.modifiers.ctrl && i.modifiers.alt && i.key_pressed(Key::D))
+        {
+            self.debug_overlay = !self.debug_overlay;
         }
         if ui
             .ctx()
