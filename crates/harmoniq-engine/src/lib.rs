@@ -12,6 +12,7 @@ pub mod dsp;
 pub mod engine;
 pub mod graph;
 pub mod media;
+pub mod mixer;
 pub mod nodes;
 pub mod plugin;
 pub mod rt;
@@ -34,6 +35,10 @@ pub use clips::{AudioClip, ClipError, CrossfadeSpec, FadeCurve, FadeSpec, Stretc
 pub use dsp::RealtimeDspEngine;
 pub use engine::{EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
 pub use graph::{GraphBuilder, GraphHandle, NodeHandle};
+pub use mixer::{
+    MixerAuxSendState, MixerAuxState, MixerBusState, MixerEngine, MixerInsertProcessor,
+    MixerInsertState, MixerMasterState, MixerModel, MixerState, MixerTargetState, MixerTrackState,
+};
 pub use nodes::{GainNode, NodeNoise, NodeOsc, NoiseNode, SineNode};
 pub use plugin::{
     AudioProcessor, MidiEvent, MidiProcessor, MidiTimestamp, PluginDescriptor, PluginId,
