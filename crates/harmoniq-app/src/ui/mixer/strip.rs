@@ -80,9 +80,15 @@ pub fn render_strip(args: StripRenderArgs<'_>) -> StripResponse {
     child.add_space(6.0);
     render_meter(&mut child, meter, theme, height * 0.35);
 
-    let response = response.context_menu(|ui| {
-        strip_context_menu(ui);
-    });
+    let mut response = response;
+
+    if let Some(egui::InnerResponse { response: ctx_response, .. }) =
+        response.clone().context_menu(|ui| {
+            strip_context_menu(ui);
+        })
+    {
+        response = ctx_response;
+    }
 
     StripResponse {
         clicked: response.clicked(),
