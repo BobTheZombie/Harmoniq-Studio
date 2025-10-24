@@ -15,7 +15,7 @@ impl PluginsMenuState {
         &mut self,
         ui: &mut egui::Ui,
         palette: &HarmoniqPalette,
-        commands: &CommandSender,
+        _commands: &CommandSender,
     ) {
         ui.menu_button("Plugins", |ui| {
             if ui

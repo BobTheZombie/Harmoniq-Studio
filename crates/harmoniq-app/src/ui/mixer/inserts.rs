@@ -71,7 +71,7 @@ impl<'a> InsertsView<'a> {
                     if dragging.is_some() && row_response.hovered() {
                         drop_target = Some(slot);
                     }
-                    if row_response.drag_released() {
+                    if row_response.dragged_stopped() {
                         drop_target = Some(slot);
                         ui.ctx().request_repaint();
                     }

@@ -47,8 +47,8 @@ pub fn render_strip(args: StripRenderArgs<'_>) -> StripResponse {
         zoom,
         is_selected,
         meter,
-        mut insert_labels,
-        mut send_labels,
+        insert_labels,
+        send_labels,
         group_highlight,
     } = args;
 
@@ -285,8 +285,8 @@ fn draw_pan_width(
             if pan_resp.changed() {
                 api.set_pan(index, pan);
             }
-            if (pan_resp.double_clicked()
-                || (pan_resp.clicked() && ui.ctx().input(|i| i.modifiers.alt)))
+            if pan_resp.double_clicked()
+                || (pan_resp.clicked() && ui.ctx().input(|i| i.modifiers.alt))
             {
                 api.set_pan(index, 0.0);
             }
@@ -296,8 +296,8 @@ fn draw_pan_width(
             if width_resp.changed() {
                 api.set_width(index, width);
             }
-            if (width_resp.double_clicked()
-                || (width_resp.clicked() && ui.ctx().input(|i| i.modifiers.alt)))
+            if width_resp.double_clicked()
+                || (width_resp.clicked() && ui.ctx().input(|i| i.modifiers.alt))
             {
                 api.set_width(index, 1.0);
             }
