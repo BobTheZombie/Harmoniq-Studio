@@ -150,7 +150,7 @@ fn spawn_dispatcher(
 
                 translated.clear();
                 for event in staging.drain(..) {
-                    if let Some(parsed) = parse_midi_event(&event, mode) {
+                    if let Some(parsed) = parse_midi_event(&event, &mode) {
                         translated.push(parsed);
                     }
                 }
@@ -169,7 +169,7 @@ fn spawn_dispatcher(
             translated.clear();
             drain_queue(&mut consumer, &mut staging, usize::MAX);
             for event in staging.drain(..) {
-                if let Some(parsed) = parse_midi_event(&event, mode) {
+                if let Some(parsed) = parse_midi_event(&event, &mode) {
                     translated.push(parsed);
                 }
             }
@@ -193,7 +193,7 @@ fn drain_queue(
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum MidiChannelMode {
     Omni,
     MpeLower {
@@ -207,14 +207,11 @@ enum MidiChannelMode {
 }
 
 impl MidiChannelMode {
-    fn remap(self, channel: u8) -> u8 {
+    fn remap(&self, channel: u8) -> u8 {
         match self {
             MidiChannelMode::Omni => channel,
-            MidiChannelMode::MpeLower {
-                master,
-                ref members,
-            } => {
-                if channel == master {
+            MidiChannelMode::MpeLower { master, members } => {
+                if channel == *master {
                     0
                 } else if members.contains(&channel) {
                     channel.saturating_sub(*members.start()) + 1
@@ -222,11 +219,8 @@ impl MidiChannelMode {
                     channel
                 }
             }
-            MidiChannelMode::MpeUpper {
-                master,
-                ref members,
-            } => {
-                if channel == master {
+            MidiChannelMode::MpeUpper { master, members } => {
+                if channel == *master {
                     0
                 } else if members.contains(&channel) {
                     channel.saturating_sub(*members.start()) + 1
@@ -287,7 +281,7 @@ impl QueuedMidiEvent {
     }
 }
 
-fn parse_midi_event(event: &QueuedMidiEvent, mode: MidiChannelMode) -> Option<MidiEvent> {
+fn parse_midi_event(event: &QueuedMidiEvent, mode: &MidiChannelMode) -> Option<MidiEvent> {
     let channel = mode.remap(event.channel());
     match event.status() {
         0x80 => {
@@ -360,7 +354,7 @@ mod tests {
         drain_queue(&mut consumer, &mut staging, usize::MAX);
         staging
             .into_iter()
-            .filter_map(|event| parse_midi_event(&event, mode))
+            .filter_map(|event| parse_midi_event(&event, &mode))
             .collect()
     }
 
