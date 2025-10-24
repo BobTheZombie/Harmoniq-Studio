@@ -1,0 +1,15 @@
+[package]
+name = "clap-testgain"
+version = "0.1.0"
+edition = "2021"
+authors = ["Harmoniq Studio Contributors"]
+license = "GPL-3.0-or-later"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+
+[features]
+default = []
