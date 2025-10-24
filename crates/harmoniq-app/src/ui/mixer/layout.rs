@@ -1,8 +1,9 @@
 use eframe::egui::{Rect, Vec2};
 
-pub const NARROW_STRIP_WIDTH: f32 = 72.0;
+pub const NARROW_STRIP_WIDTH: f32 = 76.0;
 pub const WIDE_STRIP_WIDTH: f32 = 120.0;
-pub const MASTER_STRIP_WIDTH: f32 = 132.0;
+pub const MASTER_STRIP_RATIO: f32 = 1.8;
+pub const MASTER_STRIP_WIDTH: f32 = WIDE_STRIP_WIDTH * MASTER_STRIP_RATIO;
 pub const MIN_ZOOM: f32 = 0.8;
 pub const MAX_ZOOM: f32 = 1.5;
 
@@ -72,7 +73,7 @@ pub fn clamp_zoom(zoom: f32) -> f32 {
 
 pub fn strip_dimensions(density: StripDensity, zoom: f32) -> Vec2 {
     let width = density.base_width() * zoom;
-    let height = 420.0 * zoom.max(1.0);
+    let height = 520.0 * zoom.clamp(0.9, 1.3);
     Vec2::new(width, height)
 }
 
