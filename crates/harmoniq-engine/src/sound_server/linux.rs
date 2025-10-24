@@ -701,7 +701,7 @@ fn render_loop(
         write_interleaved(&buffer, interleaved, output_channels);
 
         let mut dropped_samples = 0usize;
-        for &sample in interleaved {
+        for &sample in interleaved.iter() {
             while queue.push(sample).is_err() {
                 dropped_samples += 1;
                 let _ = queue.pop();
