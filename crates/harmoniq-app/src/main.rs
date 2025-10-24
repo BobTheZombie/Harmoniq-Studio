@@ -14,6 +14,7 @@ use anyhow::{anyhow, Context};
 use clap::Parser;
 use eframe::egui::{
     self, Align2, CursorIcon, Id, Margin, PointerButton, RichText, Rounding, Stroke,
+    ViewportCommand,
 };
 use eframe::{App, CreationContext, NativeOptions};
 use egui_dock::{DockArea, DockState, Style as DockStyle, TabViewer};
@@ -48,7 +49,7 @@ use ui::{
     command_dispatch::{command_channel, CommandDispatcher, CommandHandler, CommandSender},
     commands::{
         Command, EditCommand, FileCommand, HelpCommand, InsertCommand, MidiCommand, OptionsCommand,
-        ThemeMode, TrackCommand, TransportCommand, ViewCommand,
+        TrackCommand, TransportCommand, ViewCommand,
     },
     config::RecentProjects,
     console::{ConsolePane, LogLevel},
@@ -1583,7 +1584,7 @@ impl CommandHandler for HarmoniqStudioApp {
                 FileCommand::Export => {
                     self.status_message = Some("Export/Render not implemented".into());
                     self.console
-                        .log(LogLevel::Warn, "Export/Render flow not implemented yet");
+                        .log(LogLevel::Warning, "Export/Render flow not implemented yet");
                 }
                 FileCommand::CloseProject => {
                     self.status_message = Some("Project closed".into());
@@ -1593,11 +1594,11 @@ impl CommandHandler for HarmoniqStudioApp {
             Command::Edit(cmd) => match cmd {
                 EditCommand::Undo | EditCommand::Redo => {
                     self.console
-                        .log(LogLevel::Warn, "Undo/Redo stack not available yet");
+                        .log(LogLevel::Warning, "Undo/Redo stack not available yet");
                 }
-                EditCommand::Cut => self.console.log(LogLevel::Warn, "Cut not implemented"),
+                EditCommand::Cut => self.console.log(LogLevel::Warning, "Cut not implemented"),
                 EditCommand::Copy => self.console.log(LogLevel::Info, "Copied selection"),
-                EditCommand::Paste => self.console.log(LogLevel::Warn, "Paste not implemented"),
+                EditCommand::Paste => self.console.log(LogLevel::Warning, "Paste not implemented"),
                 EditCommand::Delete => self.console.log(LogLevel::Info, "Delete selection"),
                 EditCommand::SelectAll => {
                     self.console.log(LogLevel::Info, "Select All invoked");
@@ -1605,7 +1606,7 @@ impl CommandHandler for HarmoniqStudioApp {
                 EditCommand::Preferences => {
                     self.status_message = Some("Preferences not available".into());
                     self.console
-                        .log(LogLevel::Warn, "Preferences dialog not implemented");
+                        .log(LogLevel::Warning, "Preferences dialog not implemented");
                 }
             },
             Command::View(cmd) => match cmd {
@@ -1678,7 +1679,7 @@ impl CommandHandler for HarmoniqStudioApp {
                 }
                 TrackCommand::FreezeCommit => {
                     self.console
-                        .log(LogLevel::Warn, "Freeze/Commit not implemented");
+                        .log(LogLevel::Warning, "Freeze/Commit not implemented");
                 }
                 TrackCommand::Rename => {
                     self.console
@@ -1711,7 +1712,8 @@ impl CommandHandler for HarmoniqStudioApp {
                     self.console.log(LogLevel::Info, "Quantize selection");
                 }
                 MidiCommand::Humanize => {
-                    self.console.log(LogLevel::Warn, "Humanize not implemented");
+                    self.console
+                        .log(LogLevel::Warning, "Humanize not implemented");
                 }
                 MidiCommand::MetronomeSettings => {
                     self.console
@@ -1891,12 +1893,12 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
 }
 
 impl App for HarmoniqStudioApp {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint_after(Duration::from_millis(16));
         self.shortcuts.handle_input(ctx, &self.command_sender);
         self.command_dispatcher.poll(self);
         if self.fullscreen_dirty {
-            frame.set_fullscreen(self.fullscreen);
+            ctx.send_viewport_cmd(ViewportCommand::Fullscreen(self.fullscreen));
             self.fullscreen_dirty = false;
         }
         self.process_events();
