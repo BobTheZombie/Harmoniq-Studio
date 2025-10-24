@@ -48,7 +48,7 @@ use ui::{
     console::{ConsolePane, LogLevel},
     event_bus::{AppEvent, EventBus, LayoutEvent, TransportEvent},
     focus::InputFocus,
-    inspector::{InspectorCommand, InspectorPane},
+    inspector::InspectorPane,
     layout::LayoutState,
     menu::MenuBarState,
     mixer::MixerPane,
@@ -1268,11 +1268,9 @@ impl HarmoniqStudioApp {
         let event_bus = EventBus::default();
         let menu = MenuBarState::default();
         let transport_bar = TransportBar::new(initial_tempo, initial_time_signature);
-        let browser = BrowserPane::new(
-            resources_root,
-            layout.browser_visible(),
-            layout.browser_width(),
-        );
+        let browser_visible = layout.browser_visible();
+        let browser_width = layout.browser_width();
+        let browser = BrowserPane::new(resources_root, browser_visible, browser_width);
         let channel_rack = ChannelRackPane::default();
         let piano_roll = PianoRollPane::default();
         let mixer = MixerPane::default();
@@ -1319,7 +1317,7 @@ impl HarmoniqStudioApp {
             pattern_mode: true,
             last_engine_update: Instant::now(),
             status_message,
-            browser_hidden: !layout.browser_visible(),
+            browser_hidden: !browser_visible,
         })
     }
 

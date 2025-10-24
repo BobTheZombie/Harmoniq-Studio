@@ -41,7 +41,7 @@ struct PlaylistTrack {
     clips: Vec<Clip>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SnapSetting {
     Bar,
     Half,
@@ -303,12 +303,14 @@ impl PlaylistPane {
                 start,
                 length,
             } => {
+                let snapped_start =
+                    Self::snap_value(self.snap_enabled, self.snap_setting, start.max(0.0));
                 if let Some(clip) = self
                     .tracks
                     .get_mut(track_index)
                     .and_then(|track| track.clips.get_mut(clip_index))
                 {
-                    clip.start = self.snap(start.max(0.0));
+                    clip.start = snapped_start;
                     clip.length = length.max(0.125);
                 }
             }
@@ -329,11 +331,18 @@ impl PlaylistPane {
                 track_index,
                 clip_index,
             } => {
-                if let Some(track) = self.tracks.get_mut(track_index) {
-                    if let Some(source) = track.clips.get(clip_index).cloned() {
-                        let mut clone = source.clone();
-                        clone.start = source.end();
-                        clone.id = self.allocate_id();
+                if let Some(mut clone) = self
+                    .tracks
+                    .get(track_index)
+                    .and_then(|track| track.clips.get(clip_index))
+                    .cloned()
+                {
+                    let new_id = self.allocate_id();
+                    let new_start =
+                        Self::snap_value(self.snap_enabled, self.snap_setting, clone.end());
+                    clone.id = new_id;
+                    clone.start = new_start;
+                    if let Some(track) = self.tracks.get_mut(track_index) {
                         track.clips.insert(clip_index + 1, clone);
                     }
                 }
@@ -518,8 +527,7 @@ impl PlaylistPane {
                 }
 
                 self.handle_drag(
-                    ui,
-                    clip_response,
+                    &clip_response,
                     clip_rect,
                     track_index,
                     clip_index,
@@ -568,8 +576,7 @@ impl PlaylistPane {
 
     fn handle_drag(
         &mut self,
-        ui: &egui::Ui,
-        response: egui::Response,
+        response: &egui::Response,
         clip_rect: Rect,
         track_index: usize,
         clip_index: usize,
@@ -591,6 +598,9 @@ impl PlaylistPane {
         }
 
         if response.dragged() {
+            let snap_enabled = self.snap_enabled;
+            let snap_setting = self.snap_setting;
+            let track_count = self.tracks.len();
             if let (Some(pointer), Some(state)) =
                 (response.interact_pointer_pos(), self.drag_state.as_mut())
             {
@@ -600,21 +610,20 @@ impl PlaylistPane {
                 let mut beat =
                     (pointer.x - state.pointer_offset - timeline_rect.left()) / beat_width;
                 beat = beat.max(0.0);
-                let snapped = self.snap(beat);
-                if let Some(clip) = self.tracks[state.from_track]
-                    .clips
-                    .iter_mut()
-                    .find(|clip| clip.id == clip_id)
-                {
-                    clip.start = snapped;
+                let snapped = Self::snap_value(snap_enabled, snap_setting, beat);
+                if let Some(track) = self.tracks.get_mut(state.from_track) {
+                    if let Some(clip) = track.clips.iter_mut().find(|clip| clip.id == clip_id) {
+                        clip.start = snapped;
+                    }
                 }
 
-                let track = self.track_at(pointer.y, timeline_rect, track_height);
+                let track =
+                    Self::track_index_at(pointer.y, timeline_rect, track_height, track_count);
                 state.target_track = track;
             }
         }
 
-        if response.drag_released() {
+        if response.drag_stopped() {
             if let Some(state) = self.drag_state.take() {
                 let new_start = self
                     .tracks
@@ -636,15 +645,31 @@ impl PlaylistPane {
     }
 
     fn track_at(&self, pointer_y: f32, timeline_rect: Rect, track_height: f32) -> usize {
+        Self::track_index_at(pointer_y, timeline_rect, track_height, self.tracks.len())
+    }
+
+    fn track_index_at(
+        pointer_y: f32,
+        timeline_rect: Rect,
+        track_height: f32,
+        track_count: usize,
+    ) -> usize {
+        if track_count == 0 {
+            return 0;
+        }
         (((pointer_y - timeline_rect.top()) / track_height).floor() as isize)
-            .clamp(0, self.tracks.len() as isize - 1) as usize
+            .clamp(0, track_count as isize - 1) as usize
     }
 
     fn snap(&self, beat: f32) -> f32 {
-        if !self.snap_enabled {
+        Self::snap_value(self.snap_enabled, self.snap_setting, beat)
+    }
+
+    fn snap_value(snap_enabled: bool, snap_setting: SnapSetting, beat: f32) -> f32 {
+        if !snap_enabled {
             beat
         } else {
-            let step = self.snap_setting.interval();
+            let step = snap_setting.interval();
             (beat / step).round() * step
         }
     }
@@ -662,13 +687,15 @@ impl PlaylistPane {
                     if from_track == to_track {
                         continue;
                     }
+                    let snapped_start =
+                        Self::snap_value(self.snap_enabled, self.snap_setting, start);
                     if let Some(track) = self.tracks.get_mut(from_track) {
                         if let Some(index) = track.clips.iter().position(|clip| clip.id == clip_id)
                         {
                             let clip = track.clips.remove(index);
                             if let Some(target_track) = self.tracks.get_mut(to_track) {
                                 let mut moved = clip;
-                                moved.start = self.snap(start);
+                                moved.start = snapped_start;
                                 target_track.clips.push(moved);
                                 target_track
                                     .clips
@@ -688,11 +715,18 @@ impl PlaylistPane {
                     track_index,
                     clip_index,
                 } => {
-                    if let Some(track) = self.tracks.get_mut(track_index) {
-                        if let Some(source) = track.clips.get(clip_index).cloned() {
-                            let mut clone = source.clone();
-                            clone.id = self.allocate_id();
-                            clone.start = self.snap(source.end());
+                    if let Some(mut clone) = self
+                        .tracks
+                        .get(track_index)
+                        .and_then(|track| track.clips.get(clip_index))
+                        .cloned()
+                    {
+                        let new_id = self.allocate_id();
+                        let new_start =
+                            Self::snap_value(self.snap_enabled, self.snap_setting, clone.end());
+                        clone.id = new_id;
+                        clone.start = new_start;
+                        if let Some(track) = self.tracks.get_mut(track_index) {
                             track.clips.insert(clip_index + 1, clone);
                             self.selected_clip = Some((track_index, clip_index + 1));
                         }
@@ -769,14 +803,17 @@ impl PlaylistPane {
         if self.tracks.is_empty() {
             self.add_track();
         }
+        let snap_enabled = self.snap_enabled;
+        let snap_setting = self.snap_setting;
+        let new_id = self.allocate_id();
         let track = &mut self.tracks[track_index];
         let start = track
             .clips
             .last()
-            .map(|clip| self.snap(clip.end()))
+            .map(|clip| Self::snap_value(snap_enabled, snap_setting, clip.end()))
             .unwrap_or(0.0);
         track.clips.push(Clip {
-            id: self.allocate_id(),
+            id: new_id,
             name: format!("Clip {}", track.clips.len() + 1),
             start,
             length: 4.0,

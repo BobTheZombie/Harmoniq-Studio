@@ -281,7 +281,7 @@ fn is_white_key(pitch: i32) -> bool {
     matches!(pitch % 12, 0 | 2 | 4 | 5 | 7 | 9 | 11)
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ScaleKind {
     Ionian,
     Dorian,

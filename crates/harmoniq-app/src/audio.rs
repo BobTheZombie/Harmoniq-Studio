@@ -579,6 +579,7 @@ impl RealtimeAudio {
                     .output_device
                     .clone()
                     .or_else(|| Some("default".to_string()));
+                #[allow(unused_mut)]
                 let mut base_options =
                     harmoniq_engine::sound_server::UltraLowLatencyOptions::default()
                         .with_device(device.clone());

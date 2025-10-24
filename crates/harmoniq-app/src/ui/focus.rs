@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use egui::{Context, PointerButton, Rect};
+use eframe::egui::{self, Context, Key, PointerButton, Rect};
 
 use crate::ui::workspace::WorkspacePane;
 
@@ -89,7 +89,7 @@ impl InputFocus {
     }
 
     pub fn maybe_release_on_escape(&mut self, ctx: &Context) {
-        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        if ctx.input(|input| input.key_pressed(Key::Escape)) {
             self.clear();
         }
     }
