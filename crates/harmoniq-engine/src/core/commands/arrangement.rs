@@ -35,6 +35,10 @@ impl ProjectCommand for CreateTrackCommand {
             inverse: Box::new(RemoveTrackCommand { track_id, track }),
         })
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 struct RemoveTrackCommand {
@@ -66,6 +70,10 @@ impl ProjectCommand for RemoveTrackCommand {
                 lanes: removed_lanes,
             }),
         })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -100,6 +108,10 @@ impl ProjectCommand for RestoreTrackCommand {
             }),
         })
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[derive(Clone)]
@@ -129,8 +141,13 @@ impl ProjectCommand for AddClipCommand {
             inverse: Box::new(RemoveClipCommand {
                 track_id: self.track_id,
                 clip,
+                lanes: Vec::new(),
             }),
         })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -172,6 +189,10 @@ impl ProjectCommand for RemoveClipCommand {
             }),
         })
     }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 struct RestoreClipCommand {
@@ -201,6 +222,10 @@ impl ProjectCommand for RestoreClipCommand {
                 lanes: self.lanes.clone(),
             }),
         })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -251,5 +276,9 @@ impl ProjectCommand for MoveClipCommand {
             .downcast_ref::<MoveClipCommand>()
             .map(|other| other.clip_id == self.clip_id)
             .unwrap_or(false)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }

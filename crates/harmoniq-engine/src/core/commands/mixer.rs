@@ -1,7 +1,7 @@
 use super::{CommandOutcome, ProjectCommand};
 use crate::core::state::{ProjectState, TrackId};
 use crate::core::CommandError;
-use crate::mixer::{MixerTargetState, MixerTrackState};
+use crate::mixer::MixerTargetState;
 
 #[derive(Clone, Copy)]
 pub enum MixerEndpoint {
@@ -57,5 +57,9 @@ impl ProjectCommand for SetMixerTargetCommand {
                 })
             }
         }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }

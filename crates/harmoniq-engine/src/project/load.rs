@@ -147,7 +147,7 @@ fn parse_archive(
 
     let json_slice = &buffer[20..20 + json_len];
     let media_slice = &buffer[20 + json_len..20 + json_len + media_len];
-    let load_media = |entries: Vec<ProjectMediaEntryV2>| {
+    let mut load_media = |entries: Vec<ProjectMediaEntryV2>| {
         let mut media_assets = Vec::with_capacity(entries.len());
         for entry in entries {
             let ProjectMediaEntryV2 {
