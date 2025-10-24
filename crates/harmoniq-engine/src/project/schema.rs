@@ -3,8 +3,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::core::state::ProjectState;
+
 pub const PROJECT_MAGIC: [u8; 4] = *b"HSQ2";
-pub const CURRENT_VERSION: u32 = 2;
+pub const CURRENT_VERSION: u32 = 3;
 pub const MEDIA_CHUNK_SIZE: usize = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -117,20 +119,46 @@ pub struct ProjectDocument {
     pub version: u32,
     pub metadata: ProjectMetadata,
     pub media: Vec<MediaAsset>,
+    pub state: ProjectState,
 }
 
 impl ProjectDocument {
     pub fn new(metadata: ProjectMetadata, media: Vec<MediaAsset>) -> Self {
-        Self {
-            version: CURRENT_VERSION,
-            metadata,
-            media,
-        }
+        Self::with_state(metadata, media, ProjectState::default())
     }
 
     pub fn with_media(mut self, media: Vec<MediaAsset>) -> Self {
         self.media = media;
         self
+    }
+
+    pub fn with_state(mut self, state: ProjectState) -> Self {
+        self.state = state;
+        self.version = CURRENT_VERSION;
+        self
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectV3 {
+    pub version: u32,
+    pub metadata: ProjectMetadata,
+    pub media: Vec<ProjectMediaEntryV2>,
+    pub state: ProjectState,
+}
+
+impl ProjectV3 {
+    pub fn new(
+        metadata: ProjectMetadata,
+        media: Vec<ProjectMediaEntryV2>,
+        state: ProjectState,
+    ) -> Self {
+        Self {
+            version: CURRENT_VERSION,
+            metadata,
+            media,
+            state,
+        }
     }
 }
 
@@ -139,16 +167,6 @@ pub struct ProjectV2 {
     pub version: u32,
     pub metadata: ProjectMetadata,
     pub media: Vec<ProjectMediaEntryV2>,
-}
-
-impl ProjectV2 {
-    pub fn new(metadata: ProjectMetadata, media: Vec<ProjectMediaEntryV2>) -> Self {
-        Self {
-            version: CURRENT_VERSION,
-            metadata,
-            media,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

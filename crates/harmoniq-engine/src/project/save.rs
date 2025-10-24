@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use super::schema::{
-    MediaChunkDescriptor, ProjectDocument, ProjectMediaEntryV2, ProjectV2, CURRENT_VERSION,
+    MediaChunkDescriptor, ProjectDocument, ProjectMediaEntryV2, ProjectV3, CURRENT_VERSION,
     MEDIA_CHUNK_SIZE, PROJECT_MAGIC,
 };
 
@@ -111,7 +111,7 @@ fn write_archive(
         });
     }
 
-    let project = ProjectV2::new(document.metadata.clone(), entries);
+    let project = ProjectV3::new(document.metadata.clone(), entries, document.state.clone());
     let json = serde_json::to_vec_pretty(&project).map_err(|_| SaveError::ProjectTooLarge)?;
 
     let json_len = u32::try_from(json.len()).map_err(|_| SaveError::ProjectTooLarge)?;

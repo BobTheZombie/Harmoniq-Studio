@@ -9,7 +9,7 @@ use super::migrate;
 use super::save::autosave_path;
 use super::schema::{
     MediaAsset, MediaChecksum, ProjectDocument, ProjectMediaEntryV2, ProjectV1, ProjectV2,
-    CURRENT_VERSION, PROJECT_MAGIC,
+    ProjectV3, PROJECT_MAGIC,
 };
 
 pub type RelinkerCallback<'a> = dyn for<'r> FnMut(RelinkRequest<'r>) -> Option<PathBuf> + 'a;
@@ -121,7 +121,7 @@ fn parse_buffer(
     relinker: Option<&mut RelinkerCallback<'_>>,
 ) -> Result<ProjectDocument, LoadError> {
     if buffer.starts_with(&PROJECT_MAGIC) {
-        parse_v2(buffer, base_dir, relinker)
+        parse_archive(buffer, base_dir, relinker)
     } else {
         let project: ProjectV1 = serde_json::from_slice(buffer)?;
         migrate::from_v1(project, source_path, base_dir)
@@ -129,7 +129,7 @@ fn parse_buffer(
     }
 }
 
-fn parse_v2(
+fn parse_archive(
     buffer: &[u8],
     base_dir: &Path,
     mut relinker: Option<&mut RelinkerCallback<'_>>,
@@ -139,10 +139,6 @@ fn parse_v2(
     }
 
     let version = u32::from_le_bytes(buffer[4..8].try_into().unwrap());
-    if version != CURRENT_VERSION {
-        return Err(LoadError::UnsupportedVersion(version));
-    }
-
     let json_len = u32::from_le_bytes(buffer[8..12].try_into().unwrap()) as usize;
     let media_len = u64::from_le_bytes(buffer[12..20].try_into().unwrap()) as usize;
     if buffer.len() < 20 + json_len + media_len {
@@ -151,75 +147,88 @@ fn parse_v2(
 
     let json_slice = &buffer[20..20 + json_len];
     let media_slice = &buffer[20 + json_len..20 + json_len + media_len];
-    let project: ProjectV2 = serde_json::from_slice(json_slice)?;
+    let load_media = |entries: Vec<ProjectMediaEntryV2>| {
+        let mut media_assets = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let ProjectMediaEntryV2 {
+                id,
+                relative_path,
+                checksum,
+                chunks,
+            } = entry;
 
-    let mut media_assets = Vec::with_capacity(project.media.len());
-    for entry in project.media {
-        let ProjectMediaEntryV2 {
-            id,
-            relative_path,
-            checksum,
-            chunks,
-        } = entry;
-
-        let mut data = Vec::new();
-        for chunk in chunks {
-            let start = chunk.offset as usize;
-            let end = start
-                .checked_add(chunk.length as usize)
-                .ok_or(LoadError::Corrupt("chunk overflow"))?;
-            if end > media_slice.len() {
-                return Err(LoadError::Corrupt("chunk outside media region"));
+            let mut data = Vec::new();
+            for chunk in chunks {
+                let start = chunk.offset as usize;
+                let end = start
+                    .checked_add(chunk.length as usize)
+                    .ok_or(LoadError::Corrupt("chunk overflow"))?;
+                if end > media_slice.len() {
+                    return Err(LoadError::Corrupt("chunk outside media region"));
+                }
+                if chunk.length > 0 {
+                    data.extend_from_slice(&media_slice[start..end]);
+                }
             }
-            if chunk.length > 0 {
-                data.extend_from_slice(&media_slice[start..end]);
+
+            if !checksum.validate(&data) {
+                return Err(LoadError::CorruptMedia { id });
             }
-        }
 
-        if !checksum.validate(&data) {
-            return Err(LoadError::CorruptMedia { id });
-        }
-
-        let mut asset = MediaAsset {
-            id,
-            relative_path,
-            checksum,
-            data,
-            resolved_path: None,
-        };
-        let resolved = base_dir.join(&asset.relative_path);
-        if resolved.exists() {
-            asset.resolved_path = Some(resolved);
-        } else if let Some(relinker_fn) = relinker.as_mut() {
-            let relinker_fn = &mut **relinker_fn;
-            let request = RelinkRequest {
-                id: &asset.id,
-                relative_path: &asset.relative_path,
-                checksum: &asset.checksum,
-                data: &asset.data,
+            let mut asset = MediaAsset {
+                id,
+                relative_path,
+                checksum,
+                data,
+                resolved_path: None,
             };
-            if let Some(new_path) = (relinker_fn)(request) {
-                let absolute = if new_path.is_absolute() {
-                    new_path
-                } else {
-                    base_dir.join(&new_path)
+            let resolved = base_dir.join(&asset.relative_path);
+            if resolved.exists() {
+                asset.resolved_path = Some(resolved);
+            } else if let Some(relinker_fn) = relinker.as_mut() {
+                let relinker_fn = &mut **relinker_fn;
+                let request = RelinkRequest {
+                    id: &asset.id,
+                    relative_path: &asset.relative_path,
+                    checksum: &asset.checksum,
+                    data: &asset.data,
                 };
-                asset.update_relative_path(base_dir, absolute);
+                if let Some(new_path) = (relinker_fn)(request) {
+                    let absolute = if new_path.is_absolute() {
+                        new_path
+                    } else {
+                        base_dir.join(&new_path)
+                    };
+                    asset.update_relative_path(base_dir, absolute);
+                } else {
+                    return Err(LoadError::MissingMedia {
+                        id: asset.id,
+                        path: asset.relative_path,
+                    });
+                }
             } else {
                 return Err(LoadError::MissingMedia {
                     id: asset.id,
                     path: asset.relative_path,
                 });
             }
-        } else {
-            return Err(LoadError::MissingMedia {
-                id: asset.id,
-                path: asset.relative_path,
-            });
+
+            media_assets.push(asset);
         }
+        Ok(media_assets)
+    };
 
-        media_assets.push(asset);
+    match version {
+        2 => {
+            let project: ProjectV2 = serde_json::from_slice(json_slice)?;
+            let media_assets = load_media(project.media)?;
+            Ok(ProjectDocument::new(project.metadata, media_assets))
+        }
+        3 => {
+            let project: ProjectV3 = serde_json::from_slice(json_slice)?;
+            let media_assets = load_media(project.media)?;
+            Ok(ProjectDocument::new(project.metadata, media_assets).with_state(project.state))
+        }
+        other => Err(LoadError::UnsupportedVersion(other)),
     }
-
-    Ok(ProjectDocument::new(project.metadata, media_assets))
 }
