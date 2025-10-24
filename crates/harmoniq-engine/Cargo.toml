@@ -25,6 +25,7 @@ core_affinity = { version = "0.8", optional = true }
 arc-swap = "1.6"
 symphonia = { version = "0.5", features = ["wav", "flac", "aiff", "pcm"] }
 hound = "3.5"
+flacenc = "0.5"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

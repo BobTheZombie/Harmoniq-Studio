@@ -15,6 +15,7 @@ pub mod media;
 pub mod mixer;
 pub mod nodes;
 pub mod plugin;
+pub mod render;
 pub mod rt;
 mod scratch;
 pub mod sound_server;
@@ -42,6 +43,11 @@ pub use mixer::{
 pub use nodes::{GainNode, NodeNoise, NodeOsc, NoiseNode, SineNode};
 pub use plugin::{
     AudioProcessor, MidiEvent, MidiProcessor, MidiTimestamp, PluginDescriptor, PluginId,
+};
+pub use render::{
+    DitherKind, FreezeSettings, OfflineRenderer, RenderDuration, RenderFile, RenderFormat,
+    RenderProject, RenderQueue, RenderReport, RenderRequest, RenderResult, RenderSpeed,
+    StemSettings,
 };
 pub use rt::{AudioMetrics, AudioMetricsCollector};
 pub use time::{
