@@ -16,7 +16,7 @@ fn graph_applies_gain_and_pan() {
         let _ = port.try_send(ParamUpdate::new(0, -6.0));
     }
 
-    let mut input = vec![1.0f32; 2 * 64];
+    let input = vec![1.0f32; 2 * 64];
     let mut output = vec![0.0f32; 2 * 64];
     unsafe {
         let input_block = AudioBlock::from_interleaved(input.as_ptr(), 2, 64);
