@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, Context};
 use clap::Parser;
 use eframe::egui::{
     self, Align2, CursorIcon, Id, Margin, PointerButton, RichText, Rounding, Stroke,
@@ -759,6 +759,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
+    #[cfg(feature = "openasio")]
     let selected_backend = runtime_options.backend();
 
     let sample_rate = {
@@ -828,7 +829,6 @@ fn main() -> anyhow::Result<()> {
         )
     } else {
         run_ui(
-            &args,
             runtime_options,
             sample_rate,
             block_size,
@@ -843,7 +843,7 @@ fn run_headless(
     runtime: AudioRuntimeOptions,
     sample_rate: f32,
     block_size: usize,
-    time_signature: TimeSignature,
+    _time_signature: TimeSignature,
     bpm: f32,
 ) -> anyhow::Result<()> {
     let config = BufferConfig::new(sample_rate, block_size, ChannelLayout::Stereo);
@@ -930,7 +930,6 @@ fn run_headless_offline_preview(
 }
 
 fn run_ui(
-    args: &Cli,
     runtime: AudioRuntimeOptions,
     sample_rate: f32,
     block_size: usize,
