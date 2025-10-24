@@ -69,8 +69,8 @@ impl<'a> SlotView<'a> {
             self.index + 1
         ));
 
-        response
-            .context_menu(|ui| {
+        if let Some(egui::InnerResponse { response: ctx_response, .. }) =
+            response.clone().context_menu(|ui| {
                 ui.label(RichText::new(label).strong());
                 ui.separator();
                 if ui.button("Bypass").clicked() {
@@ -87,7 +87,11 @@ impl<'a> SlotView<'a> {
                     ui.close_menu();
                 }
             })
-            .response
+        {
+            response = ctx_response;
+        }
+
+        response
     }
 }
 
