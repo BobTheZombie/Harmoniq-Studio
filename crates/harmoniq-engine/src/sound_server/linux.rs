@@ -3,6 +3,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use anyhow::{anyhow, Context};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -82,9 +83,7 @@ impl UltraLowLatencyOptions {
 pub struct UltraOpenAsioOptions {
     pub driver_path: String,
     pub device: Option<String>,
-    pub noninterleaved: bool,
-    pub in_channels: Option<u16>,
-    pub out_channels: Option<u16>,
+    pub sample_rate: Option<u32>,
 }
 
 #[cfg(feature = "openasio")]
@@ -93,9 +92,7 @@ impl UltraOpenAsioOptions {
         Self {
             driver_path: driver_path.into(),
             device: None,
-            noninterleaved: false,
-            in_channels: None,
-            out_channels: None,
+            sample_rate: None,
         }
     }
 
@@ -104,18 +101,8 @@ impl UltraOpenAsioOptions {
         self
     }
 
-    pub fn with_noninterleaved(mut self, noninterleaved: bool) -> Self {
-        self.noninterleaved = noninterleaved;
-        self
-    }
-
-    pub fn with_in_channels(mut self, channels: Option<u16>) -> Self {
-        self.in_channels = channels;
-        self
-    }
-
-    pub fn with_out_channels(mut self, channels: Option<u16>) -> Self {
-        self.out_channels = channels;
+    pub fn with_sample_rate(mut self, sample_rate: Option<u32>) -> Self {
+        self.sample_rate = sample_rate;
         self
     }
 }
@@ -247,10 +234,7 @@ impl UltraLowLatencyServer {
             .clone()
             .unwrap_or_else(|| "default".to_string());
 
-        let out_channels = openasio
-            .out_channels
-            .unwrap_or(config.layout.channels() as u16)
-            .max(1);
+        let out_channels = u16::from(config.layout.channels().max(1));
         let out_channels_usize = out_channels as usize;
         if out_channels_usize != config.layout.channels() as usize {
             tracing::warn!(
@@ -296,23 +280,19 @@ impl UltraLowLatencyServer {
             })
             .context("failed to spawn render thread")?;
 
-        let sample_rate = config.sample_rate.round() as u32;
+        let sample_rate = openasio
+            .sample_rate
+            .unwrap_or_else(|| config.sample_rate.round() as u32)
+            .max(1);
         let buffer_frames = options
             .buffer_frames
             .unwrap_or(config.block_size as u32)
             .max(1);
-        let desired = EngineStreamConfig::new(
-            sample_rate,
-            buffer_frames,
-            openasio.in_channels.unwrap_or(0),
-            out_channels,
-            !openasio.noninterleaved,
-        );
+        let desired = EngineStreamConfig::new(sample_rate, buffer_frames, 0, out_channels, true);
 
         let mut backend = OpenAsioBackend::new(
             openasio.driver_path.clone(),
             device_selection.clone(),
-            openasio.noninterleaved,
             desired,
         );
         let process = QueueProcess::new(
@@ -683,17 +663,28 @@ fn render_loop(
     let mut buffer = AudioBuffer::from_config(config.clone());
     let output_channels = target_channels.max(1);
     let mut interleaved = vec![0.0f32; buffer.len().max(1) * output_channels];
+    let block_period_ns = if config.sample_rate > 0.0 && config.block_size > 0 {
+        ((config.block_size as f64 / config.sample_rate as f64) * 1e9) as u64
+    } else {
+        0
+    };
 
     while running.load(Ordering::Relaxed) {
         if let Ok(ControlMessage::Stop) = control_rx.try_recv() {
             break;
         }
 
-        {
+        let start = Instant::now();
+        let result = {
             let mut guard = engine.lock();
-            guard
-                .process_block(&mut buffer)
-                .context("engine processing failed")?;
+            guard.process_block(&mut buffer)
+        };
+        let elapsed = start.elapsed();
+        metrics.record_block(elapsed, block_period_ns);
+        if let Err(err) = result {
+            tracing::warn!(?err, "engine processing failed in realtime render loop");
+            metrics.register_xrun();
+            buffer.clear();
         }
 
         let frames = buffer.len();

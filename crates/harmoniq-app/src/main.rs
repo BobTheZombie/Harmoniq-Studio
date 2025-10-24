@@ -97,11 +97,6 @@ struct Cli {
     #[arg(long)]
     openasio_device: Option<String>,
 
-    /// Request non-interleaved buffers from OpenASIO drivers
-    #[cfg(feature = "openasio")]
-    #[arg(long, default_value_t = false)]
-    openasio_noninterleaved: bool,
-
     /// Override the OpenASIO sample rate when using the ultra runtime
     #[cfg(feature = "openasio")]
     #[arg(long)]
@@ -111,16 +106,6 @@ struct Cli {
     #[cfg(feature = "openasio")]
     #[arg(long)]
     openasio_buffer: Option<u32>,
-
-    /// Number of input channels when using OpenASIO
-    #[cfg(feature = "openasio")]
-    #[arg(long)]
-    openasio_in: Option<u16>,
-
-    /// Number of output channels when using OpenASIO
-    #[cfg(feature = "openasio")]
-    #[arg(long)]
-    openasio_out: Option<u16>,
 
     /// Disable realtime audio streaming
     #[arg(long, default_value_t = false)]
@@ -597,11 +582,8 @@ fn main() -> anyhow::Result<()> {
     {
         runtime_options.openasio_driver = args.openasio_driver.clone();
         runtime_options.openasio_device = args.openasio_device.clone();
-        runtime_options.openasio_noninterleaved = args.openasio_noninterleaved;
         runtime_options.openasio_sample_rate = args.openasio_sr;
         runtime_options.openasio_buffer_frames = args.openasio_buffer;
-        runtime_options.openasio_in_channels = args.openasio_in;
-        runtime_options.openasio_out_channels = args.openasio_out;
     }
 
     if ultra_mode && runtime_options.backend() == AudioBackend::Auto {

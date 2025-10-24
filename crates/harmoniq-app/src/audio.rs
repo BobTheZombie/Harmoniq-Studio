@@ -291,15 +291,9 @@ pub struct AudioRuntimeOptions {
     #[cfg(feature = "openasio")]
     pub openasio_device: Option<String>,
     #[cfg(feature = "openasio")]
-    pub openasio_noninterleaved: bool,
-    #[cfg(feature = "openasio")]
     pub openasio_sample_rate: Option<u32>,
     #[cfg(feature = "openasio")]
     pub openasio_buffer_frames: Option<u32>,
-    #[cfg(feature = "openasio")]
-    pub openasio_in_channels: Option<u16>,
-    #[cfg(feature = "openasio")]
-    pub openasio_out_channels: Option<u16>,
 }
 
 impl AudioRuntimeOptions {
@@ -314,15 +308,9 @@ impl AudioRuntimeOptions {
             #[cfg(feature = "openasio")]
             openasio_device: None,
             #[cfg(feature = "openasio")]
-            openasio_noninterleaved: false,
-            #[cfg(feature = "openasio")]
             openasio_sample_rate: None,
             #[cfg(feature = "openasio")]
             openasio_buffer_frames: None,
-            #[cfg(feature = "openasio")]
-            openasio_in_channels: None,
-            #[cfg(feature = "openasio")]
-            openasio_out_channels: None,
         }
     }
 
@@ -575,9 +563,8 @@ impl RealtimeAudio {
                 let openasio_request = {
                     let wants_openasio = options.openasio_driver.is_some()
                         || options.openasio_device.is_some()
-                        || options.openasio_in_channels.is_some()
-                        || options.openasio_out_channels.is_some()
-                        || options.openasio_noninterleaved;
+                        || options.openasio_sample_rate.is_some()
+                        || options.openasio_buffer_frames.is_some();
                     if wants_openasio {
                         let default_driver = if cfg!(debug_assertions) {
                             "target/debug/libopenasio_driver_cpal.so"
@@ -596,9 +583,7 @@ impl RealtimeAudio {
                         Some(
                             UltraOpenAsioOptions::new(driver_path)
                                 .with_device(device_selection)
-                                .with_noninterleaved(options.openasio_noninterleaved)
-                                .with_in_channels(options.openasio_in_channels)
-                                .with_out_channels(options.openasio_out_channels),
+                                .with_sample_rate(options.openasio_sample_rate),
                         )
                     } else {
                         None
@@ -1690,29 +1675,26 @@ mod openasio_rt {
                 .clone()
                 .unwrap_or_else(|| "default".to_string());
 
-            let interleaved = !options.openasio_noninterleaved;
-            let out_channels = options
-                .openasio_out_channels
-                .unwrap_or(config.layout.channels() as u16);
-            let in_channels = options.openasio_in_channels.unwrap_or(0);
-            let sample_rate = config.sample_rate.round() as u32;
-            let buffer_frames = config.block_size as u32;
-            let desired = EngineStreamConfig::new(
-                sample_rate,
-                buffer_frames.max(1),
-                in_channels,
-                out_channels,
-                interleaved,
-            );
+            let out_channels = u16::from(config.layout.channels().max(1));
+            let sample_rate = options
+                .openasio_sample_rate
+                .unwrap_or_else(|| config.sample_rate.round() as u32)
+                .max(1);
+            let buffer_frames = options
+                .openasio_buffer_frames
+                .unwrap_or(config.block_size as u32)
+                .max(1);
+            let desired =
+                EngineStreamConfig::new(sample_rate, buffer_frames, 0, out_channels, true);
 
-            let rt = RtProcess::new(Arc::clone(&engine), config.clone(), out_channels as usize)?;
+            let rt = RtProcess::new(
+                Arc::clone(&engine),
+                config.clone(),
+                out_channels as usize,
+                buffer_frames as usize,
+            )?;
 
-            let mut backend = OpenAsioBackend::new(
-                driver_path,
-                device_selection.clone(),
-                options.openasio_noninterleaved,
-                desired,
-            );
+            let mut backend = OpenAsioBackend::new(driver_path, device_selection.clone(), desired);
             backend.start(Box::new(rt))?;
 
             let device_id = Some(format!("openasio::{}", device_name));
@@ -1753,9 +1735,10 @@ mod openasio_rt {
             engine: Arc<Mutex<HarmoniqEngine>>,
             config: BufferConfig,
             out_channels: usize,
+            queue_frames: usize,
         ) -> Result<Self> {
             let channels = out_channels.max(1);
-            let frames = config.block_size.max(1);
+            let frames = queue_frames.max(1);
             let capacity = frames
                 .saturating_mul(channels)
                 .saturating_mul(4)
