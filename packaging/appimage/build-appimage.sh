@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APPDIR="$ROOT_DIR/appimage/AppDir"
+SHARED_DIR="$ROOT_DIR/shared"
 DIST_DIR="$ROOT_DIR/../dist"
 PROJECT_ROOT="$(dirname "$ROOT_DIR")"
 APPIMAGE_TOOL=${APPIMAGE_TOOL:-appimagetool}
@@ -21,7 +22,7 @@ popd >/dev/null
 
 install -Dm755 "$PROJECT_ROOT/target/release/harmoniq-app" "$APPDIR/usr/bin/harmoniq-studio"
 install -Dm755 "$ROOT_DIR/appimage/AppRun" "$APPDIR/AppRun"
-install -Dm644 "$ROOT_DIR/appimage/harmoniq-studio.desktop" "$APPDIR/usr/share/applications/harmoniq-studio.desktop"
+install -Dm644 "$SHARED_DIR/harmoniq-studio.desktop" "$APPDIR/usr/share/applications/harmoniq-studio.desktop"
 install -Dm644 "$PROJECT_ROOT/resources/icons/harmoniq-studio.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/harmoniq-studio.svg"
 
 if command -v linuxdeploy >/dev/null 2>&1; then
