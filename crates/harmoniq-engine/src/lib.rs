@@ -27,6 +27,7 @@ pub use graph::{GraphBuilder, GraphHandle, NodeHandle};
 pub use nodes::{GainNode, NodeNoise, NodeOsc, NoiseNode, SineNode};
 pub use plugin::{AudioProcessor, MidiEvent, MidiProcessor, PluginDescriptor, PluginId};
 pub use rt::{AudioMetrics, AudioMetricsCollector};
+pub use time::{BeatInfo, LoopRegion, Tempo, TempoMap, TempoSegment, TimeSignature, Transport};
 
 #[cfg(feature = "openasio")]
 pub mod backend;

@@ -5,8 +5,9 @@ use ringbuf::{HeapConsumer, HeapProducer, HeapRb};
 
 use harmoniq_dsp::{AudioBlock, AudioBlockMut};
 
-use crate::dsp::events::{MidiEvent, Transport};
+use crate::dsp::events::MidiEvent;
 use crate::dsp::params::ParamUpdate;
+use crate::time::Transport;
 
 pub type NodeId = u32;
 
@@ -210,6 +211,7 @@ impl DspGraph {
             return;
         }
         let exec_count = self.exec_order.len();
+        let transport_snapshot = block.transport.clone();
         for exec_index in 0..exec_count {
             let exec = self.exec_order[exec_index];
             {
@@ -272,7 +274,7 @@ impl DspGraph {
                 frames,
                 inputs: input_block,
                 outputs: output_block,
-                transport: block.transport,
+                transport: transport_snapshot.clone(),
                 midi: block.midi,
             };
             let node_slot = &mut self.nodes[exec.node_index];

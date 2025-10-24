@@ -40,7 +40,7 @@ impl GraphHandle {
         self.plugin_nodes
             .iter()
             .filter_map(|index| match &self.graph[*index] {
-            NodeKind::Plugin { id } => Some(*id),
+                NodeKind::Plugin { id } => Some(*id),
                 _ => None,
             })
             .collect()

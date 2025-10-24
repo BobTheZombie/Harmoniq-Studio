@@ -22,6 +22,7 @@ openasio = { git = "https://github.com/BobTheZombie/OpenASIO-SDK", package = "op
 crossbeam-queue.workspace = true
 ringbuf.workspace = true
 core_affinity = { version = "0.8", optional = true }
+arc-swap = "1.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
