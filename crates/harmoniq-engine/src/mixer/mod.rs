@@ -417,7 +417,7 @@ impl TrackEngine {
         for proc_opt in self.pre_inserts.iter() {
             if let Some(processor) = proc_opt {
                 if let Some(mut guard) = processor.try_lock() {
-                    guard(&mut self.pre_buffer);
+                    guard.process(&mut self.pre_buffer);
                 }
             }
         }
@@ -429,7 +429,7 @@ impl TrackEngine {
         for proc_opt in self.post_inserts.iter() {
             if let Some(processor) = proc_opt {
                 if let Some(mut guard) = processor.try_lock() {
-                    guard(&mut self.post_buffer);
+                    guard.process(&mut self.post_buffer);
                 }
             }
         }
@@ -509,7 +509,7 @@ impl BusEngine {
         for proc_opt in self.post_inserts.iter() {
             if let Some(processor) = proc_opt {
                 if let Some(mut guard) = processor.try_lock() {
-                    guard(buffer);
+                    guard.process(buffer);
                 }
             }
         }

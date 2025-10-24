@@ -21,7 +21,7 @@ impl Default for MeterReadout {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MeterHandle {
     inner: Arc<Mutex<MeterReadout>>,
 }
