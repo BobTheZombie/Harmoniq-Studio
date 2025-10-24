@@ -1,4 +1,4 @@
-use eframe::egui::{self, RichText};
+use eframe::egui::{self, RichText, Slider};
 use harmoniq_ui::{Fader, HarmoniqPalette, Knob, LevelMeter};
 
 use crate::ui::event_bus::{AppEvent, EventBus};
@@ -9,6 +9,13 @@ struct MixerTrack {
     pan: f32,
     meter_left: f32,
     meter_right: f32,
+    width: f32,
+    phase_invert: bool,
+    aux_send: f32,
+    aux_pre: bool,
+    true_peak: f32,
+    short_term: f32,
+    phase_correlation: f32,
 }
 
 impl MixerTrack {
@@ -19,6 +26,13 @@ impl MixerTrack {
             pan: 0.0,
             meter_left: 0.0,
             meter_right: 0.0,
+            width: 1.0,
+            phase_invert: false,
+            aux_send: -12.0,
+            aux_pre: false,
+            true_peak: f32::NEG_INFINITY,
+            short_term: f32::NEG_INFINITY,
+            phase_correlation: 1.0,
         }
     }
 
@@ -28,8 +42,24 @@ impl MixerTrack {
         let left_weight = (1.0 - pan) * 0.5;
         let right_weight = (1.0 + pan) * 0.5;
         let gain = self.volume.clamp(0.0, 1.2);
-        self.meter_left = (base * gain * left_weight).clamp(0.0, 1.0);
-        self.meter_right = (base * gain * right_weight).clamp(0.0, 1.0);
+        let width = self.width.clamp(0.0, 2.0);
+        let mid = base * gain;
+        let side = (left_weight - right_weight).abs() * gain * (width - 1.0).abs() * 0.25;
+        let phase = if self.phase_invert { -1.0 } else { 1.0 };
+        self.meter_left = (mid * left_weight + side).clamp(0.0, 1.0);
+        self.meter_right = (mid * right_weight - side).clamp(0.0, 1.0);
+        let peak = self.meter_left.max(self.meter_right).max(1e-4);
+        self.true_peak = 20.0 * peak.log10();
+        let energy = ((self.meter_left * self.meter_left) + (self.meter_right * self.meter_right))
+            * 0.5
+            * 0.001;
+        self.short_term = if energy > 0.0 {
+            -0.691 + 10.0 * energy.log10()
+        } else {
+            f32::NEG_INFINITY
+        };
+        let correlation = ((1.0 - pan.abs()) * phase).clamp(-1.0, 1.0);
+        self.phase_correlation = correlation;
     }
 }
 
@@ -114,12 +144,44 @@ impl MixerPane {
                     {
                         track.pan = pan;
                     }
+                    ui.add_space(8.0);
+                    let mut width = track.width;
+                    if ui
+                        .add(
+                            Knob::new(&mut width, 0.0, 2.0, 1.0, "Width", palette)
+                                .with_diameter(44.0),
+                        )
+                        .changed()
+                    {
+                        track.width = width;
+                    }
                     ui.add_space(12.0);
                     ui.add(LevelMeter::new(palette).with_levels(
                         track.meter_left,
                         track.meter_right,
                         (track.meter_left + track.meter_right) * 0.5,
                     ));
+                    ui.add_space(8.0);
+                    let mut invert = track.phase_invert;
+                    if ui.checkbox(&mut invert, "Phase Invert").changed() {
+                        track.phase_invert = invert;
+                    }
+                    ui.add_space(6.0);
+                    ui.add(Slider::new(&mut track.aux_send, -60.0..=6.0).text("Aux Send (dB)"));
+                    ui.checkbox(&mut track.aux_pre, "Pre-Fader");
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(format!("True Peak: {:.1} dBFS", track.true_peak))
+                            .color(palette.text_secondary),
+                    );
+                    ui.label(
+                        RichText::new(format!("Short-Term: {:.1} LUFS", track.short_term))
+                            .color(palette.text_secondary),
+                    );
+                    ui.label(
+                        RichText::new(format!("Phase Corr: {:.2}", track.phase_correlation))
+                            .color(palette.text_secondary),
+                    );
                     ui.add_space(8.0);
                     if ui.button("Insert FX").clicked() {
                         event_bus.publish(AppEvent::RequestRepaint);
