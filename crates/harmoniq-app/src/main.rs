@@ -11,7 +11,7 @@ use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 
 use anyhow::{anyhow, Context};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use eframe::egui::{
     self, Align2, CursorIcon, Id, Margin, PointerButton, RichText, Rounding, Stroke,
     ViewportCommand,
@@ -32,8 +32,10 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tracing::{error, warn};
 use tracing_subscriber::EnvFilter;
+use winit::event::{ModifiersState, VirtualKeyCode};
 
 mod audio;
+mod config;
 mod midi;
 mod ui;
 
@@ -41,7 +43,8 @@ use audio::{
     available_backends, describe_layout, AudioBackend, AudioRuntimeOptions, RealtimeAudio,
     SoundTestSample,
 };
-use midi::list_midi_inputs;
+use config::qwerty::{QwertyConfig, VelocityCurveSetting};
+use midi::{list_midi_inputs, MidiInputDevice, QwertyKeyboardInput};
 use ui::{
     audio_settings::{ActiveAudioSummary, AudioSettingsAction, AudioSettingsPanel},
     browser::BrowserPane,
@@ -65,6 +68,14 @@ use ui::{
     transport::{TransportBar, TransportSnapshot},
     workspace::{build_default_workspace, WorkspacePane},
 };
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum QwertyCurveArg {
+    Linear,
+    Soft,
+    Hard,
+    Fixed,
+}
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Harmoniq Studio prototype")]
@@ -144,6 +155,30 @@ struct Cli {
     /// List available MIDI input ports
     #[arg(long, default_value_t = false)]
     list_midi_inputs: bool,
+
+    /// Force-enable the QWERTY keyboard input device
+    #[arg(long, default_value_t = false)]
+    qwerty: bool,
+
+    /// Disable the QWERTY keyboard input device
+    #[arg(long, default_value_t = false)]
+    no_qwerty: bool,
+
+    /// Override the default octave for the QWERTY keyboard
+    #[arg(long)]
+    qwerty_octave: Option<i8>,
+
+    /// Select the velocity curve for the QWERTY keyboard
+    #[arg(long, value_enum)]
+    qwerty_curve: Option<QwertyCurveArg>,
+
+    /// Fixed velocity value (0-127) used when the velocity curve is "fixed"
+    #[arg(long)]
+    qwerty_velocity: Option<u8>,
+
+    /// MIDI channel (1-16) used for the QWERTY keyboard
+    #[arg(long)]
+    qwerty_channel: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -745,6 +780,42 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    let available_ports = list_midi_inputs().unwrap_or_else(|err| {
+        warn!("Unable to enumerate MIDI inputs: {err}");
+        Vec::new()
+    });
+
+    let mut qwerty_config = QwertyConfig::load();
+    if args.no_qwerty {
+        qwerty_config.file.enabled = false;
+    } else if args.qwerty {
+        qwerty_config.file.enabled = true;
+    } else if available_ports.is_empty() {
+        qwerty_config.file.enabled = true;
+    }
+
+    if let Some(octave) = args.qwerty_octave {
+        qwerty_config.file.octave = octave.clamp(1, 7);
+    }
+
+    if let Some(channel) = args.qwerty_channel {
+        qwerty_config.file.channel = channel.clamp(1, 16);
+    }
+
+    if let Some(curve) = args.qwerty_curve {
+        qwerty_config.file.velocity_curve = match curve {
+            QwertyCurveArg::Linear => VelocityCurveSetting::Linear,
+            QwertyCurveArg::Soft => VelocityCurveSetting::Soft,
+            QwertyCurveArg::Hard => VelocityCurveSetting::Hard,
+            QwertyCurveArg::Fixed => VelocityCurveSetting::Fixed,
+        };
+    }
+
+    if let Some(velocity) = args.qwerty_velocity {
+        qwerty_config.file.fixed_velocity = velocity.min(127);
+        qwerty_config.file.velocity_curve = VelocityCurveSetting::Fixed;
+    }
+
     let mut runtime_options = AudioRuntimeOptions::new(
         args.audio_backend,
         args.midi_input.clone(),
@@ -854,6 +925,7 @@ fn main() -> anyhow::Result<()> {
             block_size,
             initial_signature,
             initial_bpm,
+            qwerty_config,
         )
     }
 }
@@ -986,6 +1058,7 @@ fn run_ui(
     block_size: usize,
     time_signature: TimeSignature,
     bpm: f32,
+    qwerty_config: QwertyConfig,
 ) -> anyhow::Result<()> {
     let native_options = NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
@@ -997,6 +1070,7 @@ fn run_ui(
     let tempo_for_app = bpm;
     let signature_for_app = time_signature;
     let runtime_for_app = runtime.clone();
+    let qwerty_config_for_app = qwerty_config.clone();
 
     eframe::run_native(
         "Harmoniq Studio",
@@ -1009,6 +1083,7 @@ fn run_ui(
                 tempo_for_app,
                 signature_for_app,
                 runtime_for_app.clone(),
+                qwerty_config_for_app.clone(),
                 cc,
             ) {
                 Ok(app) => app,
@@ -1263,6 +1338,8 @@ struct HarmoniqStudioApp {
     midi_channel: u8,
     engine_runner: EngineRunner,
     command_queue: harmoniq_engine::EngineCommandQueue,
+    qwerty: Option<QwertyKeyboardInput>,
+    qwerty_config: QwertyConfig,
     transport: Arc<EngineTransport>,
     engine_context: Arc<Mutex<EngineContext>>,
     tempo: f32,
@@ -1288,6 +1365,7 @@ impl HarmoniqStudioApp {
         initial_tempo: f32,
         initial_time_signature: TimeSignature,
         runtime: AudioRuntimeOptions,
+        qwerty_config: QwertyConfig,
         cc: &CreationContext<'_>,
     ) -> anyhow::Result<Self> {
         let theme = HarmoniqTheme::init(&cc.egui_ctx);
@@ -1309,6 +1387,8 @@ impl HarmoniqStudioApp {
             command_queue.clone(),
             runtime,
         )?;
+
+        let qwerty = Some(QwertyKeyboardInput::new(qwerty_config.file.clone()));
 
         let engine_context = Arc::new(Mutex::new(EngineContext::new(
             initial_tempo,
@@ -1384,6 +1464,8 @@ impl HarmoniqStudioApp {
             midi_channel: 1,
             engine_runner,
             command_queue,
+            qwerty,
+            qwerty_config,
             transport,
             engine_context,
             tempo: initial_tempo,
@@ -1540,6 +1622,62 @@ impl HarmoniqStudioApp {
         }
     }
 
+    fn process_qwerty_keyboard(&mut self, ctx: &egui::Context) {
+        let Some(device) = self.qwerty.as_mut() else {
+            return;
+        };
+
+        if !device.enabled() {
+            return;
+        }
+
+        if ctx.wants_keyboard_input() {
+            device.panic(Instant::now());
+            return;
+        }
+
+        let mut lost_focus = false;
+        ctx.input(|input| {
+            if !input.focused {
+                lost_focus = true;
+            }
+            for event in &input.events {
+                if let egui::Event::Key {
+                    key,
+                    pressed,
+                    repeat,
+                    modifiers,
+                    ..
+                } = event
+                {
+                    if *repeat {
+                        continue;
+                    }
+                    if let Some(code) = map_virtual_key(*key) {
+                        let modifiers_state = map_modifiers_state(*modifiers);
+                        device.push_key_event(code, *pressed, modifiers_state, Instant::now());
+                    }
+                }
+            }
+        });
+
+        if lost_focus {
+            device.panic(Instant::now());
+        }
+
+        let mut collected = Vec::new();
+        device.drain_events(&mut |event, _timestamp| {
+            collected.push(event);
+        });
+
+        if !collected.is_empty() {
+            let command = EngineCommand::SubmitMidi(collected);
+            if let Err(command) = self.command_queue.try_send(command) {
+                self.status_message = Some(format!("Command queue full: {command:?}"));
+            }
+        }
+    }
+
     fn handle_transport_event(&mut self, event: TransportEvent) {
         match event {
             TransportEvent::Play => {
@@ -1589,6 +1727,66 @@ impl HarmoniqStudioApp {
         ctx.clock = self.transport_clock;
         ctx.master_meter = self.mixer.master_meter();
     }
+}
+
+fn map_virtual_key(key: egui::Key) -> Option<VirtualKeyCode> {
+    use egui::Key;
+    match key {
+        Key::Q => Some(VirtualKeyCode::Q),
+        Key::W => Some(VirtualKeyCode::W),
+        Key::E => Some(VirtualKeyCode::E),
+        Key::R => Some(VirtualKeyCode::R),
+        Key::T => Some(VirtualKeyCode::T),
+        Key::Y => Some(VirtualKeyCode::Y),
+        Key::U => Some(VirtualKeyCode::U),
+        Key::I => Some(VirtualKeyCode::I),
+        Key::O => Some(VirtualKeyCode::O),
+        Key::P => Some(VirtualKeyCode::P),
+        Key::A => Some(VirtualKeyCode::A),
+        Key::S => Some(VirtualKeyCode::S),
+        Key::D => Some(VirtualKeyCode::D),
+        Key::F => Some(VirtualKeyCode::F),
+        Key::G => Some(VirtualKeyCode::G),
+        Key::H => Some(VirtualKeyCode::H),
+        Key::J => Some(VirtualKeyCode::J),
+        Key::K => Some(VirtualKeyCode::K),
+        Key::L => Some(VirtualKeyCode::L),
+        Key::Z => Some(VirtualKeyCode::Z),
+        Key::X => Some(VirtualKeyCode::X),
+        Key::C => Some(VirtualKeyCode::C),
+        Key::V => Some(VirtualKeyCode::V),
+        Key::B => Some(VirtualKeyCode::B),
+        Key::N => Some(VirtualKeyCode::N),
+        Key::M => Some(VirtualKeyCode::M),
+        Key::Comma => Some(VirtualKeyCode::Comma),
+        Key::Slash => Some(VirtualKeyCode::Slash),
+        Key::OpenBracket => Some(VirtualKeyCode::LBracket),
+        Key::Num0 => Some(VirtualKeyCode::Key0),
+        Key::Num1 => Some(VirtualKeyCode::Key1),
+        Key::Num2 => Some(VirtualKeyCode::Key2),
+        Key::Num3 => Some(VirtualKeyCode::Key3),
+        Key::Num4 => Some(VirtualKeyCode::Key4),
+        Key::Num5 => Some(VirtualKeyCode::Key5),
+        Key::Num6 => Some(VirtualKeyCode::Key6),
+        Key::Num7 => Some(VirtualKeyCode::Key7),
+        Key::Num8 => Some(VirtualKeyCode::Key8),
+        Key::Num9 => Some(VirtualKeyCode::Key9),
+        Key::Space => Some(VirtualKeyCode::Space),
+        Key::Escape => Some(VirtualKeyCode::Escape),
+        _ => None,
+    }
+}
+
+fn map_modifiers_state(modifiers: egui::Modifiers) -> ModifiersState {
+    let mut state = ModifiersState::empty();
+    state.set(ModifiersState::SHIFT, modifiers.shift);
+    state.set(ModifiersState::CONTROL, modifiers.ctrl);
+    state.set(ModifiersState::ALT, modifiers.alt);
+    state.set(
+        ModifiersState::SUPER,
+        modifiers.mac_cmd || modifiers.command,
+    );
+    state
 }
 
 impl CommandHandler for HarmoniqStudioApp {
@@ -1936,6 +2134,7 @@ impl App for HarmoniqStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint_after(Duration::from_millis(16));
         self.shortcuts.handle_input(ctx, &self.command_sender);
+        self.process_qwerty_keyboard(ctx);
         for command in self.command_dispatcher.drain_pending() {
             self.handle_command(command);
         }

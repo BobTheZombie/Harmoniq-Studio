@@ -30,6 +30,7 @@ flacenc = { version = "0.5", default-features = false }
 mp3lame-encoder = { version = "0.2", features = ["std"] }
 openasio = { git = "https://github.com/BobTheZombie/OpenASIO-SDK", package = "openasio", optional = true }
 dirs.workspace = true
+winit = "0.29"
 
 [features]
 default = []
