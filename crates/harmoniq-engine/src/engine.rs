@@ -7,6 +7,7 @@ use crossbeam::queue::ArrayQueue;
 use parking_lot::{Mutex, RwLock};
 use rayon::prelude::*;
 
+use crate::mixer::api::{MixerUiApi, MixerUiState};
 use crate::{
     automation::{AutomationEvent, AutomationLane, AutomationSender, ParameterSpec},
     graph::{self, GraphBuilder, GraphHandle},
@@ -91,6 +92,7 @@ pub struct HarmoniqEngine {
     metrics: AudioMetricsCollector,
     block_period_ns: u64,
     automation_cursor: u64,
+    mixer_ui: Arc<MixerUiState>,
 }
 
 impl HarmoniqEngine {
@@ -104,6 +106,7 @@ impl HarmoniqEngine {
             .sample_rate
             .store(config.sample_rate.round() as u64, Ordering::Relaxed);
 
+        let mixer_ui = MixerUiState::demo();
         let mut engine = Self {
             master_buffer: Mutex::new(AudioBuffer::from_config(&config)),
             processors: RwLock::new(HashMap::new()),
@@ -123,6 +126,7 @@ impl HarmoniqEngine {
             metrics,
             block_period_ns,
             automation_cursor: 0,
+            mixer_ui,
         };
         engine.install_default_graph()?;
         Ok(engine)
@@ -179,6 +183,10 @@ impl HarmoniqEngine {
 
     pub fn metrics_collector(&self) -> AudioMetricsCollector {
         self.metrics.clone()
+    }
+
+    pub fn mixer_ui_api(&self) -> Arc<dyn MixerUiApi> {
+        Arc::clone(&self.mixer_ui) as Arc<dyn MixerUiApi>
     }
 
     fn block_period_from_config(config: &BufferConfig) -> u64 {

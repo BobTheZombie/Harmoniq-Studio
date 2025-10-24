@@ -73,6 +73,28 @@ Options → Audio Device… opens the realtime device dialog, and Transport menu
 items mirror the transport buttons along the top bar. Shortcuts are consumed so
 text inputs remain unaffected when invoking global commands.
 
+### Mixer (compact)
+
+The redesigned mixer mirrors FL Studio’s space-efficient layout. Channel strips
+render in narrow (72 px) or wide (120 px) densities with GPU-accelerated meters
+and virtualization so hundreds of tracks scroll smoothly. Key interactions:
+
+- `N` / `W` toggle narrow and wide strip densities. `+` / `−` or the View → Zoom
+  commands adjust zoom between 80 % and 150 %.
+- Hold `Ctrl` while dragging faders, pan, or width controls for fine moves;
+  press `Alt` to reset; double-click to enter values. Shift-click selects
+  multiple strips.
+- Channel meters display oversampled true-peak with peak-hold and clip
+  indicators. Clicking the clip lamp clears latches.
+- Inserts expose ten slots with drag-ready overflow menus; sends present four
+  aux slots with pre/post toggles.
+- The master strip stays pinned on the right and shows latency, CPU usage, and
+  peak status for the mix bus.
+
+Use View → Toggle Mixer (M) to hide or reveal the panel. Scroll with the mouse
+wheel to bank through strips; Ctrl + ←/→ jumps eight tracks at a time, and `G`
+highlights groups.
+
 ### Realtime audio and MIDI
 
 Harmoniq Studio now streams audio using native backends such as ALSA, JACK, and
