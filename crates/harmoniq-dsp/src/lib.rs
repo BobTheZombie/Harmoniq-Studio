@@ -11,3 +11,6 @@ pub mod smoothing;
 pub mod utils;
 
 pub use buffer::{AudioBlock, AudioBlockMut, ChanMut, ChanRef};
+
+#[cfg(feature = "simd")]
+pub mod simd;

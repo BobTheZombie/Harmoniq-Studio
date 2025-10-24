@@ -8,6 +8,7 @@ pub mod automation;
 pub mod buffer;
 pub mod buffers;
 pub mod clips;
+pub mod cpu_pinning;
 pub mod core;
 pub mod dsp;
 pub mod engine;

@@ -13,3 +13,30 @@ jobs:
         run: cargo build --workspace --features "ultra openasio"
       - name: Tests
         run: cargo test -p harmoniq-engine --features "ultra openasio" -- --nocapture
+
+  perf-bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - name: Install benchmarking deps
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Run engine benchmarks with timings
+        env:
+          RUSTFLAGS: "-C target-cpu=native"
+        run: |
+          cargo +nightly bench -p harmoniq-benchmarks -Z unstable-options -Z timings=html --bench engine --profile-time=5 -- --warm-up-time 1
+      - name: Upload cargo timings
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-timings
+          path: target/cargo-timings
+          if-no-files-found: warn
+      - name: Upload flamegraphs
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-flamegraphs
+          path: target/profile
+          if-no-files-found: warn

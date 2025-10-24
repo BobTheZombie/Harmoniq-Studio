@@ -10,6 +10,7 @@ pub struct FaderNode {
     invert_phase: bool,
     smoother: OnePole,
     sample_rate: f32,
+    gains: Vec<f32>,
 }
 
 impl FaderNode {
@@ -20,6 +21,7 @@ impl FaderNode {
             invert_phase: false,
             smoother: OnePole::new(48_000.0, 2.5),
             sample_rate: 48_000.0,
+            gains: Vec::new(),
         }
     }
 
@@ -75,12 +77,16 @@ impl FaderNode {
         let frames = buffer.len();
         let channels = buffer.channel_count();
         let data = buffer.as_mut_slice();
+        if self.gains.len() < frames {
+            self.gains.resize(frames, 0.0);
+        }
         for frame in 0..frames {
-            let gain = self.smoother.next(target) * invert;
-            for ch in 0..channels {
-                let index = ch * frames + frame;
-                data[index] *= gain;
-            }
+            self.gains[frame] = self.smoother.next(target) * invert;
+        }
+        let gains = &self.gains[..frames];
+        for ch in 0..channels {
+            let channel = &mut data[ch * frames..(ch + 1) * frames];
+            apply_gain_curve(channel, gains);
         }
     }
 }
@@ -88,5 +94,21 @@ impl FaderNode {
 impl Default for FaderNode {
     fn default() -> Self {
         Self::new(0.0)
+    }
+}
+
+fn apply_gain_curve(channel: &mut [f32], gains: &[f32]) {
+    let frames = channel.len().min(gains.len());
+
+    #[cfg(feature = "simd")]
+    {
+        harmoniq_dsp::simd::mul_buffers_in_place(&mut channel[..frames], &gains[..frames]);
+    }
+
+    #[cfg(not(feature = "simd"))]
+    {
+        for (sample, gain) in channel[..frames].iter_mut().zip(&gains[..frames]) {
+            *sample *= *gain;
+        }
     }
 }
