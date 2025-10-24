@@ -254,7 +254,7 @@ impl HarmoniqEngine {
         *self.transport.read()
     }
 
-    pub fn set_transport(&self, state: TransportState) {
+    pub fn set_transport(&mut self, state: TransportState) {
         let mut current = self.transport.write();
         let was_playing = matches!(
             *current,
@@ -595,14 +595,6 @@ impl ClipPlayback {
         self.position = position;
         self.position >= total_frames
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct AutomationEvent {
-    pub plugin_id: PluginId,
-    pub parameter: usize,
-    pub value: f32,
-    pub sample_offset: u32,
 }
 
 struct DelayCompensator {
