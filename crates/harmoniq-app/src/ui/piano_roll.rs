@@ -120,9 +120,11 @@ impl PianoRollPane {
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new("Chord palette").color(palette.text_muted));
-                for chord in &self.chord_library {
-                    if ui.button(chord.name()).clicked() {
-                        self.apply_chord(chord);
+                for index in 0..self.chord_library.len() {
+                    let chord = self.chord_library[index].clone();
+                    let chord_name = chord.name().to_owned();
+                    if ui.button(chord_name).clicked() {
+                        self.apply_chord(&chord);
                     }
                 }
             });
@@ -179,6 +181,9 @@ impl PianoRollPane {
                         );
                     }
 
+                    let mut quantize_request: Option<usize> = None;
+                    let mut delete_request: Option<usize> = None;
+
                     for (index, note) in self.notes.iter().enumerate() {
                         if note.pitch < self.min_pitch || note.pitch > self.max_pitch {
                             continue;
@@ -211,16 +216,28 @@ impl PianoRollPane {
                         response.context_menu(|ui| {
                             if ui.button("Quantize to scale").clicked() {
                                 if self.scale_enabled {
-                                    self.quantize_note_to_scale(index);
+                                    quantize_request = Some(index);
                                 }
                                 ui.close_menu();
                             }
                             if ui.button("Delete").clicked() {
-                                self.notes.remove(index);
-                                self.selected = None;
+                                delete_request = Some(index);
                                 ui.close_menu();
                             }
                         });
+                    }
+
+                    if let Some(index) = quantize_request {
+                        if self.scale_enabled {
+                            self.quantize_note_to_scale(index);
+                        }
+                    }
+
+                    if let Some(index) = delete_request {
+                        if index < self.notes.len() {
+                            self.notes.remove(index);
+                            self.selected = None;
+                        }
                     }
                 });
             root_rect = root_rect.union(scroll.inner_rect);
@@ -328,6 +345,7 @@ impl ScaleKind {
     }
 }
 
+#[derive(Clone)]
 struct ChordDefinition {
     name: String,
     intervals: Vec<i32>,
