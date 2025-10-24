@@ -29,7 +29,7 @@ pub struct StripResponse {
     pub context_requested: bool,
 }
 
-pub fn render_strip(mut args: StripRenderArgs<'_>) -> StripResponse {
+pub fn render_strip(args: StripRenderArgs<'_>) -> StripResponse {
     let StripRenderArgs {
         ui,
         api,
@@ -45,7 +45,7 @@ pub fn render_strip(mut args: StripRenderArgs<'_>) -> StripResponse {
         send_labels,
     } = args;
 
-    let (rect, mut response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, height), Sense::click());
     let painter = ui.painter_at(rect);
 
     let mut fill = theme.strip_bg;
@@ -80,7 +80,7 @@ pub fn render_strip(mut args: StripRenderArgs<'_>) -> StripResponse {
     child.add_space(6.0);
     render_meter(&mut child, meter, theme, height * 0.35);
 
-    response.context_menu(|ui| {
+    let response = response.context_menu(|ui| {
         strip_context_menu(ui);
     });
 

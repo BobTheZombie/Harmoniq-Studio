@@ -109,6 +109,7 @@ impl MixerView {
 
                 for index in visible.first..visible.last {
                     let info = self.api.strip_info(index);
+                    let info_for_render = info.clone();
                     let meter_levels = self.api.level_fetch(index);
                     self.meters[index].update(levels_from_tuple(meter_levels));
 
@@ -129,11 +130,13 @@ impl MixerView {
 
                     let response = {
                         let meter_state = &mut self.meters[index];
+                        let insert_labels = insert_labels;
+                        let send_labels = send_labels;
                         ui.allocate_ui_at_rect(strip_rect, move |ui| {
                             render_strip(StripRenderArgs {
                                 ui,
                                 api: api.as_ref(),
-                                info: &info,
+                                info: &info_for_render,
                                 index,
                                 density,
                                 theme: &theme,

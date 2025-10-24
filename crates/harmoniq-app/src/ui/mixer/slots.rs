@@ -36,7 +36,7 @@ impl<'a> SlotView<'a> {
             .stroke(theme.slot_border)
             .rounding(theme.rounding_small);
 
-        let frame_response = frame.show(ui, |ui| {
+        let egui::InnerResponse { response, .. } = frame.show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(2.0);
                 ui.label(RichText::new(label).size(11.0).color(theme.header_text));
@@ -54,7 +54,7 @@ impl<'a> SlotView<'a> {
             });
         });
 
-        let mut response = frame_response.response;
+        let mut response = response;
 
         if ui.ui_contains_pointer() && response.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
