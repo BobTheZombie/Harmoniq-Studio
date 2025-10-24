@@ -8,7 +8,7 @@
               "Horizontal": {
                 "rect": {
                   "min": {
-                    "x": 272.5,
+                    "x": 12.5,
                     "y": 68.5
                   },
                   "max": {
@@ -16,29 +16,75 @@
                     "y": 928.5
                   }
                 },
-                "fraction": 0.75
+                "fraction": 0.12466945
               }
             },
+            {
+              "Leaf": {
+                "rect": {
+                  "min": {
+                    "x": 12.5,
+                    "y": 68.5
+                  },
+                  "max": {
+                    "x": 248.0,
+                    "y": 928.5
+                  }
+                },
+                "viewport": {
+                  "min": {
+                    "x": 12.5,
+                    "y": 92.5
+                  },
+                  "max": {
+                    "x": 248.0,
+                    "y": 928.5
+                  }
+                },
+                "tabs": [
+                  "Browser"
+                ],
+                "active": 0,
+                "scroll": 0.0
+              }
+            },
+            {
+              "Horizontal": {
+                "rect": {
+                  "min": {
+                    "x": 249.0,
+                    "y": 68.5
+                  },
+                  "max": {
+                    "x": 1907.5,
+                    "y": 928.5
+                  }
+                },
+                "fraction": 0.8
+              }
+            },
+            "Empty",
+            "Empty",
             {
               "Vertical": {
                 "rect": {
                   "min": {
-                    "x": 272.5,
+                    "x": 249.0,
                     "y": 68.5
                   },
                   "max": {
-                    "x": 1499.0,
+                    "x": 1576.0,
                     "y": 928.5
                   }
                 },
-                "fraction": 0.55
+                "fraction": 0.62
               }
             },
             {
               "Leaf": {
                 "rect": {
                   "min": {
-                    "x": 1500.0,
+                    "x": 1577.0,
                     "y": 68.5
                   },
                   "max": {
@@ -48,7 +94,7 @@
                 },
                 "viewport": {
                   "min": {
-                    "x": 1500.0,
+                    "x": 1577.0,
                     "y": 92.5
                   },
                   "max": {
@@ -57,36 +103,41 @@
                   }
                 },
                 "tabs": [
-                  "Playlist"
+                  "Inspector",
+                  "Console"
                 ],
-                "active": 0,
+                "active": 1,
                 "scroll": 0.0
               }
             },
+            "Empty",
+            "Empty",
+            "Empty",
+            "Empty",
             {
               "Leaf": {
                 "rect": {
                   "min": {
-                    "x": 272.5,
+                    "x": 249.0,
                     "y": 68.5
                   },
                   "max": {
-                    "x": 1499.0,
-                    "y": 541.0
+                    "x": 1576.0,
+                    "y": 601.0
                   }
                 },
                 "viewport": {
                   "min": {
-                    "x": 272.5,
+                    "x": 249.0,
                     "y": 92.5
                   },
                   "max": {
-                    "x": 1499.0,
-                    "y": 541.0
+                    "x": 1576.0,
+                    "y": 601.0
                   }
                 },
                 "tabs": [
-                  "ChannelRack"
+                  "Arrange"
                 ],
                 "active": 0,
                 "scroll": 0.0
@@ -96,31 +147,39 @@
               "Leaf": {
                 "rect": {
                   "min": {
-                    "x": 272.5,
-                    "y": 542.0
+                    "x": 249.0,
+                    "y": 602.0
                   },
                   "max": {
-                    "x": 1499.0,
+                    "x": 1576.0,
                     "y": 928.5
                   }
                 },
                 "viewport": {
                   "min": {
-                    "x": 272.5,
-                    "y": 566.0
+                    "x": 249.0,
+                    "y": 626.0
                   },
                   "max": {
-                    "x": 1499.0,
+                    "x": 1576.0,
                     "y": 928.5
                   }
                 },
                 "tabs": [
-                  "PianoRoll"
+                  "Mixer"
                 ],
                 "active": 0,
                 "scroll": 0.0
               }
             },
+            "Empty",
+            "Empty",
+            "Empty",
+            "Empty",
+            "Empty",
+            "Empty",
+            "Empty",
+            "Empty",
             "Empty",
             "Empty",
             "Empty",
@@ -132,7 +191,7 @@
             "Empty",
             "Empty"
           ],
-          "focused_node": 2
+          "focused_node": 12
         }
       }
     ],

@@ -129,6 +129,13 @@ fn parse_buffer(
     }
 }
 
+#[cfg(any(test, feature = "fuzzing"))]
+pub fn fuzz_parse_project(data: &[u8]) {
+    let source = Path::new("fuzz.hqp");
+    let base = Path::new(".");
+    let _ = parse_buffer(data, source, base, None);
+}
+
 fn parse_archive(
     buffer: &[u8],
     base_dir: &Path,

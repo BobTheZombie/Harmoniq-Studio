@@ -166,3 +166,14 @@ pub fn read_event<R: Read>(reader: &mut R) -> Result<BrokerEvent> {
         bincode::deserialize_from(reader).context("failed to read broker event")?;
     Ok(event)
 }
+
+#[cfg(any(test, feature = "fuzzing"))]
+pub fn fuzz_roundtrip_ipc(data: &[u8]) {
+    use std::io::Cursor;
+
+    let mut cursor = Cursor::new(data);
+    let _ = read_event(&mut cursor);
+
+    let mut cursor = Cursor::new(data);
+    let _ = bincode::deserialize_from::<_, BrokerCommand>(&mut cursor);
+}

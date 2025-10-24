@@ -19,6 +19,8 @@ pub mod window;
 pub use adapter::{AdapterDescriptor, AdapterKind, SandboxRequest};
 pub use broker::{BrokerConfig, PluginBroker};
 pub use host::{HostOptions, Vst3Host, Vst3HostBuilder};
+#[cfg(any(test, feature = "fuzzing"))]
+pub use ipc::fuzz_roundtrip_ipc;
 pub use ipc::{BrokerCommand, BrokerEvent, RtChannel, RtMessage, RtMessageKind};
 pub use pdc::{PdcEvent, PluginDataCache};
 pub use ring::{SharedAudioRing, SharedAudioRingDescriptor};

@@ -32,4 +32,5 @@ tracing = "0.1"
 [features]
 default = []
 watch = ["notify"]
+fuzzing = []
 

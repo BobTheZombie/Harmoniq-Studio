@@ -45,6 +45,7 @@ simd = ["harmoniq-dsp/simd"]
 fast-math = ["harmoniq-dsp/fast-math"]
 no-denormals = ["harmoniq-dsp/no-denormals"]
 ultra = ["native", "openasio", "no-denormals", "core_affinity"]
+fuzzing = []
 
 [dev-dependencies]
 serde_json.workspace = true

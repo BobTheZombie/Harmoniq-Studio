@@ -3,6 +3,8 @@ pub mod migrate;
 pub mod save;
 pub mod schema;
 
+#[cfg(any(test, feature = "fuzzing"))]
+pub use load::fuzz_parse_project;
 pub use load::{load_project, LoadError, LoadOptions, LoadReport, RelinkRequest};
 pub use migrate::MigrationError;
 pub use save::{autosave_path, save_autosave, save_project, SaveError, SaveOptions, SaveReport};

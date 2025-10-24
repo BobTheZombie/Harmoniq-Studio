@@ -14,6 +14,41 @@ jobs:
       - name: Tests
         run: cargo test -p harmoniq-engine --features "ultra openasio" -- --nocapture
 
+  qa-suite:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - task: golden
+            toolchain: stable
+            command: cargo test -p harmoniq-engine --test golden_render -- --nocapture
+          - task: fuzz-project-loader
+            toolchain: nightly
+            command: cargo fuzz run project_loader -- -max_total_time=60
+          - task: fuzz-plugin-ipc
+            toolchain: nightly
+            command: cargo fuzz run plugin_ipc -- -max_total_time=60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@${{ matrix.toolchain }}
+      - name: Install ALSA development headers
+        if: matrix.task == 'golden'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Cache golden fixtures
+        if: matrix.task == 'golden'
+        uses: actions/cache@v4
+        with:
+          path: tests/golden
+          key: golden-${{ hashFiles('tests/golden/**/*.wav') }}
+      - name: Install cargo-fuzz
+        if: startsWith(matrix.task, 'fuzz-')
+        run: cargo install cargo-fuzz
+      - name: Run ${{ matrix.task }} task
+        env:
+          RUST_BACKTRACE: 1
+        run: ${{ matrix.command }}
+
   perf-bench:
     runs-on: ubuntu-latest
     steps:
@@ -39,4 +74,28 @@ jobs:
         with:
           name: engine-flamegraphs
           path: target/profile
+          if-no-files-found: warn
+
+  soak-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 485
+    continue-on-error: true
+    needs:
+      - build-test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install ALSA development headers
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - name: Launch render soak
+        env:
+          SOAK_DURATION_SECONDS: 28800
+          SOAK_REPORT_SECONDS: 300
+          SOAK_LOG_PATH: render_soak_metrics.csv
+        run: cargo run -p harmoniq-engine --bin render_soak
+      - name: Upload soak log
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-soak-log
+          path: render_soak_metrics.csv
           if-no-files-found: warn

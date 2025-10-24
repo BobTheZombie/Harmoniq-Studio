@@ -1,0 +1,32 @@
+[package]
+name = "harmoniq-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+libfuzzer-sys = "0.4"
+harmoniq-engine = { path = "../crates/harmoniq-engine", features = ["fuzzing"] }
+harmoniq-host-vst3 = { path = "../crates/harmoniq-host-vst3", features = ["fuzzing"] }
+
+[[bin]]
+name = "project_loader"
+path = "fuzz_targets/project_loader.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "plugin_ipc"
+path = "fuzz_targets/plugin_ipc.rs"
+test = false
+doc = false
+
+[workspace]
+members = ["."]
+resolver = "2"
+
+[profile.release]
+debug = 1
+lto = false
+panic = "abort"
+codegen-units = 1
