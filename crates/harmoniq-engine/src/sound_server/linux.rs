@@ -579,7 +579,7 @@ impl crate::backend::EngineRt for QueueProcess {
             }
         } else if let Some(mut planar) = outputs.planar() {
             let frames_available = planar.frames();
-            let mut plane_ptrs = planar.planes().to_vec();
+            let plane_ptrs = planar.planes();
             let plane_count = plane_ptrs.len();
             let active = plane_count.min(channels);
             let frames_to_write = frames.min(frames_available);
@@ -610,7 +610,7 @@ impl crate::backend::EngineRt for QueueProcess {
             }
 
             for frame_idx in frames_to_write..frames_available {
-                for plane_ptr in &plane_ptrs {
+                for &plane_ptr in plane_ptrs.iter() {
                     if !plane_ptr.is_null() {
                         unsafe {
                             *plane_ptr.add(frame_idx) = 0.0;
@@ -630,7 +630,7 @@ impl crate::backend::EngineRt for QueueProcess {
 
             if !self.running.load(Ordering::Relaxed) {
                 let frames_available = planar.frames();
-                for plane_ptr in planar.planes() {
+                for &plane_ptr in plane_ptrs.iter() {
                     if !plane_ptr.is_null() {
                         for idx in 0..frames_available {
                             unsafe {

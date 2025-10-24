@@ -5,7 +5,7 @@ fn render_default_graph_without_xruns() {
     // Use a moderate block size so that the target block period is generous
     // enough for CI environments while still verifying that processing stays
     // well below half of the available time slice.
-    let config = BufferConfig::new(48_000.0, 256, ChannelLayout::Stereo);
+    let config = BufferConfig::new(48_000.0, 128, ChannelLayout::Stereo);
     let mut engine = HarmoniqEngine::new(config.clone()).expect("engine");
     let metrics = engine.metrics_collector();
     let mut buffer = AudioBuffer::from_config(config.clone());
@@ -31,4 +31,11 @@ fn render_default_graph_without_xruns() {
         snapshot.max_block_ns,
         half_period_ns
     );
+
+    let history = metrics.drain_history();
+    assert!(
+        !history.is_empty(),
+        "ring buffer should report at least one metrics sample"
+    );
+    assert!(history.iter().all(|entry| entry.xruns == 0));
 }

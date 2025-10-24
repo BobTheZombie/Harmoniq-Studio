@@ -5,5 +5,5 @@ pub mod noise;
 pub mod sine;
 
 pub use gain::GainNode;
-pub use noise::NoiseNode;
-pub use sine::SineNode;
+pub use noise::{NodeNoise, NoiseNode};
+pub use sine::{NodeOsc, SineNode};
