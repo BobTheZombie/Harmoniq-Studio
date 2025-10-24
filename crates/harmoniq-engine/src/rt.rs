@@ -213,7 +213,7 @@ impl MetricsRing {
 
     #[inline]
     fn push(&self, metrics: AudioMetrics) {
-        if self.queue.push(metrics).is_err() {
+        if let Err(metrics) = self.queue.push(metrics) {
             let _ = self.queue.pop();
             let _ = self.queue.push(metrics);
         }

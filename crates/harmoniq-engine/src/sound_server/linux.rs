@@ -12,7 +12,9 @@ use crossbeam::channel::{self, Receiver, Sender};
 use crossbeam::queue::ArrayQueue;
 use parking_lot::Mutex;
 
-use crate::{rt, AudioBuffer, AudioMetricsCollector, BufferConfig, HarmoniqEngine};
+use crate::{
+    rt, scratch::Scratch, AudioBuffer, AudioMetricsCollector, BufferConfig, HarmoniqEngine,
+};
 
 #[cfg(feature = "openasio")]
 use crate::backend::{openasio::OpenAsioBackend, StreamConfig as EngineStreamConfig};
@@ -660,9 +662,12 @@ fn render_loop(
         }
     }
 
-    let mut buffer = AudioBuffer::from_config(config.clone());
+    let mut buffer = AudioBuffer::from_config(&config);
     let output_channels = target_channels.max(1);
-    let mut interleaved = vec![0.0f32; buffer.len().max(1) * output_channels];
+    let mut scratch = Scratch::with_capacity(
+        buffer.len().max(1) * output_channels,
+        buffer.channel_count(),
+    );
     let block_period_ns = if config.sample_rate > 0.0 && config.block_size > 0 {
         ((config.block_size as f64 / config.sample_rate as f64) * 1e9) as u64
     } else {
@@ -692,15 +697,11 @@ fn render_loop(
             continue;
         }
 
-        let required = frames.saturating_mul(output_channels);
-        if interleaved.len() < required {
-            interleaved.resize(required, 0.0);
-        }
-
-        write_interleaved(&buffer, &mut interleaved[..required], output_channels);
+        let interleaved = scratch.interleaved_mut(output_channels, frames);
+        write_interleaved(&buffer, interleaved, output_channels);
 
         let mut dropped_samples = 0usize;
-        for &sample in &interleaved[..required] {
+        for &sample in interleaved {
             while queue.push(sample).is_err() {
                 dropped_samples += 1;
                 let _ = queue.pop();
@@ -719,7 +720,7 @@ fn write_interleaved(buffer: &AudioBuffer, target: &mut [f32], target_channels: 
     if target_channels == 0 {
         return;
     }
-    let channels = buffer.as_slice().len();
+    let channels = buffer.channel_count();
     let frames = buffer.len();
     let required = frames.saturating_mul(target_channels);
     if required == 0 {
@@ -729,7 +730,7 @@ fn write_interleaved(buffer: &AudioBuffer, target: &mut [f32], target_channels: 
     for frame in 0..frames {
         for channel in 0..target_channels {
             let value = if channel < channels {
-                buffer.as_slice()[channel][frame]
+                buffer.channel(channel)[frame]
             } else {
                 0.0
             };

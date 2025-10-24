@@ -40,7 +40,7 @@ impl GraphHandle {
         self.plugin_nodes
             .iter()
             .filter_map(|index| match &self.graph[*index] {
-                NodeKind::Plugin { id } => Some(*id),
+            NodeKind::Plugin { id } => Some(*id),
                 _ => None,
             })
             .collect()
@@ -137,8 +137,7 @@ pub(crate) fn mixdown(handle: &GraphHandle, master: &mut AudioBuffer, sources: &
     master.clear();
 
     let mix_impl = *MIX_IMPLEMENTATION.get_or_init(detect_mix_impl);
-    let master_channels = master.as_mut_slice();
-    let channel_count = master_channels.len();
+    let channel_count = master.channel_count();
 
     for (index, node) in handle.plugin_nodes.iter().enumerate() {
         let gain = handle.gain_for(*node);
@@ -147,16 +146,12 @@ pub(crate) fn mixdown(handle: &GraphHandle, master: &mut AudioBuffer, sources: &
         }
 
         if let Some(source) = sources.get(index) {
-            let source_channels = source.as_slice();
-            let limit = channel_count.min(source_channels.len());
+            let limit = channel_count.min(source.channel_count());
 
             for channel_index in 0..limit {
-                mix_channel_with_impl(
-                    master_channels[channel_index].as_mut_slice(),
-                    source_channels[channel_index].as_slice(),
-                    gain,
-                    mix_impl,
-                );
+                let source_channel = source.channel(channel_index);
+                let target_channel = master.channel_mut(channel_index);
+                mix_channel_with_impl(target_channel, source_channel, gain, mix_impl);
             }
         }
     }

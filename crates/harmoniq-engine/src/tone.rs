@@ -106,7 +106,7 @@ mod tests {
     use super::*;
 
     fn buffer_with_value(config: &BufferConfig, value: f32) -> AudioBuffer {
-        let mut buffer = AudioBuffer::from_config(config.clone());
+        let mut buffer = AudioBuffer::from_config(config);
         for sample in buffer.iter_mut() {
             *sample = value;
         }
@@ -123,7 +123,7 @@ mod tests {
 
         // After the filter settles the steady-state value should be close to the
         // low gain factor applied to the constant signal.
-        let left = buffer.as_slice()[0][127];
+        let left = buffer.channel(0)[127];
         assert!(left > 0.25, "expected low end boost");
     }
 
@@ -134,7 +134,7 @@ mod tests {
         let mut buffer = buffer_with_value(&config, 0.5);
         shaper.process(&mut buffer);
 
-        for channel in buffer.as_slice() {
+        for channel in buffer.channels() {
             for sample in channel {
                 assert!((*sample - 0.5).abs() < f32::EPSILON);
             }

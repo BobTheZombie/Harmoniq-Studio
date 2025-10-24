@@ -646,7 +646,7 @@ impl AudioProcessor for AudioEditorPlugin {
 
     fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
         let frames = buffer.len();
-        let channel_count = buffer.as_slice().len();
+        let channel_count = buffer.channel_count();
         let mut output = vec![vec![0.0; frames]; channel_count];
 
         if self.playing && !self.clip.is_empty() && self.play_end > self.play_start {

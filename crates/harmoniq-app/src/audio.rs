@@ -888,7 +888,7 @@ impl RealtimeAudio {
         T: SizedSample + FromSample<f32>,
     {
         let channels = stream_config.channels as usize;
-        let mut local_buffer = AudioBuffer::from_config(buffer_config);
+        let mut local_buffer = AudioBuffer::from_config(&buffer_config);
         let stream = device.build_output_stream(
             &stream_config,
             move |output: &mut [T], _| {
@@ -930,15 +930,15 @@ impl RealtimeAudio {
             }
 
             let available_frames = buffer.len();
-            let samples = buffer.as_slice();
+            let channel_count = buffer.channel_count();
             let mut copied = 0usize;
             while copied < available_frames && frame_cursor < total_frames {
                 for channel in 0..channels {
-                    let value = samples
-                        .get(channel)
-                        .and_then(|chan| chan.get(copied))
-                        .copied()
-                        .unwrap_or(0.0);
+                    let value = if channel < channel_count {
+                        buffer.channel(channel).get(copied).copied().unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
                     let sample_index = (frame_cursor * channels) + channel;
                     if sample_index < output.len() {
                         output[sample_index] = T::from_sample(value);
@@ -1538,7 +1538,7 @@ mod linux_asio {
 
     impl CallbackState {
         fn new(engine: Arc<Mutex<HarmoniqEngine>>, config: BufferConfig) -> Self {
-            let buffer = AudioBuffer::from_config(config);
+            let buffer = AudioBuffer::from_config(&config);
             Self {
                 engine,
                 cursor: buffer.len(),
@@ -1581,15 +1581,15 @@ mod linux_asio {
                 }
 
                 let frames_to_copy = (total_frames - frame_index).min(available_frames);
-                let source_channels = self.buffer.as_slice();
-                let engine_channels = source_channels.len();
+                let engine_channels = self.buffer.channel_count();
 
                 for local_frame in 0..frames_to_copy {
                     let src_index = self.cursor + local_frame;
                     let dst_index = frame_index + local_frame;
                     for channel in 0..channels {
                         let value = if channel < engine_channels {
-                            source_channels[channel]
+                            self.buffer
+                                .channel(channel)
                                 .get(src_index)
                                 .copied()
                                 .unwrap_or(0.0)
@@ -1844,7 +1844,7 @@ mod openasio_rt {
         running: Arc<AtomicBool>,
         out_channels: usize,
     ) {
-        let mut buffer = AudioBuffer::from_config(config.clone());
+        let mut buffer = AudioBuffer::from_config(&config);
         let mut interleaved = vec![0.0f32; out_channels.max(1) * config.block_size.max(1)];
         while running.load(Ordering::Relaxed) {
             let result = {
@@ -1859,8 +1859,7 @@ mod openasio_rt {
             if frames == 0 {
                 continue;
             }
-            let channel_data = buffer.as_slice();
-            let available_channels = channel_data.len();
+            let available_channels = buffer.channel_count();
             let required = frames.saturating_mul(out_channels.max(1));
             if interleaved.len() < required {
                 interleaved.resize(required, 0.0);
@@ -1868,7 +1867,7 @@ mod openasio_rt {
             for frame_idx in 0..frames {
                 for ch in 0..out_channels {
                     let value = if ch < available_channels {
-                        channel_data[ch].get(frame_idx).copied().unwrap_or(0.0)
+                        buffer.channel(ch).get(frame_idx).copied().unwrap_or(0.0)
                     } else {
                         0.0
                     };
