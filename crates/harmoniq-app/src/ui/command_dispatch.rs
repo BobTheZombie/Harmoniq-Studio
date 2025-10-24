@@ -56,8 +56,16 @@ impl CommandDispatcher {
         Self { receiver }
     }
 
-    pub fn poll(&mut self, handler: &mut impl CommandHandler) {
+    pub fn drain_pending(&mut self) -> Vec<Command> {
+        let mut commands = Vec::new();
         while let Some(command) = self.receiver.try_recv() {
+            commands.push(command);
+        }
+        commands
+    }
+
+    pub fn poll(&mut self, handler: &mut impl CommandHandler) {
+        for command in self.drain_pending() {
             handler.handle_command(command);
         }
     }

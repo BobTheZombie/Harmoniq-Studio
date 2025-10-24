@@ -1896,7 +1896,9 @@ impl App for HarmoniqStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint_after(Duration::from_millis(16));
         self.shortcuts.handle_input(ctx, &self.command_sender);
-        self.command_dispatcher.poll(self);
+        for command in self.command_dispatcher.drain_pending() {
+            self.handle_command(command);
+        }
         if self.fullscreen_dirty {
             ctx.send_viewport_cmd(ViewportCommand::Fullscreen(self.fullscreen));
             self.fullscreen_dirty = false;
