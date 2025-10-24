@@ -1,0 +1,40 @@
+[package]
+name = "harmoniq-host-clap"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+name = "harmoniq_host_clap"
+path = "src/lib.rs"
+
+[[bin]]
+name = "harmoniq-host-clap-broker"
+path = "src/bin/broker.rs"
+
+[[bin]]
+name = "harmoniq-host-clap-fake-plugin"
+path = "src/bin/fake_plugin.rs"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+rand.workspace = true
+ringbuf.workspace = true
+once_cell.workspace = true
+
+bincode = "1.3"
+memmap2 = "0.9"
+os_pipe = "1.1"
+tempfile = "3.10"
+walkdir = "2.5"
+notify = { version = "6.1", optional = true }
+tracing = "0.1"
+
+[features]
+default = []
+watch = ["notify"]
