@@ -6,6 +6,8 @@ use eframe::egui::{self, RichText};
 use harmoniq_ui::HarmoniqPalette;
 
 use crate::ui::event_bus::{AppEvent, EventBus};
+use crate::ui::focus::InputFocus;
+use crate::ui::workspace::WorkspacePane;
 
 struct BrowserCategory {
     name: String,
@@ -67,7 +69,14 @@ impl BrowserPane {
         self.last_scan = Instant::now();
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette, event_bus: &EventBus) {
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &HarmoniqPalette,
+        event_bus: &EventBus,
+        focus: &mut InputFocus,
+    ) {
+        let ctx = ui.ctx().clone();
         self.refresh_categories();
         let filter = self.filter.trim().to_ascii_lowercase();
         let matches_filter = |name: &str| Self::matches_filter(&filter, name);
@@ -106,6 +115,9 @@ impl BrowserPane {
                     }
                 });
         });
+
+        let used_rect = ui.min_rect();
+        focus.track_pane_interaction(&ctx, used_rect, WorkspacePane::Browser);
     }
 
     fn matches_filter(filter: &str, name: &str) -> bool {

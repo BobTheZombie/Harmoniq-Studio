@@ -45,7 +45,10 @@ use ui::{
     audio_settings::{ActiveAudioSummary, AudioSettingsAction, AudioSettingsPanel},
     browser::BrowserPane,
     channel_rack::ChannelRackPane,
+    console::{ConsolePane, LogLevel},
     event_bus::{AppEvent, EventBus, LayoutEvent, TransportEvent},
+    focus::InputFocus,
+    inspector::{InspectorCommand, InspectorPane},
     layout::LayoutState,
     menu::MenuBarState,
     mixer::MixerPane,
@@ -1197,9 +1200,12 @@ struct HarmoniqStudioApp {
     piano_roll: PianoRollPane,
     mixer: MixerPane,
     playlist: PlaylistPane,
+    inspector: InspectorPane,
+    console: ConsolePane,
     audio_settings: AudioSettingsPanel,
     sound_test: SoundTestSample,
     event_bus: EventBus,
+    input_focus: InputFocus,
     engine_runner: EngineRunner,
     command_queue: harmoniq_engine::EngineCommandQueue,
     transport: Arc<EngineTransport>,
@@ -1212,6 +1218,7 @@ struct HarmoniqStudioApp {
     pattern_mode: bool,
     last_engine_update: Instant,
     status_message: Option<String>,
+    browser_hidden: bool,
 }
 
 impl HarmoniqStudioApp {
@@ -1270,6 +1277,9 @@ impl HarmoniqStudioApp {
         let piano_roll = PianoRollPane::default();
         let mixer = MixerPane::default();
         let playlist = PlaylistPane::default();
+        let inspector = InspectorPane::new();
+        let console = ConsolePane::default();
+        let input_focus = InputFocus::default();
         let audio_settings =
             AudioSettingsPanel::new(engine_runner.config(), engine_runner.runtime_options());
         let sound_test = SoundTestSample::load().context("failed to load sound test sample")?;
@@ -1291,9 +1301,12 @@ impl HarmoniqStudioApp {
             piano_roll,
             mixer,
             playlist,
+            inspector,
+            console,
             audio_settings,
             sound_test,
             event_bus,
+            input_focus,
             engine_runner,
             command_queue,
             transport,
@@ -1306,6 +1319,7 @@ impl HarmoniqStudioApp {
             pattern_mode: true,
             last_engine_update: Instant::now(),
             status_message,
+            browser_hidden: !layout.browser_visible(),
         })
     }
 
@@ -1403,24 +1417,33 @@ impl HarmoniqStudioApp {
                 }
                 AppEvent::Layout(event) => match event {
                     LayoutEvent::ToggleBrowser => {
-                        let visible = !self.browser.is_visible();
-                        self.browser.set_visible(visible);
-                        self.layout.set_browser_visible(visible);
+                        self.browser_hidden = !self.browser_hidden;
+                        self.browser.set_visible(!self.browser_hidden);
+                        self.layout.set_browser_visible(!self.browser_hidden);
+                        let state = if self.browser_hidden {
+                            "hidden"
+                        } else {
+                            "shown"
+                        };
+                        self.console.log(LogLevel::Info, format!("Browser {state}"));
                     }
                     LayoutEvent::ResetWorkspace => {
                         self.dock_state = build_default_workspace();
                         self.layout.store_dock(&self.dock_state);
+                        self.browser_hidden = false;
                         self.browser.set_visible(true);
-                        self.browser.set_width(260.0);
                         self.layout.set_browser_visible(true);
-                        self.layout.set_browser_width(260.0);
+                        self.console.log(LogLevel::Info, "Workspace layout reset");
                     }
                 },
                 AppEvent::OpenFile(path) => {
                     self.status_message = Some(format!("Opened {}", path.display()));
+                    self.console
+                        .log(LogLevel::Info, format!("Opened {}", path.display()));
                 }
                 AppEvent::SaveProject => {
                     self.status_message = Some("Project saved".into());
+                    self.console.log(LogLevel::Info, "Project saved");
                 }
                 AppEvent::OpenAudioSettings => {
                     let config = self.engine_runner.config().clone();
@@ -1485,10 +1508,15 @@ impl HarmoniqStudioApp {
 struct WorkspaceTabViewer<'a> {
     palette: &'a HarmoniqPalette,
     event_bus: &'a EventBus,
+    browser: &'a mut BrowserPane,
     channel_rack: &'a mut ChannelRackPane,
     piano_roll: &'a mut PianoRollPane,
     mixer: &'a mut MixerPane,
     playlist: &'a mut PlaylistPane,
+    inspector: &'a mut InspectorPane,
+    console: &'a mut ConsolePane,
+    input_focus: &'a mut InputFocus,
+    browser_hidden: bool,
     transport_state: TransportState,
     transport_clock: TransportClock,
 }
@@ -1502,16 +1530,52 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         match tab {
-            WorkspacePane::ChannelRack => self.channel_rack.ui(ui, self.palette, self.event_bus),
-            WorkspacePane::PianoRoll => self.piano_roll.ui(ui, self.palette, self.event_bus),
-            WorkspacePane::Mixer => self.mixer.ui(ui, self.palette, self.event_bus),
-            WorkspacePane::Playlist => self.playlist.ui(
+            WorkspacePane::Browser => {
+                if self.browser_hidden {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            RichText::new("Browser hidden (View → Toggle Browser)")
+                                .color(self.palette.text_muted),
+                        );
+                    });
+                } else {
+                    self.browser
+                        .ui(ui, self.palette, self.event_bus, self.input_focus);
+                }
+            }
+            WorkspacePane::Arrange => self.playlist.ui(
                 ui,
                 self.palette,
                 self.event_bus,
+                self.input_focus,
                 self.transport_state,
                 self.transport_clock,
             ),
+            WorkspacePane::Mixer => {
+                self.mixer
+                    .ui(ui, self.palette, self.event_bus, self.input_focus);
+            }
+            WorkspacePane::PianoRoll => {
+                self.piano_roll
+                    .ui(ui, self.palette, self.event_bus, self.input_focus);
+            }
+            WorkspacePane::Inspector => {
+                let commands = self.inspector.ui(
+                    ui,
+                    self.palette,
+                    self.input_focus,
+                    self.event_bus,
+                    self.channel_rack,
+                );
+                for command in commands {
+                    self.playlist.apply_inspector_command(command);
+                }
+                self.inspector
+                    .sync_selection(self.playlist.current_selection());
+            }
+            WorkspacePane::Console => {
+                self.console.ui(ui, self.palette, self.input_focus);
+            }
         }
     }
 }
@@ -1521,6 +1585,9 @@ impl App for HarmoniqStudioApp {
         ctx.request_repaint_after(Duration::from_millis(16));
         self.process_events();
         self.update_engine_context();
+        self.input_focus.maybe_release_on_escape(ctx);
+        self.inspector
+            .sync_selection(self.playlist.current_selection());
 
         let palette = self.theme.palette().clone();
 
@@ -1532,7 +1599,7 @@ impl App for HarmoniqStudioApp {
             )
             .show(ctx, |ui| {
                 self.menu
-                    .ui(ui, &palette, &self.event_bus, self.browser.is_visible());
+                    .ui(ui, &palette, &self.event_bus, !self.browser_hidden);
             });
 
         egui::TopBottomPanel::top("transport_bar")
@@ -1554,22 +1621,6 @@ impl App for HarmoniqStudioApp {
                     .ui(ui, &palette, &self.icons, &self.event_bus, snapshot);
             });
 
-        if self.browser.is_visible() {
-            let panel = egui::SidePanel::left("browser_panel")
-                .resizable(true)
-                .default_width(self.browser.width())
-                .frame(
-                    egui::Frame::none()
-                        .fill(palette.panel)
-                        .stroke(Stroke::new(1.0, palette.toolbar_outline))
-                        .inner_margin(Margin::symmetric(12.0, 10.0))
-                        .rounding(Rounding::same(16.0)),
-                )
-                .show(ctx, |ui| {
-                    self.browser.ui(ui, &palette, &self.event_bus);
-                });
-            self.browser.set_width(panel.response.rect.width());
-        }
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
@@ -1583,10 +1634,15 @@ impl App for HarmoniqStudioApp {
                 let mut tab_viewer = WorkspaceTabViewer {
                     palette: &palette,
                     event_bus: &self.event_bus,
+                    browser: &mut self.browser,
                     channel_rack: &mut self.channel_rack,
                     piano_roll: &mut self.piano_roll,
                     mixer: &mut self.mixer,
                     playlist: &mut self.playlist,
+                    inspector: &mut self.inspector,
+                    console: &mut self.console,
+                    input_focus: &mut self.input_focus,
+                    browser_hidden: self.browser_hidden,
                     transport_state: self.transport_state,
                     transport_clock: self.transport_clock,
                 };
@@ -1650,7 +1706,6 @@ impl App for HarmoniqStudioApp {
                 });
         }
 
-        self.layout.set_browser_width(self.browser.width());
         self.layout.store_dock(&self.dock_state);
         self.layout.maybe_save();
 

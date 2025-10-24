@@ -215,8 +215,33 @@ impl<'a> egui::Widget for LevelMeter<'a> {
     fn ui(self, ui: &mut egui::Ui) -> Response {
         let (rect, response) = ui.allocate_exact_size(self.size, Sense::hover());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 8.0, self.palette.meter_background);
-        painter.rect_stroke(rect, 8.0, egui::Stroke::new(1.0, self.palette.meter_border));
+        let mut mesh = egui::Mesh::default();
+        let mut push_rect = |mesh: &mut egui::Mesh, rect: egui::Rect, color: Color32| {
+            let idx = mesh.vertices.len() as u32;
+            mesh.indices
+                .extend_from_slice(&[idx, idx + 1, idx + 2, idx, idx + 2, idx + 3]);
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: rect.left_top(),
+                uv: egui::Pos2::ZERO,
+                color,
+            });
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: egui::pos2(rect.right(), rect.top()),
+                uv: egui::Pos2::ZERO,
+                color,
+            });
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: rect.right_bottom(),
+                uv: egui::Pos2::ZERO,
+                color,
+            });
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: egui::pos2(rect.left(), rect.bottom()),
+                uv: egui::Pos2::ZERO,
+                color,
+            });
+        };
+        push_rect(&mut mesh, rect, self.palette.meter_background);
 
         let gutter = 4.0;
         let bar_width = (rect.width() - gutter * 3.0) / 2.0;
@@ -228,7 +253,7 @@ impl<'a> egui::Widget for LevelMeter<'a> {
             (0.95, 1.0, self.palette.meter_peak),
         ];
 
-        let draw_channel = |level: f32, x_start: f32| {
+        let mut draw_channel = |level: f32, x_start: f32| {
             let level = level.clamp(0.0, 1.0);
             let x_end = x_start + bar_width;
             for &(start, end, color) in &segments {
@@ -248,7 +273,7 @@ impl<'a> egui::Widget for LevelMeter<'a> {
                     egui::pos2(x_start, end_y),
                     egui::pos2(x_end, start_y),
                 );
-                painter.rect_filled(segment_rect, 2.0, color);
+                push_rect(&mut mesh, segment_rect, color);
             }
         };
 
@@ -256,6 +281,9 @@ impl<'a> egui::Widget for LevelMeter<'a> {
         let right_start = rect.left() + gutter * 2.0 + bar_width;
         draw_channel(self.left, left_start);
         draw_channel(self.right, right_start);
+
+        painter.add(mesh);
+        painter.rect_stroke(rect, 8.0, egui::Stroke::new(1.0, self.palette.meter_border));
 
         let tick_color = self.palette.meter_border.gamma_multiply(0.6);
         for tick in [0.25_f32, 0.5, 0.75] {
