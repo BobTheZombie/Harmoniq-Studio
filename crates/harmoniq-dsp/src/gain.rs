@@ -49,3 +49,12 @@ pub fn db_to_linear(db: f32) -> f32 {
         10.0f32.powf(db * 0.05)
     }
 }
+
+#[inline]
+pub fn linear_to_db(linear: f32) -> f32 {
+    if linear <= 0.0 {
+        f32::NEG_INFINITY
+    } else {
+        20.0 * linear.max(1e-12).log10()
+    }
+}

@@ -26,9 +26,7 @@ impl StereoWidthNode {
         let frames = buffer.len();
         let width = self.width;
         let data = buffer.as_mut_slice();
-        let stride = frames;
-        let left = &mut data[0..frames];
-        let right = &mut data[stride..stride * 2];
+        let (left, right) = data.split_at_mut(frames);
         for frame in 0..frames {
             let l = left[frame];
             let r = right[frame];
