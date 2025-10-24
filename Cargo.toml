@@ -20,6 +20,7 @@ members = [
     "crates/harmoniq-plugin-edison",
     "crates/harmoniq-ui",
     "crates/harmoniq-host-clap",
+    "crates/harmoniq-host-vst3",
 ]
 resolver = "2"
 
