@@ -9,6 +9,8 @@ harmoniq-engine = { path = "../harmoniq-engine" }
 harmoniq-plugins = { path = "../harmoniq-plugins" }
 harmoniq-plugin-host = { path = "../harmoniq-plugin-host" }
 harmoniq-ui = { path = "../harmoniq-ui" }
+harmoniq-plugin-db = { path = "../harmoniq-plugin-db" }
+harmoniq-plugin-scanner = { path = "../harmoniq-plugin-scanner" }
 anyhow.workspace = true
 clap.workspace = true
 eframe = { version = "0.27", features = ["wgpu"] }
