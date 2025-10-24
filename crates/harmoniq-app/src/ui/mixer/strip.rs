@@ -1,6 +1,6 @@
 use eframe::egui::{
-    self, align::Align2, pos2, Color32, FontId, Id, Layout, Painter, PointerButton, Pos2, Rect,
-    Response, Sense, Shape, Stroke, Ui, Vec2,
+    self, pos2, Align2, Color32, FontId, Id, Layout, Painter, PointerButton, Pos2, Rect, Response,
+    Sense, Shape, Stroke, Ui, Vec2,
 };
 use harmoniq_engine::mixer::api::{MixerUiApi, UiStripInfo};
 
@@ -130,12 +130,21 @@ fn tinted_strip_color(
             (info.color_rgba[2] * 255.0) as u8,
             60,
         );
-        bg = bg.linear_interpolate(tint, 0.35);
+        bg = lerp_color(bg, tint, 0.35);
     }
     if is_selected {
-        bg = bg.linear_interpolate(theme.selection, 0.5);
+        bg = lerp_color(bg, theme.selection, 0.5);
     }
     bg
+}
+
+fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let inv_t = 1.0 - t;
+    let [ar, ag, ab, aa] = a.to_array();
+    let [br, bg, bb, ba] = b.to_array();
+    let mix = |a: u8, b: u8| (a as f32 * inv_t + b as f32 * t).round() as u8;
+    Color32::from_rgba_premultiplied(mix(ar, br), mix(ag, bg), mix(ab, bb), mix(aa, ba))
 }
 
 fn draw_top_cap(
@@ -153,7 +162,14 @@ fn draw_top_cap(
         theme.rounding_small,
         Color32::TRANSPARENT,
     ));
-    let gradient_mesh = egui::epaint::Mesh::gradient_rectangle(rect, gradient_top, gradient_bottom);
+    let mut gradient_mesh = egui::epaint::Mesh::default();
+    let idx = gradient_mesh.vertices.len() as u32;
+    gradient_mesh.colored_vertex(rect.left_top(), gradient_top);
+    gradient_mesh.colored_vertex(rect.right_top(), gradient_top);
+    gradient_mesh.colored_vertex(rect.left_bottom(), gradient_bottom);
+    gradient_mesh.colored_vertex(rect.right_bottom(), gradient_bottom);
+    gradient_mesh.add_triangle(idx, idx + 1, idx + 2);
+    gradient_mesh.add_triangle(idx + 2, idx + 1, idx + 3);
     painter.add(Shape::mesh(gradient_mesh));
 
     let chip_rect = Rect::from_min_size(
