@@ -283,15 +283,6 @@ impl MixerUiApi for MixerUiState {
             .unwrap_or_default()
     }
 
-    fn send_label(&self, idx: usize, slot: usize) -> String {
-        self.strips
-            .read()
-            .get(idx)
-            .and_then(|strip| strip.sends.get(slot))
-            .map(|slot| slot.label.clone())
-            .unwrap_or_default()
-    }
-
     fn send_level(&self, idx: usize, slot: usize) -> f32 {
         self.strips
             .read()
