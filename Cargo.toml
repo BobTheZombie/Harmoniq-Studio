@@ -19,6 +19,7 @@ members = [
     "crates/harmoniq-plugin-sub808",
     "crates/harmoniq-plugin-edison",
     "crates/harmoniq-ui",
+    "crates/harmoniq-host-clap",
 ]
 resolver = "2"
 
