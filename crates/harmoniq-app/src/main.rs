@@ -389,7 +389,7 @@ impl TransportClock {
 #[derive(Debug, Clone)]
 struct EngineContext {
     tempo: f32,
-    _time_signature: TimeSignature,
+    time_signature: TimeSignature,
     transport: TransportState,
     cpu_usage: f32,
     clock: TransportClock,
