@@ -89,6 +89,29 @@ compatibility layer so it also works with PipeWire setups. Headless mode
 defaults to realtime streaming but can be disabled with `--disable-audio` for
 offline graph validation.
 
+### QWERTY keyboard input
+
+When no external MIDI devices are detected Harmoniq Studio automatically
+enables a built-in QWERTY keyboard controller. The computer keyboard is mapped
+to a piano layout so you can sketch ideas without hardware attached:
+
+| Control | Action |
+| --- | --- |
+| `Q W E R T Y U` | White keys for the active octave |
+| `2 3 5 6 7` | Black keys (C♯, D♯, F♯, G♯, A♯) |
+| `Space` | Sustain pedal (hold / release) |
+| `Z` / `X` | Octave down / up |
+| `[` / `/` | Decrement / increment MIDI channel |
+| `C` / `V` + modifier | Cycle through velocity presets |
+| `Shift` | Accent notes (+20 velocity) |
+| `Esc` | MIDI panic (All Notes Off) |
+
+Toggle the device from the CLI using `--qwerty` or disable it with
+`--no-qwerty`. You can also tailor the response with `--qwerty-octave`,
+`--qwerty-velocity`, `--qwerty-curve`, and `--qwerty-channel`. Configuration is
+saved to `~/.config/HarmoniqStudio/qwerty.json` so your layout, velocity curve,
+and channel persist between sessions.
+
 ### OpenASIO backend
 
 For ultra low latency setups on Linux, Harmoniq Studio can host OpenASIO

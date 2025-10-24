@@ -10,10 +10,29 @@ use harmoniq_engine::{EngineCommand, EngineCommandQueue, MidiEvent, MidiTimestam
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use ringbuf::{HeapConsumer, HeapRb};
 use tracing::{info, warn};
+use winit::event::{ModifiersState, VirtualKeyCode};
+
+pub mod qwerty;
+pub use qwerty::QwertyKeyboardInput;
 
 const MIDI_QUEUE_CAPACITY: usize = 1024;
 const MIDI_DISPATCH_BATCH: usize = 64;
 const MIDI_IDLE_SLEEP: Duration = Duration::from_micros(200);
+
+pub trait MidiInputDevice: Send {
+    fn name(&self) -> &str;
+    fn enabled(&self) -> bool;
+    fn set_enabled(&mut self, on: bool);
+    fn push_key_event(
+        &mut self,
+        key: VirtualKeyCode,
+        pressed: bool,
+        mods: ModifiersState,
+        time: Instant,
+    );
+    fn drain_events<'a>(&'a mut self, out: &mut dyn FnMut(MidiEvent, Instant));
+    fn panic(&mut self, time: Instant);
+}
 
 pub struct MidiConnection {
     stop: Arc<AtomicBool>,
