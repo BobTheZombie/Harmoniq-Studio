@@ -8,6 +8,7 @@ pub mod automation;
 pub mod buffer;
 pub mod buffers;
 pub mod clips;
+pub mod core;
 pub mod dsp;
 pub mod engine;
 pub mod graph;
@@ -34,6 +35,15 @@ pub use automation::{
 };
 pub use buffer::{AudioBuffer, BufferConfig, ChannelLayout};
 pub use clips::{AudioClip, ClipError, CrossfadeSpec, FadeCurve, FadeSpec, StretchQuality};
+pub use core::commands::{
+    AddClipCommand, CommandBus, CreateTrackCommand, MixerEndpoint, MoveClipCommand,
+    SetMixerTargetCommand, WriteAutomationPointCommand,
+};
+pub use core::state::{
+    ArrangementClip, ArrangementState, ArrangementTrack, AutomationLaneState, AutomationOwner,
+    AutomationPoint, AutomationState, ClipId, LaneId, ProjectState, TrackId,
+};
+pub use core::CommandError;
 pub use dsp::RealtimeDspEngine;
 pub use engine::{EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
 pub use graph::{GraphBuilder, GraphHandle, NodeHandle};
