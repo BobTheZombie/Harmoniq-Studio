@@ -172,15 +172,15 @@ impl MixerPane {
                     ui.add_space(6.0);
                     ui.label(
                         RichText::new(format!("True Peak: {:.1} dBFS", track.true_peak))
-                            .color(palette.text_secondary),
+                            .color(palette.text_muted),
                     );
                     ui.label(
                         RichText::new(format!("Short-Term: {:.1} LUFS", track.short_term))
-                            .color(palette.text_secondary),
+                            .color(palette.text_muted),
                     );
                     ui.label(
                         RichText::new(format!("Phase Corr: {:.2}", track.phase_correlation))
-                            .color(palette.text_secondary),
+                            .color(palette.text_muted),
                     );
                     ui.add_space(8.0);
                     if ui.button("Insert FX").clicked() {
