@@ -75,16 +75,7 @@ impl PlaylistPane {
         transport_state: TransportState,
         clock: TransportClock,
     ) {
-        let dt = ui.ctx().input(|i| i.stable_dt);
-        if matches!(
-            transport_state,
-            TransportState::Playing | TransportState::Recording
-        ) {
-            self.playhead += dt as f32 * 2.0;
-            if self.playhead > self.length_beats {
-                self.playhead = 0.0;
-            }
-        }
+        let _ = transport_state;
 
         ui.vertical(|ui| {
             ui.heading(RichText::new("Playlist").color(palette.text_primary));
@@ -208,5 +199,19 @@ impl PlaylistPane {
 
     pub fn playhead_position(&self) -> f32 {
         self.playhead
+    }
+
+    pub fn set_playhead(&mut self, beats: f32, playing: bool) {
+        if self.length_beats <= 0.0 {
+            self.playhead = 0.0;
+            return;
+        }
+        let cycle = self.length_beats.max(1.0);
+        let position = if playing {
+            beats.rem_euclid(cycle)
+        } else {
+            beats
+        };
+        self.playhead = position.clamp(0.0, cycle);
     }
 }

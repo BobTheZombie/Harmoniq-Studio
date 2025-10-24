@@ -370,6 +370,7 @@ struct StreamCreation {
     device_name: String,
     device_id: Option<String>,
     host_label: Option<String>,
+    sample_rate: u32,
 }
 
 impl RealtimeAudio {
@@ -401,6 +402,7 @@ impl RealtimeAudio {
             device_name,
             device_id,
             host_label,
+            sample_rate,
         } = stream_info;
         #[cfg(not(target_os = "linux"))]
         let StreamCreation {
@@ -409,6 +411,7 @@ impl RealtimeAudio {
             device_name,
             device_id,
             host_label,
+            sample_rate,
         } = stream_info;
 
         if let Some(ref host) = host_label {
@@ -416,6 +419,27 @@ impl RealtimeAudio {
         } else {
             info!(backend = %backend, device = %device_name, "Started realtime audio");
         }
+
+        let (transport_handle, playing_state) = {
+            let engine_guard = engine.lock();
+            (
+                engine_guard.transport_metrics(),
+                matches!(
+                    engine_guard.transport(),
+                    harmoniq_engine::TransportState::Playing
+                        | harmoniq_engine::TransportState::Recording
+                ),
+            )
+        };
+        transport_handle
+            .sample_rate
+            .store(sample_rate.max(1) as u64, AtomicOrdering::Relaxed);
+        transport_handle
+            .sample_pos
+            .store(0, AtomicOrdering::Relaxed);
+        transport_handle
+            .playing
+            .store(playing_state, AtomicOrdering::Relaxed);
 
         Ok(Self {
             #[cfg(target_os = "linux")]
@@ -498,6 +522,7 @@ impl RealtimeAudio {
         options: &AudioRuntimeOptions,
         backend: AudioBackend,
     ) -> anyhow::Result<StreamCreation> {
+        let engine_rate = config.sample_rate.round() as u32;
         match backend {
             #[cfg(feature = "openasio")]
             AudioBackend::OpenAsio => {
@@ -514,6 +539,7 @@ impl RealtimeAudio {
                     device_name,
                     device_id,
                     host_label: Some(linux_backend_label(AudioBackend::OpenAsio, None)),
+                    sample_rate: engine_rate,
                 })
             }
             AudioBackend::Asio => {
@@ -541,6 +567,7 @@ impl RealtimeAudio {
                     device_name,
                     device_id,
                     host_label,
+                    sample_rate: engine_rate,
                 })
             }
             AudioBackend::Harmoniq => {
@@ -630,6 +657,7 @@ impl RealtimeAudio {
                     device_name,
                     device_id: None,
                     host_label: Some("Harmoniq Ultra".to_string()),
+                    sample_rate: engine_rate,
                 })
             }
             AudioBackend::PulseAudio | AudioBackend::PipeWire | AudioBackend::Alsa => {
@@ -799,6 +827,7 @@ impl RealtimeAudio {
             device_name,
             device_id,
             host_label: Self::host_label_for_backend(backend, Some(host_id)),
+            sample_rate: stream_config.sample_rate.0,
         })
     }
 
