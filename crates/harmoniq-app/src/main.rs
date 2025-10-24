@@ -45,15 +45,22 @@ use ui::{
     audio_settings::{ActiveAudioSummary, AudioSettingsAction, AudioSettingsPanel},
     browser::BrowserPane,
     channel_rack::ChannelRackPane,
+    command_dispatch::{command_channel, CommandDispatcher, CommandHandler, CommandSender},
+    commands::{
+        Command, EditCommand, FileCommand, HelpCommand, InsertCommand, MidiCommand, OptionsCommand,
+        ThemeMode, TrackCommand, TransportCommand, ViewCommand,
+    },
+    config::RecentProjects,
     console::{ConsolePane, LogLevel},
     event_bus::{AppEvent, EventBus, LayoutEvent, TransportEvent},
     focus::InputFocus,
     inspector::InspectorPane,
     layout::LayoutState,
-    menu::MenuBarState,
+    menu_bar::{MenuBarSnapshot, MenuBarState},
     mixer::MixerPane,
     piano_roll::PianoRollPane,
     playlist::PlaylistPane,
+    shortcuts::ShortcutMap,
     transport::{TransportBar, TransportSnapshot},
     workspace::{build_default_workspace, WorkspacePane},
 };
@@ -1206,6 +1213,13 @@ struct HarmoniqStudioApp {
     sound_test: SoundTestSample,
     event_bus: EventBus,
     input_focus: InputFocus,
+    shortcuts: ShortcutMap,
+    command_sender: CommandSender,
+    command_dispatcher: CommandDispatcher,
+    recent_projects: RecentProjects,
+    midi_inputs: Vec<String>,
+    selected_midi_input: Option<String>,
+    midi_channel: u8,
     engine_runner: EngineRunner,
     command_queue: harmoniq_engine::EngineCommandQueue,
     transport: Arc<EngineTransport>,
@@ -1216,9 +1230,15 @@ struct HarmoniqStudioApp {
     transport_clock: TransportClock,
     metronome: bool,
     pattern_mode: bool,
+    transport_loop_enabled: bool,
+    record_armed: bool,
     last_engine_update: Instant,
     status_message: Option<String>,
     browser_hidden: bool,
+    mixer_hidden: bool,
+    piano_roll_hidden: bool,
+    fullscreen: bool,
+    fullscreen_dirty: bool,
 }
 
 impl HarmoniqStudioApp {
@@ -1281,6 +1301,15 @@ impl HarmoniqStudioApp {
         let audio_settings =
             AudioSettingsPanel::new(engine_runner.config(), engine_runner.runtime_options());
         let sound_test = SoundTestSample::load().context("failed to load sound test sample")?;
+        let shortcuts = ShortcutMap::load();
+        let (command_sender, command_receiver) = command_channel(256);
+        let recent_projects = RecentProjects::load();
+        let midi_inputs = list_midi_inputs().unwrap_or_else(|err| {
+            warn!("Unable to enumerate MIDI inputs: {err}");
+            Vec::new()
+        });
+        let selected_midi_input = midi_inputs.first().cloned();
+        let command_dispatcher = CommandDispatcher::new(command_receiver);
 
         let status_message = engine_runner
             .last_runtime_error()
@@ -1305,6 +1334,13 @@ impl HarmoniqStudioApp {
             sound_test,
             event_bus,
             input_focus,
+            shortcuts,
+            command_sender,
+            command_dispatcher,
+            recent_projects,
+            midi_inputs,
+            selected_midi_input,
+            midi_channel: 1,
             engine_runner,
             command_queue,
             transport,
@@ -1315,9 +1351,15 @@ impl HarmoniqStudioApp {
             transport_clock: TransportClock::default(),
             metronome: false,
             pattern_mode: true,
+            transport_loop_enabled: false,
+            record_armed: false,
             last_engine_update: Instant::now(),
             status_message,
             browser_hidden: !browser_visible,
+            mixer_hidden: false,
+            piano_roll_hidden: false,
+            fullscreen: false,
+            fullscreen_dirty: false,
         })
     }
 
@@ -1438,6 +1480,10 @@ impl HarmoniqStudioApp {
                     self.status_message = Some(format!("Opened {}", path.display()));
                     self.console
                         .log(LogLevel::Info, format!("Opened {}", path.display()));
+                    self.recent_projects.add(path);
+                    if let Err(err) = self.recent_projects.save() {
+                        warn!("Failed to persist recent projects: {err}");
+                    }
                 }
                 AppEvent::SaveProject => {
                     self.status_message = Some("Project saved".into());
@@ -1466,6 +1512,7 @@ impl HarmoniqStudioApp {
                 self.send_command(EngineCommand::SetTransport(TransportState::Stopped));
             }
             TransportEvent::Record(armed) => {
+                self.record_armed = armed;
                 self.transport_state = if armed {
                     TransportState::Recording
                 } else {
@@ -1503,6 +1550,251 @@ impl HarmoniqStudioApp {
     }
 }
 
+impl CommandHandler for HarmoniqStudioApp {
+    fn handle_command(&mut self, command: Command) {
+        match command {
+            Command::File(cmd) => match cmd {
+                FileCommand::New => {
+                    self.status_message = Some("Starting new project".into());
+                    self.console.log(LogLevel::Info, "New project started");
+                }
+                FileCommand::Open => {
+                    self.status_message = Some("Open project…".into());
+                    self.console
+                        .log(LogLevel::Info, "Open project dialog requested");
+                }
+                FileCommand::OpenRecent(path) => {
+                    self.status_message = Some(format!("Opened {}", path.display()));
+                    self.console
+                        .log(LogLevel::Info, format!("Opened {}", path.display()));
+                    self.recent_projects.add(path.clone());
+                    if let Err(err) = self.recent_projects.save() {
+                        warn!("Failed to persist recent projects: {err}");
+                    }
+                }
+                FileCommand::Save => {
+                    self.status_message = Some("Project saved".into());
+                    self.console.log(LogLevel::Info, "Project saved");
+                }
+                FileCommand::SaveAs => {
+                    self.status_message = Some("Save project as…".into());
+                    self.console.log(LogLevel::Info, "Save As dialog requested");
+                }
+                FileCommand::Export => {
+                    self.status_message = Some("Export/Render not implemented".into());
+                    self.console
+                        .log(LogLevel::Warn, "Export/Render flow not implemented yet");
+                }
+                FileCommand::CloseProject => {
+                    self.status_message = Some("Project closed".into());
+                    self.console.log(LogLevel::Info, "Project closed");
+                }
+            },
+            Command::Edit(cmd) => match cmd {
+                EditCommand::Undo | EditCommand::Redo => {
+                    self.console
+                        .log(LogLevel::Warn, "Undo/Redo stack not available yet");
+                }
+                EditCommand::Cut => self.console.log(LogLevel::Warn, "Cut not implemented"),
+                EditCommand::Copy => self.console.log(LogLevel::Info, "Copied selection"),
+                EditCommand::Paste => self.console.log(LogLevel::Warn, "Paste not implemented"),
+                EditCommand::Delete => self.console.log(LogLevel::Info, "Delete selection"),
+                EditCommand::SelectAll => {
+                    self.console.log(LogLevel::Info, "Select All invoked");
+                }
+                EditCommand::Preferences => {
+                    self.status_message = Some("Preferences not available".into());
+                    self.console
+                        .log(LogLevel::Warn, "Preferences dialog not implemented");
+                }
+            },
+            Command::View(cmd) => match cmd {
+                ViewCommand::ToggleMixer => {
+                    self.mixer_hidden = !self.mixer_hidden;
+                    let state = if self.mixer_hidden { "hidden" } else { "shown" };
+                    self.console.log(LogLevel::Info, format!("Mixer {state}"));
+                }
+                ViewCommand::TogglePianoRoll => {
+                    self.piano_roll_hidden = !self.piano_roll_hidden;
+                    let state = if self.piano_roll_hidden {
+                        "hidden"
+                    } else {
+                        "shown"
+                    };
+                    self.console
+                        .log(LogLevel::Info, format!("Piano Roll {state}"));
+                }
+                ViewCommand::ToggleBrowser => {
+                    self.browser_hidden = !self.browser_hidden;
+                    self.browser.set_visible(!self.browser_hidden);
+                    self.layout.set_browser_visible(!self.browser_hidden);
+                    let state = if self.browser_hidden {
+                        "hidden"
+                    } else {
+                        "shown"
+                    };
+                    self.console.log(LogLevel::Info, format!("Browser {state}"));
+                }
+                ViewCommand::ZoomIn => {
+                    self.console.log(LogLevel::Info, "Zoom In");
+                }
+                ViewCommand::ZoomOut => {
+                    self.console.log(LogLevel::Info, "Zoom Out");
+                }
+                ViewCommand::ToggleFullscreen => {
+                    self.fullscreen = !self.fullscreen;
+                    self.fullscreen_dirty = true;
+                    self.console
+                        .log(LogLevel::Info, "Fullscreen toggle requested");
+                }
+            },
+            Command::Insert(cmd) => match cmd {
+                InsertCommand::AudioTrack => {
+                    self.console.log(LogLevel::Info, "Audio track inserted");
+                }
+                InsertCommand::MidiTrack => {
+                    self.console.log(LogLevel::Info, "MIDI track inserted");
+                }
+                InsertCommand::ReturnBus => {
+                    self.console.log(LogLevel::Info, "Return/Aux bus inserted");
+                }
+                InsertCommand::AddPluginOnSelectedTrack(category) => {
+                    self.console.log(
+                        LogLevel::Info,
+                        format!("Plugin picker for {category} requested"),
+                    );
+                }
+            },
+            Command::Track(cmd) => match cmd {
+                TrackCommand::ArmRecord => {
+                    self.record_armed = !self.record_armed;
+                    self.handle_transport_event(TransportEvent::Record(self.record_armed));
+                }
+                TrackCommand::Solo => {
+                    self.console.log(LogLevel::Info, "Solo track");
+                }
+                TrackCommand::Mute => {
+                    self.console.log(LogLevel::Info, "Mute track");
+                }
+                TrackCommand::FreezeCommit => {
+                    self.console
+                        .log(LogLevel::Warn, "Freeze/Commit not implemented");
+                }
+                TrackCommand::Rename => {
+                    self.console
+                        .log(LogLevel::Info, "Rename track dialog requested");
+                }
+                TrackCommand::Color => {
+                    self.console
+                        .log(LogLevel::Info, "Track color dialog requested");
+                }
+            },
+            Command::Midi(cmd) => match cmd {
+                MidiCommand::OpenInputDevicePicker => {
+                    self.console
+                        .log(LogLevel::Info, "Open MIDI input device picker");
+                }
+                MidiCommand::SelectInputDevice(device) => {
+                    self.selected_midi_input = Some(device.clone());
+                    self.console
+                        .log(LogLevel::Info, format!("MIDI input set to {device}"));
+                }
+                MidiCommand::OpenChannelPicker => {
+                    self.console.log(LogLevel::Info, "Open MIDI channel picker");
+                }
+                MidiCommand::SelectChannel(channel) => {
+                    self.midi_channel = channel;
+                    self.console
+                        .log(LogLevel::Info, format!("MIDI channel set to {channel}"));
+                }
+                MidiCommand::Quantize => {
+                    self.console.log(LogLevel::Info, "Quantize selection");
+                }
+                MidiCommand::Humanize => {
+                    self.console.log(LogLevel::Warn, "Humanize not implemented");
+                }
+                MidiCommand::MetronomeSettings => {
+                    self.console
+                        .log(LogLevel::Info, "Metronome settings dialog requested");
+                }
+            },
+            Command::Transport(cmd) => match cmd {
+                TransportCommand::TogglePlayPause => {
+                    if matches!(
+                        self.transport_state,
+                        TransportState::Playing | TransportState::Recording
+                    ) {
+                        self.handle_transport_event(TransportEvent::Stop);
+                    } else {
+                        self.handle_transport_event(TransportEvent::Play);
+                    }
+                }
+                TransportCommand::Stop => {
+                    self.handle_transport_event(TransportEvent::Stop);
+                }
+                TransportCommand::RecordArm => {
+                    self.record_armed = !self.record_armed;
+                    self.handle_transport_event(TransportEvent::Record(self.record_armed));
+                }
+                TransportCommand::ToggleLoop => {
+                    self.transport_loop_enabled = !self.transport_loop_enabled;
+                    self.console.log(
+                        LogLevel::Info,
+                        format!(
+                            "Loop {}",
+                            if self.transport_loop_enabled {
+                                "enabled"
+                            } else {
+                                "disabled"
+                            }
+                        ),
+                    );
+                }
+                TransportCommand::LoopToSelection => {
+                    self.console.log(LogLevel::Info, "Loop to selection");
+                }
+                TransportCommand::GoToStart => {
+                    self.transport.sample_pos.store(0, AtomicOrdering::Relaxed);
+                    self.console.log(LogLevel::Info, "Go to start");
+                }
+                TransportCommand::TapTempo => {
+                    self.console.log(LogLevel::Info, "Tap tempo");
+                }
+            },
+            Command::Options(cmd) => match cmd {
+                OptionsCommand::AudioDeviceDialog => {
+                    let config = self.engine_runner.config().clone();
+                    let runtime = self.engine_runner.runtime_options().clone();
+                    self.audio_settings.open(&config, &runtime);
+                }
+                OptionsCommand::ProjectSettings => {
+                    self.console
+                        .log(LogLevel::Info, "Project settings dialog requested");
+                }
+                OptionsCommand::Theme(mode) => {
+                    self.console
+                        .log(LogLevel::Info, format!("Theme set to {:?}", mode));
+                }
+                OptionsCommand::CpuMeter => {
+                    self.console.log(LogLevel::Info, "CPU meter toggled");
+                }
+            },
+            Command::Help(cmd) => match cmd {
+                HelpCommand::About => {
+                    self.status_message = Some("Harmoniq Studio prototype".into());
+                    self.console.log(LogLevel::Info, "About dialog requested");
+                }
+                HelpCommand::OpenLogsFolder => {
+                    self.console.log(LogLevel::Info, "Open logs folder");
+                }
+                HelpCommand::UserManual => {
+                    self.console.log(LogLevel::Info, "Open user manual");
+                }
+            },
+        }
+    }
+}
+
 struct WorkspaceTabViewer<'a> {
     palette: &'a HarmoniqPalette,
     event_bus: &'a EventBus,
@@ -1515,6 +1807,8 @@ struct WorkspaceTabViewer<'a> {
     console: &'a mut ConsolePane,
     input_focus: &'a mut InputFocus,
     browser_hidden: bool,
+    mixer_hidden: bool,
+    piano_roll_hidden: bool,
     transport_state: TransportState,
     transport_clock: TransportClock,
 }
@@ -1550,12 +1844,30 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
                 self.transport_clock,
             ),
             WorkspacePane::Mixer => {
-                self.mixer
-                    .ui(ui, self.palette, self.event_bus, self.input_focus);
+                if self.mixer_hidden {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            RichText::new("Mixer hidden (View → Toggle Mixer)")
+                                .color(self.palette.text_muted),
+                        );
+                    });
+                } else {
+                    self.mixer
+                        .ui(ui, self.palette, self.event_bus, self.input_focus);
+                }
             }
             WorkspacePane::PianoRoll => {
-                self.piano_roll
-                    .ui(ui, self.palette, self.event_bus, self.input_focus);
+                if self.piano_roll_hidden {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            RichText::new("Piano Roll hidden (View → Toggle Piano Roll)")
+                                .color(self.palette.text_muted),
+                        );
+                    });
+                } else {
+                    self.piano_roll
+                        .ui(ui, self.palette, self.event_bus, self.input_focus);
+                }
             }
             WorkspacePane::Inspector => {
                 let commands = self.inspector.ui(
@@ -1579,8 +1891,14 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
 }
 
 impl App for HarmoniqStudioApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         ctx.request_repaint_after(Duration::from_millis(16));
+        self.shortcuts.handle_input(ctx, &self.command_sender);
+        self.command_dispatcher.poll(self);
+        if self.fullscreen_dirty {
+            frame.set_fullscreen(self.fullscreen);
+            self.fullscreen_dirty = false;
+        }
         self.process_events();
         self.update_engine_context();
         self.input_focus.maybe_release_on_escape(ctx);
@@ -1596,8 +1914,31 @@ impl App for HarmoniqStudioApp {
                     .outer_margin(Margin::symmetric(8.0, 4.0)),
             )
             .show(ctx, |ui| {
-                self.menu
-                    .ui(ui, &palette, &self.event_bus, !self.browser_hidden);
+                let snapshot = MenuBarSnapshot {
+                    mixer_visible: !self.mixer_hidden,
+                    piano_roll_visible: !self.piano_roll_hidden,
+                    browser_visible: !self.browser_hidden,
+                    fullscreen: self.fullscreen,
+                    can_undo: false,
+                    can_redo: false,
+                    transport_playing: matches!(
+                        self.transport_state,
+                        TransportState::Playing | TransportState::Recording
+                    ),
+                    transport_record_armed: self.record_armed,
+                    transport_loop_enabled: self.transport_loop_enabled,
+                    recent_projects: self.recent_projects.entries(),
+                    midi_inputs: &self.midi_inputs,
+                    selected_midi_input: self.selected_midi_input.as_deref(),
+                    midi_channel: self.midi_channel,
+                };
+                self.menu.render(
+                    ui,
+                    &palette,
+                    &self.shortcuts,
+                    &self.command_sender,
+                    &snapshot,
+                );
             });
 
         egui::TopBottomPanel::top("transport_bar")
@@ -1641,6 +1982,8 @@ impl App for HarmoniqStudioApp {
                     console: &mut self.console,
                     input_focus: &mut self.input_focus,
                     browser_hidden: self.browser_hidden,
+                    mixer_hidden: self.mixer_hidden,
+                    piano_roll_hidden: self.piano_roll_hidden,
                     transport_state: self.transport_state,
                     transport_clock: self.transport_clock,
                 };

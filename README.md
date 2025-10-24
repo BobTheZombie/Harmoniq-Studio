@@ -38,6 +38,41 @@ Add CLI flags (such as `--sample-rate` or `--midi-input`) to adjust the realtime
 engine configuration. To temporarily disable the windowed interface, append
 `--headless` to switch back to the minimal CLI renderer.
 
+### Menu bar and shortcuts
+
+The desktop build now ships with a full menu bar that mirrors familiar DAW
+workflows: File, Edit, View, Insert, Track, MIDI, Transport, Options, and Help.
+Every menu action posts a `Command` onto a lock-free UI → app command bus so the
+non-realtime thread can safely talk to the audio engine, update UI state, or
+open dialogs. The File menu also maintains an MRU list in
+`~/.config/HarmoniqStudio/recent.json`, while keyboard accelerators are loaded
+from `~/.config/HarmoniqStudio/shortcuts.json` and can be customized per user.
+
+Key default shortcuts:
+
+| Action | macOS | Windows/Linux |
+| --- | --- | --- |
+| New Project | ⌘N | Ctrl+N |
+| Open Project | ⌘O | Ctrl+O |
+| Save Project | ⌘S | Ctrl+S |
+| Save As | ⌘⇧S | Ctrl+Shift+S |
+| Export/Render | ⌘E | Ctrl+E |
+| Undo / Redo | ⌘Z / ⌘⇧Z | Ctrl+Z / Ctrl+Shift+Z |
+| Cut / Copy / Paste | ⌘X / ⌘C / ⌘V | Ctrl+X / Ctrl+C / Ctrl+V |
+| Delete | Del | Del |
+| Select All | ⌘A | Ctrl+A |
+| Toggle Mixer / Piano Roll / Browser | M / P / B | M / P / B |
+| Zoom In / Out | ⌘+ / ⌘− | Ctrl+Plus / Ctrl+Minus |
+| Toggle Fullscreen | F11 | F11 |
+| Arm Track / Solo / Mute | R / S / M | R / S / M |
+| Quantize | Q | Q |
+| Play / Stop / Record | Space / 0 / ⌘R | Space / 0 / Ctrl+R |
+| Loop / Go to Start / Tap Tempo | L / Home / T | L / Home / T |
+
+Options → Audio Device… opens the realtime device dialog, and Transport menu
+items mirror the transport buttons along the top bar. Shortcuts are consumed so
+text inputs remain unaffected when invoking global commands.
+
 ### Realtime audio and MIDI
 
 Harmoniq Studio now streams audio using native backends such as ALSA, JACK, and

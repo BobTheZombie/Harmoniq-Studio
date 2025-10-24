@@ -37,6 +37,7 @@ crossbeam-queue = "0.3"
 ringbuf = "0.3"
 once_cell = "1.19"
 flacenc = "0.5"
+dirs = "5.0"
 
 [workspace.metadata]
 project-description = "Harmoniq Studio - a native, multi-platform digital audio workstation."
