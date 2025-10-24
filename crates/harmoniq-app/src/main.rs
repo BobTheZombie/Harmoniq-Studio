@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -9,7 +10,7 @@ use std::time::{Duration, Instant};
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use clap::Parser;
 use eframe::egui::{
     self, Align2, CursorIcon, Id, Margin, PointerButton, RichText, Rounding, Stroke,
@@ -75,9 +76,13 @@ struct Cli {
     #[arg(long, default_value_t = 512)]
     block_size: usize,
 
-    /// Initial tempo used for transport and offline bouncing
-    #[arg(long, default_value_t = 120.0)]
-    tempo: f32,
+    /// Initial tempo used for transport and offline bouncing (beats per minute)
+    #[arg(long = "bpm", default_value_t = 120.0)]
+    bpm: f32,
+
+    /// Initial time signature used for the transport (e.g. "4/4")
+    #[arg(long = "sig", default_value = "4/4")]
+    signature: String,
 
     /// Enable Harmoniq Ultra runtime profile heuristics (prefers OpenASIO when available)
     #[arg(long, default_value_t = false)]
@@ -314,6 +319,34 @@ impl Default for TimeSignature {
     }
 }
 
+impl FromStr for TimeSignature {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut parts = s.split('/');
+        let numerator = parts
+            .next()
+            .ok_or_else(|| anyhow!("missing numerator"))?
+            .trim()
+            .parse::<u32>()?;
+        let denominator = parts
+            .next()
+            .ok_or_else(|| anyhow!("missing denominator"))?
+            .trim()
+            .parse::<u32>()?;
+        if parts.next().is_some() {
+            anyhow::bail!("invalid time signature format");
+        }
+        if numerator == 0 || denominator == 0 {
+            anyhow::bail!("time signature components must be non-zero");
+        }
+        Ok(Self {
+            numerator,
+            denominator,
+        })
+    }
+}
+
 impl TimeSignature {
     pub fn as_tuple(&self) -> (u32, u32) {
         (self.numerator, self.denominator)
@@ -356,7 +389,7 @@ impl TransportClock {
 #[derive(Debug, Clone)]
 struct EngineContext {
     tempo: f32,
-    time_signature: TimeSignature,
+    _time_signature: TimeSignature,
     transport: TransportState,
     cpu_usage: f32,
     clock: TransportClock,
@@ -467,7 +500,7 @@ fn offline_bounce_to_file(
     output_path: impl AsRef<Path>,
     config: BufferConfig,
     graph_config: &DemoGraphConfig,
-    tempo: f32,
+    bpm: f32,
     beats: f32,
 ) -> anyhow::Result<PathBuf> {
     if beats <= 0.0 {
@@ -491,7 +524,7 @@ fn offline_bounce_to_file(
         }
     };
 
-    let total_seconds = (60.0 / tempo.max(1.0)) * beats;
+    let total_seconds = (60.0 / bpm.max(1.0)) * beats;
     let total_frames = (total_seconds * config.sample_rate) as usize;
     let channels = config.layout.channels() as usize;
 
@@ -541,6 +574,11 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Cli::parse();
+    let initial_signature = args
+        .signature
+        .parse::<TimeSignature>()
+        .context("failed to parse --sig time signature")?;
+    let initial_bpm = args.bpm;
     let ultra_mode = args.ultra || cfg!(feature = "ultra");
     harmoniq_engine::rt::enable_ftz_daz();
     if ultra_mode {
@@ -652,7 +690,7 @@ fn main() -> anyhow::Result<()> {
             path,
             config,
             &DemoGraphConfig::headless_default(),
-            args.tempo,
+            initial_bpm,
             args.bounce_beats,
         )?;
         println!("Offline bounce written to {}", bounced_path.display());
@@ -660,9 +698,23 @@ fn main() -> anyhow::Result<()> {
     }
 
     if args.headless {
-        run_headless(&args, runtime_options, sample_rate, block_size)
+        run_headless(
+            &args,
+            runtime_options,
+            sample_rate,
+            block_size,
+            initial_signature,
+            initial_bpm,
+        )
     } else {
-        run_ui(&args, runtime_options, sample_rate, block_size)
+        run_ui(
+            &args,
+            runtime_options,
+            sample_rate,
+            block_size,
+            initial_signature,
+            initial_bpm,
+        )
     }
 }
 
@@ -671,12 +723,14 @@ fn run_headless(
     runtime: AudioRuntimeOptions,
     sample_rate: f32,
     block_size: usize,
+    time_signature: TimeSignature,
+    bpm: f32,
 ) -> anyhow::Result<()> {
     let config = BufferConfig::new(sample_rate, block_size, ChannelLayout::Stereo);
     let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
     configure_demo_graph(&mut engine, &DemoGraphConfig::headless_default())?;
     engine.set_transport(TransportState::Playing);
-    engine.execute_command(EngineCommand::SetTempo(args.tempo))?;
+    engine.execute_command(EngineCommand::SetTempo(bpm))?;
 
     let command_queue = engine.command_queue();
     let engine = Arc::new(Mutex::new(engine));
@@ -719,11 +773,11 @@ fn run_headless(
                     "Realtime audio unavailable: {:#}. Running an offline preview instead.",
                     err
                 );
-                run_headless_offline_preview(&engine, &config, args.tempo)?;
+                run_headless_offline_preview(&engine, &config, bpm)?;
             }
         }
     } else {
-        run_headless_offline_preview(&engine, &config, args.tempo)?;
+        run_headless_offline_preview(&engine, &config, bpm)?;
     }
 
     Ok(())
@@ -732,7 +786,7 @@ fn run_headless(
 fn run_headless_offline_preview(
     engine: &Arc<Mutex<HarmoniqEngine>>,
     config: &BufferConfig,
-    tempo: f32,
+    bpm: f32,
 ) -> anyhow::Result<()> {
     let mut buffer = AudioBuffer::from_config(config);
     for _ in 0..10 {
@@ -747,7 +801,7 @@ fn run_headless_offline_preview(
         "Rendered {} frames across {} channels at {:.1} BPM",
         buffer.len(),
         config.layout.channels(),
-        tempo
+        bpm
     );
 
     Ok(())
@@ -758,6 +812,8 @@ fn run_ui(
     runtime: AudioRuntimeOptions,
     sample_rate: f32,
     block_size: usize,
+    time_signature: TimeSignature,
+    bpm: f32,
 ) -> anyhow::Result<()> {
     let native_options = NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
@@ -766,7 +822,8 @@ fn run_ui(
 
     let config = BufferConfig::new(sample_rate, block_size, ChannelLayout::Stereo);
     let config_for_app = config.clone();
-    let tempo_for_app = args.tempo;
+    let tempo_for_app = bpm;
+    let signature_for_app = time_signature;
     let runtime_for_app = runtime.clone();
 
     eframe::run_native(
@@ -775,14 +832,19 @@ fn run_ui(
         Box::new(move |cc| {
             install_image_loaders(&cc.egui_ctx);
             let config = config_for_app.clone();
-            let app =
-                match HarmoniqStudioApp::new(config, tempo_for_app, runtime_for_app.clone(), cc) {
-                    Ok(app) => app,
-                    Err(err) => {
-                        eprintln!("Failed to initialise Harmoniq Studio UI: {err:?}");
-                        process::exit(1);
-                    }
-                };
+            let app = match HarmoniqStudioApp::new(
+                config,
+                tempo_for_app,
+                signature_for_app,
+                runtime_for_app.clone(),
+                cc,
+            ) {
+                Ok(app) => app,
+                Err(err) => {
+                    eprintln!("Failed to initialise Harmoniq Studio UI: {err:?}");
+                    process::exit(1);
+                }
+            };
             Box::new(app)
         }),
     )
@@ -1014,6 +1076,7 @@ impl HarmoniqStudioApp {
     fn new(
         config: BufferConfig,
         initial_tempo: f32,
+        initial_time_signature: TimeSignature,
         runtime: AudioRuntimeOptions,
         cc: &CreationContext<'_>,
     ) -> anyhow::Result<Self> {
@@ -1036,10 +1099,9 @@ impl HarmoniqStudioApp {
             runtime,
         )?;
 
-        let time_signature = TimeSignature::default();
         let engine_context = Arc::new(Mutex::new(EngineContext::new(
             initial_tempo,
-            time_signature,
+            initial_time_signature,
         )));
 
         let layout = LayoutState::load(PathBuf::from("config/ui_layout.json"));
@@ -1055,7 +1117,7 @@ impl HarmoniqStudioApp {
 
         let event_bus = EventBus::default();
         let menu = MenuBarState::default();
-        let transport_bar = TransportBar::new(initial_tempo, time_signature);
+        let transport_bar = TransportBar::new(initial_tempo, initial_time_signature);
         let browser = BrowserPane::new(
             resources_root,
             layout.browser_visible(),
@@ -1093,7 +1155,7 @@ impl HarmoniqStudioApp {
             command_queue,
             engine_context,
             tempo: initial_tempo,
-            time_signature,
+            time_signature: initial_time_signature,
             transport_state: TransportState::Stopped,
             transport_clock: TransportClock::default(),
             metronome: false,
