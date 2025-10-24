@@ -4,6 +4,7 @@
 //! deterministic, low latency audio processing suitable for professional audio
 //! workstations and live performance scenarios.
 
+pub mod automation;
 pub mod buffer;
 pub mod buffers;
 pub mod dsp;
@@ -21,6 +22,10 @@ pub mod transport;
 #[cfg(feature = "native")]
 pub mod realtime;
 
+pub use automation::{
+    AutomationCommand, AutomationCurve, AutomationEvent, AutomationWriteMode, CurveShape,
+    ParameterSpec,
+};
 pub use buffer::{AudioBuffer, BufferConfig, ChannelLayout};
 pub use dsp::RealtimeDspEngine;
 pub use engine::{AudioClip, EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
@@ -45,7 +50,7 @@ pub use realtime::{start_realtime, EngineHandle};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::AutomationEvent;
+    use crate::automation::{AutomationCommand, CurveShape, ParameterSpec};
     use rand::Rng;
 
     struct NoiseGenerator;
@@ -282,24 +287,31 @@ mod tests {
             .replace_graph(builder.build())
             .expect("graph should be accepted");
 
+        engine
+            .register_automation_parameter(
+                synth_id,
+                ParameterSpec::new(0, "Amplitude", 0.0, 1.0, 0.0),
+            )
+            .expect("register automation parameter");
+
         let sender = engine
             .automation_sender(synth_id)
             .expect("automation sender");
 
         sender
-            .send(AutomationEvent {
-                plugin_id: PluginId(0),
+            .send(AutomationCommand::DrawCurve {
                 parameter: 0,
+                sample: 0,
                 value: 0.25,
-                sample_offset: 0,
+                shape: CurveShape::Step,
             })
             .expect("send automation");
         sender
-            .send(AutomationEvent {
-                plugin_id: PluginId(0),
+            .send(AutomationCommand::DrawCurve {
                 parameter: 0,
+                sample: 16,
                 value: 0.75,
-                sample_offset: 16,
+                shape: CurveShape::Step,
             })
             .expect("send automation");
 
@@ -309,6 +321,58 @@ mod tests {
         let left = buffer.channel(0);
         assert!((left[0] - 0.25).abs() < f32::EPSILON);
         assert!((left[16] - 0.75).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn automation_linear_curve_interpolates() {
+        let config = BufferConfig::new(48_000.0, 64, ChannelLayout::Stereo);
+        let mut engine = HarmoniqEngine::new(config.clone()).expect("engine");
+
+        let synth_id = engine
+            .register_processor(Box::new(AutomationSynth::default()))
+            .expect("register synth");
+
+        engine
+            .register_automation_parameter(
+                synth_id,
+                ParameterSpec::new(0, "Amplitude", 0.0, 1.0, 0.0),
+            )
+            .expect("register automation parameter");
+
+        let mut builder = GraphBuilder::new();
+        let node = builder.add_node(synth_id);
+        builder.connect_to_mixer(node, 1.0).unwrap();
+        engine
+            .replace_graph(builder.build())
+            .expect("graph should be accepted");
+
+        let sender = engine
+            .automation_sender(synth_id)
+            .expect("automation sender");
+
+        sender
+            .send(AutomationCommand::DrawCurve {
+                parameter: 0,
+                sample: 0,
+                value: 0.0,
+                shape: CurveShape::Linear,
+            })
+            .expect("send automation");
+        sender
+            .send(AutomationCommand::DrawCurve {
+                parameter: 0,
+                sample: 64,
+                value: 1.0,
+                shape: CurveShape::Linear,
+            })
+            .expect("send automation");
+
+        let mut buffer = AudioBuffer::from_config(&config);
+        engine.process_block(&mut buffer).expect("process");
+
+        let left = buffer.channel(0);
+        assert!((left[32] - 0.5).abs() < 1e-3);
+        assert!(left.iter().all(|sample| sample.is_finite()));
     }
 
     #[test]

@@ -19,8 +19,10 @@ use eframe::{App, CreationContext, NativeOptions};
 use egui_dock::{DockArea, DockState, Style as DockStyle, TabViewer};
 use egui_extras::{image::load_svg_bytes, install_image_loaders};
 use harmoniq_engine::{
-    transport::Transport as EngineTransport, AudioBuffer, BufferConfig, ChannelLayout,
-    EngineCommand, GraphBuilder, HarmoniqEngine, TransportState,
+    automation::{AutomationCommand, CurveShape, ParameterSpec},
+    transport::Transport as EngineTransport,
+    AudioBuffer, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine,
+    PluginId, TransportState,
 };
 use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth};
 use harmoniq_ui::{HarmoniqPalette, HarmoniqTheme};
@@ -120,6 +122,10 @@ struct Cli {
     #[arg(long)]
     midi_input: Option<String>,
 
+    /// Apply automation in the demo graph before playback (e.g. --auto gain=-6@1.0s)
+    #[arg(long = "auto")]
+    auto: Vec<String>,
+
     /// List available realtime audio backends
     #[arg(long, default_value_t = false)]
     list_audio_backends: bool,
@@ -160,7 +166,7 @@ impl DemoGraphConfig {
 fn configure_demo_graph(
     engine: &mut HarmoniqEngine,
     graph_config: &DemoGraphConfig,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<PluginId> {
     let sine = engine
         .register_processor(Box::new(SineSynth::with_frequency(
             graph_config.sine_frequency,
@@ -172,6 +178,12 @@ fn configure_demo_graph(
     let gain = engine
         .register_processor(Box::new(GainPlugin::new(graph_config.gain)))
         .context("register gain")?;
+    engine
+        .register_automation_parameter(
+            gain,
+            ParameterSpec::new(0, "Gain", 0.0, 2.0, graph_config.gain),
+        )
+        .context("register automation parameter")?;
 
     let mut graph_builder = GraphBuilder::new();
     let sine_node = graph_builder.add_node(sine);
@@ -182,6 +194,110 @@ fn configure_demo_graph(
     graph_builder.connect_to_mixer(gain_node, 1.0)?;
 
     engine.replace_graph(graph_builder.build())?;
+    Ok(gain)
+}
+
+#[derive(Debug, Clone)]
+struct AutoSpec {
+    name: String,
+    value: f32,
+    value_in_db: bool,
+    time_seconds: f32,
+}
+
+fn parse_auto_spec(spec: &str) -> anyhow::Result<AutoSpec> {
+    let (name_value, time_part) = spec
+        .split_once('@')
+        .ok_or_else(|| anyhow!("automation spec must contain '@': {spec}"))?;
+    let (name, value_part) = name_value
+        .split_once('=')
+        .ok_or_else(|| anyhow!("automation spec must contain '=': {spec}"))?;
+
+    let name = name.trim();
+    if name.is_empty() {
+        anyhow::bail!("automation parameter name cannot be empty");
+    }
+
+    let mut value_fragment = value_part.trim();
+    let mut value_in_db = false;
+    if value_fragment.to_ascii_lowercase().ends_with("db") {
+        value_in_db = true;
+        value_fragment = value_fragment[..value_fragment.len() - 2].trim();
+    }
+    let value = value_fragment
+        .parse::<f32>()
+        .map_err(|err| anyhow!("invalid automation value '{value_fragment}': {err}"))?;
+
+    let mut time_fragment = time_part.trim();
+    let mut factor = 1.0;
+    if time_fragment.to_ascii_lowercase().ends_with("ms") {
+        time_fragment = time_fragment[..time_fragment.len() - 2].trim();
+        factor = 0.001;
+    } else if time_fragment.ends_with('s') || time_fragment.ends_with('S') {
+        time_fragment = time_fragment[..time_fragment.len() - 1].trim();
+    }
+
+    let seconds = time_fragment
+        .parse::<f32>()
+        .map_err(|err| anyhow!("invalid automation time '{time_fragment}': {err}"))?
+        * factor;
+    if seconds < 0.0 {
+        anyhow::bail!("automation time cannot be negative");
+    }
+
+    Ok(AutoSpec {
+        name: name.to_string(),
+        value,
+        value_in_db,
+        time_seconds: seconds,
+    })
+}
+
+fn db_to_linear(db: f32) -> f32 {
+    10.0_f32.powf(db / 20.0)
+}
+
+fn apply_cli_automation(
+    engine: &HarmoniqEngine,
+    plugin_id: PluginId,
+    sample_rate: f32,
+    specs: &[String],
+) -> anyhow::Result<()> {
+    if specs.is_empty() {
+        return Ok(());
+    }
+
+    let sender = match engine.automation_sender(plugin_id) {
+        Some(sender) => sender,
+        None => return Ok(()),
+    };
+
+    for raw in specs {
+        let parsed = parse_auto_spec(raw)?;
+        let parameter_index = engine
+            .automation_parameter_index(plugin_id, &parsed.name)
+            .ok_or_else(|| anyhow!("unknown automation parameter '{}'", parsed.name))?;
+        let parameter_spec = engine
+            .automation_parameter_spec(plugin_id, parameter_index)
+            .ok_or_else(|| anyhow!("missing automation metadata for '{}'", parsed.name))?;
+
+        let mut value = parsed.value;
+        if parsed.value_in_db || parsed.name.eq_ignore_ascii_case("gain") {
+            value = db_to_linear(value);
+        }
+        let value = parameter_spec.clamp(value);
+        let samples = (parsed.time_seconds.max(0.0) * sample_rate.max(0.0)).round() as u64;
+
+        sender
+            .send(AutomationCommand::DrawCurve {
+                parameter: parameter_index,
+                sample: samples,
+                value,
+                shape: CurveShape::Step,
+            })
+            .map_err(|_| anyhow!("automation queue full for parameter '{}'", parsed.name))?;
+    }
+
     Ok(())
 }
 
@@ -502,6 +618,7 @@ fn offline_bounce_to_file(
     graph_config: &DemoGraphConfig,
     bpm: f32,
     beats: f32,
+    automation: &[String],
 ) -> anyhow::Result<PathBuf> {
     if beats <= 0.0 {
         anyhow::bail!("bounce length in beats must be positive");
@@ -529,7 +646,9 @@ fn offline_bounce_to_file(
     let channels = config.layout.channels() as usize;
 
     let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
-    configure_demo_graph(&mut engine, graph_config)?;
+    let gain_id = configure_demo_graph(&mut engine, graph_config)?;
+    apply_cli_automation(&engine, gain_id, config.sample_rate, automation)
+        .context("failed to apply automation")?;
     engine.set_transport(TransportState::Playing);
 
     let mut buffer = AudioBuffer::from_config(&config);
@@ -692,6 +811,7 @@ fn main() -> anyhow::Result<()> {
             &DemoGraphConfig::headless_default(),
             initial_bpm,
             args.bounce_beats,
+            &args.auto,
         )?;
         println!("Offline bounce written to {}", bounced_path.display());
         return Ok(());
@@ -728,7 +848,9 @@ fn run_headless(
 ) -> anyhow::Result<()> {
     let config = BufferConfig::new(sample_rate, block_size, ChannelLayout::Stereo);
     let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
-    configure_demo_graph(&mut engine, &DemoGraphConfig::headless_default())?;
+    let gain_id = configure_demo_graph(&mut engine, &DemoGraphConfig::headless_default())?;
+    apply_cli_automation(&engine, gain_id, sample_rate, &args.auto)
+        .context("failed to apply automation")?;
     engine.set_transport(TransportState::Playing);
     engine.execute_command(EngineCommand::SetTempo(bpm))?;
 
@@ -1107,7 +1229,7 @@ impl HarmoniqStudioApp {
 
         let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
         let graph_config = DemoGraphConfig::ui_default();
-        configure_demo_graph(&mut engine, &graph_config)?;
+        let _ = configure_demo_graph(&mut engine, &graph_config)?;
         engine.set_transport(TransportState::Stopped);
         engine.execute_command(EngineCommand::SetTempo(initial_tempo))?;
 

@@ -1,7 +1,7 @@
 use std::fmt;
 use std::io::Cursor;
-use std::sync::Arc;
 use std::sync::atomic::Ordering as AtomicOrdering;
+use std::sync::Arc;
 
 #[cfg(target_os = "linux")]
 use std::env;

@@ -60,6 +60,22 @@ impl AudioProcessor for GainPlugin {
     fn supports_layout(&self, layout: ChannelLayout) -> bool {
         matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
     }
+
+    fn handle_automation_event(
+        &mut self,
+        parameter: usize,
+        value: f32,
+        _sample_offset: usize,
+    ) -> anyhow::Result<()> {
+        if parameter == 0 {
+            let gain = value.clamp(0.0, 2.0);
+            let _ = self
+                .parameters
+                .set(&ParameterId::from(GAIN_PARAM), ParameterValue::from(gain));
+            self.gain = gain;
+        }
+        Ok(())
+    }
 }
 
 impl NativePlugin for GainPlugin {
