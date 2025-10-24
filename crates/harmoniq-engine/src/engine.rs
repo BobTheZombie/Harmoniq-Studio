@@ -11,7 +11,7 @@ use crate::{
     automation::{AutomationEvent, AutomationLane, AutomationSender, ParameterSpec},
     graph::{self, GraphBuilder, GraphHandle},
     nodes::{GainNode as BuiltinGain, NodeNoise as BuiltinNoise, NodeOsc as BuiltinSine},
-    plugin::{MidiEvent, PluginId},
+    plugin::{MidiEvent, PluginDescriptor, PluginId},
     rt::{AudioMetrics, AudioMetricsCollector},
     scratch::RtAllocGuard,
     tone::ToneShaper,
@@ -130,6 +130,47 @@ impl HarmoniqEngine {
 
     pub fn config(&self) -> &BufferConfig {
         &self.config
+    }
+
+    pub fn graph(&self) -> Option<GraphHandle> {
+        self.graph.read().clone()
+    }
+
+    pub fn plugin_descriptor(&self, id: PluginId) -> Option<PluginDescriptor> {
+        let processors = self.processors.read();
+        let handle = processors.get(&id)?.clone();
+        drop(processors);
+        let descriptor = handle.lock().descriptor();
+        Some(descriptor)
+    }
+
+    pub fn reset_render_state(&mut self) -> anyhow::Result<()> {
+        self.pending_midi.lock().clear();
+        self.transport_metrics
+            .sample_pos
+            .store(0, Ordering::Relaxed);
+        self.transport_metrics
+            .playing
+            .store(false, Ordering::Relaxed);
+        self.automation_cursor = 0;
+        self.metrics.reset();
+        self.sound_test = None;
+        self.master_buffer.lock().clear();
+        for buffer in &mut self.scratch_buffers {
+            buffer.clear();
+        }
+        for delay in self.delay_lines.values_mut() {
+            delay.reset();
+        }
+
+        {
+            let processors = self.processors.read();
+            for processor in processors.values() {
+                processor.lock().prepare(&self.config)?;
+            }
+        }
+
+        Ok(())
     }
 
     pub fn metrics(&self) -> AudioMetrics {
@@ -304,12 +345,26 @@ impl HarmoniqEngine {
     }
 
     pub fn process_block(&mut self, output: &mut AudioBuffer) -> anyhow::Result<()> {
+        self.render_block_with(|master, _| {
+            if output.channel_count() != master.channel_count() || output.len() != master.len() {
+                output.resize(master.channel_count(), master.len());
+            }
+            for (target_channel, source_channel) in output.channels_mut().zip(master.channels()) {
+                target_channel.copy_from_slice(source_channel);
+            }
+        })
+    }
+
+    pub(crate) fn render_block_with<R, F>(&mut self, mut visitor: F) -> anyhow::Result<R>
+    where
+        F: FnMut(&AudioBuffer, &[AudioBuffer]) -> R,
+    {
         let start = Instant::now();
         let period_ns = self.block_period_ns;
         let block_start = self.automation_cursor;
-        let block_len = output.len() as u32;
+        let block_len = self.config.block_size as u32;
 
-        let result = (|| -> anyhow::Result<()> {
+        let result = (|| -> anyhow::Result<R> {
             self.drain_command_queue()?;
             let pending_midi = {
                 let mut queue = self.pending_midi.lock();
@@ -322,15 +377,17 @@ impl HarmoniqEngine {
             let graph = match self.graph.read().clone() {
                 Some(graph) => graph,
                 None => {
-                    output.clear();
-                    return Ok(());
+                    let mut master = self.master_buffer.lock();
+                    master.clear();
+                    return Ok(visitor(&master, &[]));
                 }
             };
 
             let plugin_ids = graph.plugin_ids();
             if plugin_ids.is_empty() {
-                output.clear();
-                return Ok(());
+                let mut master = self.master_buffer.lock();
+                master.clear();
+                return Ok(visitor(&master, &[]));
             }
 
             let processors_guard = self.processors.read();
@@ -391,25 +448,23 @@ impl HarmoniqEngine {
                 self.apply_delay_compensation(&plugin_ids, &latencies, scratch_len, max_latency);
             }
 
-            {
+            let result = {
                 let scratch_buffers = &self.scratch_buffers[..scratch_len];
                 let mut master = self.master_buffer.lock();
                 graph::mixdown(&graph, &mut master, scratch_buffers);
                 let _guard = RtAllocGuard::enter();
                 self.tone_shaper.process(&mut master);
-                for (target_channel, source_channel) in output.channels_mut().zip(master.channels())
-                {
-                    target_channel.copy_from_slice(source_channel);
-                }
-            }
 
-            if let Some(player) = self.sound_test.as_mut() {
-                if player.mix_into(output) {
-                    self.sound_test = None;
+                if let Some(player) = self.sound_test.as_mut() {
+                    if player.mix_into(&mut master) {
+                        self.sound_test = None;
+                    }
                 }
-            }
 
-            Ok(())
+                visitor(&master, scratch_buffers)
+            };
+
+            Ok(result)
         })();
 
         self.metrics.record_block(start.elapsed(), period_ns);
@@ -417,10 +472,11 @@ impl HarmoniqEngine {
             self.transport(),
             TransportState::Playing | TransportState::Recording
         ) {
+            let rendered = self.config.block_size as u64;
             self.transport_metrics
                 .sample_pos
-                .fetch_add(output.len() as u64, Ordering::Relaxed);
-            self.automation_cursor = self.automation_cursor.saturating_add(output.len() as u64);
+                .fetch_add(rendered, Ordering::Relaxed);
+            self.automation_cursor = self.automation_cursor.saturating_add(rendered);
         }
         result
     }
