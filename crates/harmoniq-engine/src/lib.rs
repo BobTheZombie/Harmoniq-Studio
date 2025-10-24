@@ -15,6 +15,7 @@ pub mod media;
 pub mod mixer;
 pub mod nodes;
 pub mod plugin;
+pub mod project;
 pub mod render;
 pub mod rt;
 mod scratch;
@@ -43,6 +44,13 @@ pub use mixer::{
 pub use nodes::{GainNode, NodeNoise, NodeOsc, NoiseNode, SineNode};
 pub use plugin::{
     AudioProcessor, MidiEvent, MidiProcessor, MidiTimestamp, PluginDescriptor, PluginId,
+};
+pub use project::{
+    autosave_path, load_project, save_autosave, save_project, LoadError as ProjectLoadError,
+    LoadOptions as ProjectLoadOptions, LoadReport as ProjectLoadReport, MediaAsset, MediaChecksum,
+    MediaChunkDescriptor, MigrationError as ProjectMigrationError, ProjectDocument,
+    ProjectMetadata, SaveError as ProjectSaveError, SaveOptions as ProjectSaveOptions,
+    SaveReport as ProjectSaveReport, CURRENT_VERSION as PROJECT_VERSION,
 };
 pub use render::{
     DitherKind, FreezeSettings, OfflineRenderer, RenderDuration, RenderFile, RenderFormat,
