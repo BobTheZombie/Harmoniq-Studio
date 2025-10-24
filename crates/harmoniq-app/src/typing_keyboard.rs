@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use eframe::egui::{self, Event, Key, Modifiers};
-use harmoniq_engine::MidiEvent;
+use harmoniq_engine::{MidiEvent, MidiTimestamp};
 
 const LOWER_BASE_NOTE: u8 = 48; // C3
 const UPPER_BASE_NOTE: u8 = 60; // C4
@@ -47,12 +47,14 @@ impl TypingKeyboard {
                                     channel: MIDI_CHANNEL,
                                     note,
                                     velocity,
+                                    timestamp: MidiTimestamp::now(),
                                 });
                             }
                         } else if let Some(note) = self.active_notes.remove(key) {
                             events.push(MidiEvent::NoteOff {
                                 channel: MIDI_CHANNEL,
                                 note,
+                                timestamp: MidiTimestamp::now(),
                             });
                         }
                     } else if !pressed {
@@ -128,6 +130,7 @@ impl TypingKeyboard {
                 .map(|(_, note)| MidiEvent::NoteOff {
                     channel: MIDI_CHANNEL,
                     note,
+                    timestamp: MidiTimestamp::now(),
                 })
                 .collect()
         }

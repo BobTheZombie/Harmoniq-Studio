@@ -3,6 +3,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
 use crate::{AudioBuffer, BufferConfig, ChannelLayout};
 
 /// Unique identifier for a plugin instance within the engine.
@@ -41,13 +44,95 @@ impl PluginDescriptor {
     }
 }
 
+/// Monotonic timestamp attached to MIDI events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MidiTimestamp {
+    micros: u64,
+}
+
+impl MidiTimestamp {
+    /// Creates a timestamp representing the current instant relative to the
+    /// process wide MIDI clock epoch.
+    pub fn now() -> Self {
+        Self::from_instant(Instant::now())
+    }
+
+    /// Creates a timestamp from a duration since the MIDI clock epoch.
+    pub fn from_duration(duration: Duration) -> Self {
+        Self {
+            micros: duration.as_micros().min(u64::MAX as u128) as u64,
+        }
+    }
+
+    /// Creates a timestamp from microseconds since the MIDI clock epoch.
+    pub fn from_micros(micros: u64) -> Self {
+        Self { micros }
+    }
+
+    /// Returns the timestamp expressed as a [`Duration`].
+    pub fn as_duration(self) -> Duration {
+        Duration::from_micros(self.micros)
+    }
+
+    /// Absolute difference between two timestamps.
+    pub fn abs_diff(self, other: MidiTimestamp) -> Duration {
+        let lhs = self.micros;
+        let rhs = other.micros;
+        if lhs >= rhs {
+            Duration::from_micros(lhs - rhs)
+        } else {
+            Duration::from_micros(rhs - lhs)
+        }
+    }
+
+    fn from_instant(now: Instant) -> Self {
+        static EPOCH: OnceLock<Instant> = OnceLock::new();
+        let base = EPOCH.get_or_init(|| Instant::now());
+        let duration = now
+            .checked_duration_since(*base)
+            .unwrap_or_else(|| Duration::from_micros(0));
+        Self::from_duration(duration)
+    }
+}
+
 /// Simplified MIDI event representation for sequencing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MidiEvent {
-    NoteOn { channel: u8, note: u8, velocity: u8 },
-    NoteOff { channel: u8, note: u8 },
-    ControlChange { channel: u8, control: u8, value: u8 },
-    PitchBend { channel: u8, lsb: u8, msb: u8 },
+    NoteOn {
+        channel: u8,
+        note: u8,
+        velocity: u8,
+        timestamp: MidiTimestamp,
+    },
+    NoteOff {
+        channel: u8,
+        note: u8,
+        timestamp: MidiTimestamp,
+    },
+    ControlChange {
+        channel: u8,
+        control: u8,
+        value: u8,
+        timestamp: MidiTimestamp,
+    },
+    PitchBend {
+        channel: u8,
+        lsb: u8,
+        msb: u8,
+        timestamp: MidiTimestamp,
+    },
+}
+
+impl MidiEvent {
+    /// Returns the timestamp associated with this event.
+    pub fn timestamp(&self) -> MidiTimestamp {
+        match self {
+            MidiEvent::NoteOn { timestamp, .. }
+            | MidiEvent::NoteOff { timestamp, .. }
+            | MidiEvent::ControlChange { timestamp, .. }
+            | MidiEvent::PitchBend { timestamp, .. } => *timestamp,
+        }
+    }
 }
 
 /// Errors that can be returned by plugin operations.
