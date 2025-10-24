@@ -60,6 +60,9 @@ impl InspectorPane {
         let ctx = ui.ctx().clone();
         let mut commands = Vec::new();
 
+        let mut updated_selection = self.selection.clone();
+        let mut clear_selection = false;
+
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.heading(RichText::new("Inspector").color(palette.text_primary));
@@ -69,7 +72,7 @@ impl InspectorPane {
             });
             ui.add_space(8.0);
 
-            if let Some(selection) = &mut self.selection {
+            if let Some(selection) = updated_selection.as_mut() {
                 ui.label(
                     RichText::new(format!("Track: {}", selection.track_name))
                         .color(palette.text_muted),
@@ -150,7 +153,7 @@ impl InspectorPane {
                             track_index: selection.track_index,
                             clip_index: selection.clip_index,
                         });
-                        self.selection = None;
+                        clear_selection = true;
                     }
                 });
             } else {
@@ -170,6 +173,12 @@ impl InspectorPane {
 
         let used_rect = ui.min_rect();
         focus.track_pane_interaction(&ctx, used_rect, WorkspacePane::Inspector);
+
+        self.selection = if clear_selection {
+            None
+        } else {
+            updated_selection
+        };
         commands
     }
 }

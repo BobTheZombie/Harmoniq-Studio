@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use eframe::egui::{self, Context, Key, PointerButton, Rect};
+use eframe::egui::{Context, Key, PointerButton, Rect};
 
 use crate::ui::workspace::WorkspacePane;
 
@@ -73,10 +73,7 @@ impl InputFocus {
             self.set_active(FocusTarget::Pane(pane));
         } else if ctx.input(|input| input.pointer.any_pressed()) {
             let pointer_pos = ctx.input(|input| input.pointer.interact_pos());
-            if pointer_pos
-                .flatten()
-                .map(|pos| !rect.contains(pos))
-                .unwrap_or(false)
+            if pointer_pos.map(|pos| !rect.contains(pos)).unwrap_or(false)
                 && self.active == FocusTarget::Pane(pane)
             {
                 self.clear();
