@@ -1878,13 +1878,11 @@ impl CommandHandler for HarmoniqStudioApp {
                 }
                 ViewCommand::ZoomIn => {
                     self.mixer.zoom_in();
-                    self.console
-                        .log(LogLevel::Info, "Mixer zoom increased");
+                    self.console.log(LogLevel::Info, "Mixer zoom increased");
                 }
                 ViewCommand::ZoomOut => {
                     self.mixer.zoom_out();
-                    self.console
-                        .log(LogLevel::Info, "Mixer zoom decreased");
+                    self.console.log(LogLevel::Info, "Mixer zoom decreased");
                 }
                 ViewCommand::ToggleFullscreen => {
                     self.fullscreen = !self.fullscreen;
