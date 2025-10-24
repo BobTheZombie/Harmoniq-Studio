@@ -61,7 +61,7 @@ use ui::{
     inspector::InspectorPane,
     layout::LayoutState,
     menu_bar::{MenuBarSnapshot, MenuBarState},
-    mixer::MixerPane,
+    mixer::MixerView,
     piano_roll::PianoRollPane,
     playlist::PlaylistPane,
     shortcuts::ShortcutMap,
@@ -1321,7 +1321,7 @@ struct HarmoniqStudioApp {
     browser: BrowserPane,
     channel_rack: ChannelRackPane,
     piano_roll: PianoRollPane,
-    mixer: MixerPane,
+    mixer: MixerView,
     playlist: PlaylistPane,
     inspector: InspectorPane,
     console: ConsolePane,
@@ -1378,6 +1378,8 @@ impl HarmoniqStudioApp {
         engine.set_transport(TransportState::Stopped);
         engine.execute_command(EngineCommand::SetTempo(initial_tempo))?;
 
+        let mixer_api = engine.mixer_ui_api();
+
         let command_queue = engine.command_queue();
         let transport = engine.transport_metrics();
         let engine = Arc::new(Mutex::new(engine));
@@ -1414,7 +1416,7 @@ impl HarmoniqStudioApp {
         let browser = BrowserPane::new(resources_root, browser_visible, browser_width);
         let channel_rack = ChannelRackPane::default();
         let piano_roll = PianoRollPane::default();
-        let mixer = MixerPane::default();
+        let mixer = MixerView::new(mixer_api);
         let playlist = PlaylistPane::default();
         let inspector = InspectorPane::new();
         let console = ConsolePane::default();
@@ -1875,10 +1877,14 @@ impl CommandHandler for HarmoniqStudioApp {
                     self.console.log(LogLevel::Info, format!("Browser {state}"));
                 }
                 ViewCommand::ZoomIn => {
-                    self.console.log(LogLevel::Info, "Zoom In");
+                    self.mixer.zoom_in();
+                    self.console
+                        .log(LogLevel::Info, "Mixer zoom increased");
                 }
                 ViewCommand::ZoomOut => {
-                    self.console.log(LogLevel::Info, "Zoom Out");
+                    self.mixer.zoom_out();
+                    self.console
+                        .log(LogLevel::Info, "Mixer zoom decreased");
                 }
                 ViewCommand::ToggleFullscreen => {
                     self.fullscreen = !self.fullscreen;
@@ -2041,7 +2047,7 @@ struct WorkspaceTabViewer<'a> {
     browser: &'a mut BrowserPane,
     channel_rack: &'a mut ChannelRackPane,
     piano_roll: &'a mut PianoRollPane,
-    mixer: &'a mut MixerPane,
+    mixer: &'a mut MixerView,
     playlist: &'a mut PlaylistPane,
     inspector: &'a mut InspectorPane,
     console: &'a mut ConsolePane,
@@ -2092,8 +2098,7 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
                         );
                     });
                 } else {
-                    self.mixer
-                        .ui(ui, self.palette, self.event_bus, self.input_focus);
+                    self.mixer.ui(ui, self.palette);
                 }
             }
             WorkspacePane::PianoRoll => {
