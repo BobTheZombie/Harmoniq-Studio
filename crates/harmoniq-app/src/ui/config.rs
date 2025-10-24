@@ -20,7 +20,7 @@ pub fn config_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShortcutEntry {
     pub command: CommandId,
     pub binding: String,

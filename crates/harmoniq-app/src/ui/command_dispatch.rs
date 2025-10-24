@@ -29,7 +29,7 @@ impl CommandReceiver {
     }
 
     pub fn try_recv(&self) -> Option<Command> {
-        self.queue.pop().ok()
+        self.queue.pop()
     }
 }
 

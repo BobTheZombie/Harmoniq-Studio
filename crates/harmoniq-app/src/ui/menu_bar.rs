@@ -103,9 +103,8 @@ impl MenuBarState {
                     for path in snapshot.recent_projects {
                         let label = path
                             .file_name()
-                            .and_then(|name| name.to_str())
-                            .unwrap_or_else(|| path.to_string_lossy().as_ref())
-                            .to_string();
+                            .and_then(|name| name.to_str().map(|name| name.to_owned()))
+                            .unwrap_or_else(|| path.to_string_lossy().into_owned());
                         if ui.button(label.clone()).clicked() {
                             let _ = commands
                                 .try_send(Command::File(FileCommand::OpenRecent(path.clone())));
