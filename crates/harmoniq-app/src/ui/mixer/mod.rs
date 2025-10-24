@@ -117,67 +117,71 @@ impl MixerView {
                         viewport.max.y,
                     ),
                 );
-                let clip_guard = ui.push_clip_rect(content_clip);
-                for index in visible.first..visible.last {
-                    let info = self.api.strip_info(index);
-                    let info_for_render = info.clone();
-                    let meter_levels = self.api.level_fetch(index);
-                    self.meters[index].update(levels_from_tuple(meter_levels));
+                ui.scope(|clip_ui| {
+                    clip_ui.set_clip_rect(content_clip);
+                    for index in visible.first..visible.last {
+                        let info = self.api.strip_info(index);
+                        let info_for_render = info.clone();
+                        let meter_levels = self.api.level_fetch(index);
+                        self.meters[index].update(levels_from_tuple(meter_levels));
 
-                    let x = index as f32 * strip_size.x + visible.offset;
-                    let strip_rect =
-                        Rect::from_min_size(pos2(viewport.min.x + x, viewport.min.y), strip_size);
-                    if !strip_rect.intersects(content_clip) {
-                        continue;
+                        let x = index as f32 * strip_size.x + visible.offset;
+                        let strip_rect = Rect::from_min_size(
+                            pos2(viewport.min.x + x, viewport.min.y),
+                            strip_size,
+                        );
+                        if !strip_rect.intersects(content_clip) {
+                            continue;
+                        }
+                        let insert_labels = (0..info.insert_count)
+                            .map(|slot| self.api.insert_label(index, slot))
+                            .collect::<Vec<_>>();
+                        let send_labels = (0..info.send_count)
+                            .map(|slot| self.api.send_label(index, slot))
+                            .collect::<Vec<_>>();
+
+                        let api = Arc::clone(&self.api);
+                        let theme = self.theme.clone();
+                        let density = self.density;
+                        let is_selected = self.selection.contains(&info.id);
+
+                        let response = {
+                            let meter_state = &mut self.meters[index];
+                            let insert_labels = insert_labels;
+                            let send_labels = send_labels;
+                            clip_ui
+                                .allocate_ui_at_rect(strip_rect, move |ui| {
+                                    render_strip(StripRenderArgs {
+                                        ui,
+                                        api: api.as_ref(),
+                                        info: &info_for_render,
+                                        index,
+                                        density,
+                                        theme: &theme,
+                                        width: strip_size.x,
+                                        height: strip_size.y,
+                                        zoom: self.zoom,
+                                        is_selected,
+                                        meter: meter_state,
+                                        insert_labels,
+                                        send_labels,
+                                        group_highlight: self.group_highlight,
+                                    })
+                                })
+                                .inner
+                        };
+
+                        if response.clicked {
+                            self.handle_selection(clip_ui, info.id);
+                        }
+                        if response.double_clicked {
+                            self.rename = Some(RenameState {
+                                id: info.id,
+                                name: info.name.clone(),
+                            });
+                        }
                     }
-                    let insert_labels = (0..info.insert_count)
-                        .map(|slot| self.api.insert_label(index, slot))
-                        .collect::<Vec<_>>();
-                    let send_labels = (0..info.send_count)
-                        .map(|slot| self.api.send_label(index, slot))
-                        .collect::<Vec<_>>();
-
-                    let api = Arc::clone(&self.api);
-                    let theme = self.theme.clone();
-                    let density = self.density;
-                    let is_selected = self.selection.contains(&info.id);
-
-                    let response = {
-                        let meter_state = &mut self.meters[index];
-                        let insert_labels = insert_labels;
-                        let send_labels = send_labels;
-                        ui.allocate_ui_at_rect(strip_rect, move |ui| {
-                            render_strip(StripRenderArgs {
-                                ui,
-                                api: api.as_ref(),
-                                info: &info_for_render,
-                                index,
-                                density,
-                                theme: &theme,
-                                width: strip_size.x,
-                                height: strip_size.y,
-                                zoom: self.zoom,
-                                is_selected,
-                                meter: meter_state,
-                                insert_labels,
-                                send_labels,
-                                group_highlight: self.group_highlight,
-                            })
-                        })
-                        .inner
-                    };
-
-                    if response.clicked {
-                        self.handle_selection(ui, info.id);
-                    }
-                    if response.double_clicked {
-                        self.rename = Some(RenameState {
-                            id: info.id,
-                            name: info.name.clone(),
-                        });
-                    }
-                }
-                drop(clip_guard);
+                });
 
                 self.draw_master_strip(ui, viewport, strip_size, master_index);
             });

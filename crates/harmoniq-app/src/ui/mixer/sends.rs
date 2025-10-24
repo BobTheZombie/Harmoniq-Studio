@@ -1,5 +1,5 @@
-use eframe::egui::{self, pos2, Align2, Id, Layout, Rect, Sense, Stroke, Ui, Vec2};
-use harmoniq_engine::mixer::api::MixerUiApi;
+use eframe::egui::{self, pos2, Align2, Id, Layout, Rect, RichText, Sense, Stroke, Ui, Vec2};
+use harmoniq_engine::mixer::api::{MixerUiApi, UiStripInfo};
 
 use crate::ui::mixer::layout::StripDensity;
 use crate::ui::mixer::theme::MixerTheme;
@@ -108,9 +108,7 @@ fn draw_send_row(
     );
     let slider = ui.put(
         slider_rect,
-        egui::Slider::new(&mut level, -60.0..=6.0)
-            .show_value(false)
-            .small(true),
+        egui::Slider::new(&mut level, -60.0..=6.0).show_value(false),
     );
     if slider.changed() {
         api.send_set_level(strip_index, slot, level);
@@ -130,13 +128,11 @@ fn draw_send_row(
         pos2(rect.max.x - 48.0, rect.min.y + 2.0),
         Vec2::new(40.0, 18.0),
     );
+    let toggle_text = if pre { "PRE" } else { "POST" };
+    let toggle_color = if pre { theme.accent } else { theme.header_text };
     let toggle = ui.put(
         toggle_rect,
-        egui::SelectableLabel::new(pre, if pre { "PRE" } else { "POST" }).text_color(if pre {
-            theme.accent
-        } else {
-            theme.header_text
-        }),
+        egui::SelectableLabel::new(pre, RichText::new(toggle_text).color(toggle_color)),
     );
     if toggle.clicked() {
         api.send_toggle_pre(strip_index, slot);

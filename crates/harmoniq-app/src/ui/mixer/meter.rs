@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use eframe::egui::{pos2, Color32, Id, Painter, Rect, Sense, Shape, Stroke, Ui, Vec2};
+use eframe::egui::{self, pos2, Color32, Id, Painter, Rect, Sense, Shape, Stroke, Ui, Vec2};
 
 use crate::ui::mixer::theme::MixerTheme;
 
