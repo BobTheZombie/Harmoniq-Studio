@@ -10,7 +10,7 @@ use cpal::{BufferSize, FromSample, Sample, SampleFormat, SampleRate, Stream, Str
 use crossbeam::queue::ArrayQueue;
 use parking_lot::Mutex;
 
-use crate::{AudioBuffer, BufferConfig, EngineCommandQueue, HarmoniqEngine};
+use crate::{cpu_pinning, AudioBuffer, BufferConfig, EngineCommandQueue, HarmoniqEngine};
 
 const DEFAULT_QUEUE_DEPTH: usize = 3;
 
@@ -161,6 +161,7 @@ fn spawn_render_thread(
         .name("harmoniq-realtime-render".into())
         .spawn(move || {
             ensure_denormals_disabled();
+            cpu_pinning::pin_render_thread();
             let mut buffer = AudioBuffer::from_config(&config);
             let stride = output_channels.max(1);
             let mut interleaved = vec![0.0f32; stride.saturating_mul(cmp::max(1, buffer.len()))];

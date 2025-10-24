@@ -1,0 +1,13 @@
+[package]
+name = "harmoniq-benchmarks"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+criterion = { workspace = true }
+harmoniq-engine = { path = "../crates/harmoniq-engine", default-features = false, features = ["simd", "fast-math"] }
+
+[[bench]]
+name = "engine"
+harness = false

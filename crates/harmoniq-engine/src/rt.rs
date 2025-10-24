@@ -122,6 +122,17 @@ impl AudioMetricsCollector {
         let nanos = duration.as_nanos().min(u128::from(u64::MAX)) as u64;
         self.inner.last_block_ns.store(nanos, Ordering::Relaxed);
         let max_ns = self.inner.update_max(nanos);
+        if period_ns > 0 {
+            let guard_threshold = period_ns / 2;
+            if max_ns > guard_threshold {
+                tracing::warn!(
+                    block_ns = nanos,
+                    max_block_ns = max_ns,
+                    period_ns,
+                    "audio block processing exceeded 50% of the callback period"
+                );
+            }
+        }
         let xrun_count = if period_ns > 0 && nanos > period_ns {
             self.inner.xruns.fetch_add(1, Ordering::Relaxed) + 1
         } else {
