@@ -14,8 +14,10 @@ harmoniq-plugin-scanner = { path = "../harmoniq-plugin-scanner" }
 anyhow.workspace = true
 clap.workspace = true
 eframe = { version = "0.27", features = ["wgpu"] }
+egui = { version = "0.27", features = ["serde"] }
 egui_extras = { version = "0.27", features = ["image", "svg"] }
 egui_dock = { version = "0.12", features = ["serde"] }
+indexmap = "2"
 parking_lot.workspace = true
 crossbeam-channel = "0.5"
 crossbeam-queue.workspace = true

@@ -5,9 +5,10 @@ use harmoniq_ui::HarmoniqPalette;
 
 use super::command_dispatch::CommandSender;
 use super::commands::{
-    Command, CommandId, FileCommand, HelpCommand, InsertCommand, MidiCommand, OptionsCommand,
-    PluginCategory, ThemeMode, TrackCommand, TransportCommand, ViewCommand,
+    Command, CommandId, FileCommand, FloatingCommand, HelpCommand, InsertCommand, MidiCommand,
+    OptionsCommand, PluginCategory, ThemeMode, TrackCommand, TransportCommand, ViewCommand,
 };
+use super::floating::FloatingKind;
 use super::menu_plugins::PluginsMenuState;
 use super::shortcuts::ShortcutMap;
 
@@ -249,6 +250,37 @@ impl MenuBarState {
                 &mut browser,
             ) {
                 let _ = commands.try_send(Command::View(ViewCommand::ToggleBrowser));
+                ui.close_menu();
+            }
+            ui.separator();
+            if ui.button("Piano Roll (Floating)").clicked() {
+                let _ = commands.try_send(Command::Floating(FloatingCommand::Open(
+                    FloatingKind::PianoRoll { track_id: 0 },
+                )));
+                ui.close_menu();
+            }
+            if ui.button("Mixer Inspector (Floating)").clicked() {
+                let _ = commands.try_send(Command::Floating(FloatingCommand::Open(
+                    FloatingKind::MixerInsert { insert_idx: 0 },
+                )));
+                ui.close_menu();
+            }
+            if ui.button("Channel Inspector (Floating)").clicked() {
+                let _ = commands.try_send(Command::Floating(FloatingCommand::Open(
+                    FloatingKind::Inspector { selection: None },
+                )));
+                ui.close_menu();
+            }
+            if ui.button("MIDI Monitor (Floating)").clicked() {
+                let _ = commands.try_send(Command::Floating(FloatingCommand::Open(
+                    FloatingKind::MidiMonitor,
+                )));
+                ui.close_menu();
+            }
+            if ui.button("Performance Panel (Floating)").clicked() {
+                let _ = commands.try_send(Command::Floating(FloatingCommand::Open(
+                    FloatingKind::Performance,
+                )));
                 ui.close_menu();
             }
             ui.separator();
