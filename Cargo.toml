@@ -23,6 +23,7 @@ members = [
     "crates/harmoniq-plugin-grand-piano-clap",
     "crates/harmoniq-plugin-parametric-eq",
     "crates/harmoniq-plugin-edison",
+    "crates/westcoast-whine-synth",
     "crates/harmoniq-ui",
     "crates/harmoniq-rack",
     "crates/harmoniq-playlist",
@@ -36,6 +37,7 @@ members = [
     "crates/clap-validate",
     "examples/clap-testgain",
     "examples/clap-testsynth",
+    "xtask",
 ]
 resolver = "2"
 
