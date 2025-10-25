@@ -8,6 +8,7 @@ use super::command_dispatch::CommandSender;
 pub struct PluginsMenuState {
     pub scanner_open: bool,
     pub library_open: bool,
+    pub plugin_manager_open: bool,
 }
 
 impl PluginsMenuState {
@@ -30,6 +31,13 @@ impl PluginsMenuState {
                 .clicked()
             {
                 self.library_open = true;
+                ui.close_menu();
+            }
+            if ui
+                .button(RichText::new("Plugin Manager…").color(palette.text_primary))
+                .clicked()
+            {
+                self.plugin_manager_open = true;
                 ui.close_menu();
             }
         });

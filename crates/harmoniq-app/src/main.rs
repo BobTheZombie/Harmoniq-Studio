@@ -36,9 +36,13 @@ use winit::keyboard::{KeyCode, ModifiersState};
 
 mod audio;
 mod config;
+mod core;
 mod midi;
+mod plugin_host;
 mod ui;
 
+use crate::core::plugin_registry::PluginRegistry;
+use crate::core::plugin_scanner::PluginScanner;
 use audio::{
     available_backends, describe_layout, AudioBackend, AudioRuntimeOptions, RealtimeAudio,
     SoundTestSample,
@@ -64,6 +68,9 @@ use ui::{
     mixer::MixerView,
     piano_roll::PianoRollPane,
     playlist::PlaylistPane,
+    plugin_manager::{
+        FeedbackKind as PluginFeedbackKind, PluginManagerFeedback, PluginManagerPanel,
+    },
     shortcuts::ShortcutMap,
     transport::{TransportBar, TransportSnapshot},
     workspace::{build_default_workspace, WorkspacePane},
@@ -1325,6 +1332,7 @@ struct HarmoniqStudioApp {
     playlist: PlaylistPane,
     inspector: InspectorPane,
     console: ConsolePane,
+    plugin_manager: PluginManagerPanel,
     audio_settings: AudioSettingsPanel,
     sound_test: SoundTestSample,
     event_bus: EventBus,
@@ -1420,6 +1428,14 @@ impl HarmoniqStudioApp {
         let playlist = PlaylistPane::default();
         let inspector = InspectorPane::new();
         let console = ConsolePane::default();
+        let plugin_registry = PluginRegistry::load_default()
+            .context("failed to load plugin registry cache")?
+            .shared();
+        let plugin_scanner = PluginScanner::new(Arc::clone(&plugin_registry));
+        let mut plugin_manager = PluginManagerPanel::new(plugin_registry, plugin_scanner);
+        if plugin_manager.is_empty() {
+            plugin_manager.request_scan();
+        }
         let input_focus = InputFocus::default();
         let audio_settings =
             AudioSettingsPanel::new(engine_runner.config(), engine_runner.runtime_options());
@@ -1453,6 +1469,7 @@ impl HarmoniqStudioApp {
             playlist,
             inspector,
             console,
+            plugin_manager,
             audio_settings,
             sound_test,
             event_bus,
@@ -2150,6 +2167,7 @@ impl App for HarmoniqStudioApp {
         self.input_focus.maybe_release_on_escape(ctx);
         self.inspector
             .sync_selection(self.playlist.current_selection());
+        self.plugin_manager.tick();
 
         let palette = self.theme.palette().clone();
 
@@ -2237,6 +2255,17 @@ impl App for HarmoniqStudioApp {
                     .style(dock_style)
                     .show_inside(ui, &mut tab_viewer);
             });
+
+        let open_manager = &mut self.menu.plugins_menu.plugin_manager_open;
+        self.plugin_manager.show(ctx, open_manager);
+        while let Some(PluginManagerFeedback { message, kind }) =
+            self.plugin_manager.take_feedback()
+        {
+            if matches!(kind, PluginFeedbackKind::Error) {
+                error!("{}", message);
+            }
+            self.status_message = Some(message);
+        }
 
         let active_audio_summary =
             self.engine_runner
