@@ -56,6 +56,12 @@ fn main() {
 }
 
 fn guard_header_hash(manifest_dir: &Path, include_dir: &Path) {
+    if !include_dir.exists() {
+        panic!(
+            "CLAP headers directory missing at {include_dir:?}; run `git submodule update --init --recursive` or `cargo xtask regenerate-clap` to fetch them."
+        );
+    }
+
     let mut hasher = Sha256::new();
 
     let mut header_paths: Vec<PathBuf> = WalkDir::new(include_dir)
@@ -69,6 +75,12 @@ fn guard_header_hash(manifest_dir: &Path, include_dir: &Path) {
         .collect();
 
     header_paths.sort();
+
+    if header_paths.is_empty() {
+        panic!(
+            "No CLAP header files found under {include_dir:?}; ensure the `third_party/clap` submodule is checked out by running `git submodule update --init --recursive`."
+        );
+    }
 
     for path in header_paths {
         let mut file = File::open(&path).expect("Failed to open header");
