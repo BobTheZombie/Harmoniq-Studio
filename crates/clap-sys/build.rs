@@ -11,14 +11,20 @@ const HASH_FILE: &str = "clap-headers.sha256";
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    let clap_include = manifest_dir
-        .join("..")
-        .join("..")
-        .join("third_party")
-        .join("clap")
-        .join("include");
+    let (clap_include, verify_hash) = match env::var("CLAP_HEADERS_DIR") {
+        Ok(path) => (PathBuf::from(path), false),
+        Err(_) => {
+            let include_path = manifest_dir
+                .join("..")
+                .join("..")
+                .join("third_party")
+                .join("clap")
+                .join("include");
+            (include_path, true)
+        }
+    };
 
-    guard_header_hash(&manifest_dir, &clap_include);
+    guard_header_hash(&manifest_dir, &clap_include, verify_hash);
 
     let mut builder = bindgen::Builder::default()
         .ctypes_prefix("cty")
@@ -55,11 +61,15 @@ fn main() {
         .expect("Couldn't write bindings!");
 }
 
-fn guard_header_hash(manifest_dir: &Path, include_dir: &Path) {
+fn guard_header_hash(manifest_dir: &Path, include_dir: &Path, verify_hash: bool) {
     if !include_dir.exists() {
         panic!(
-            "CLAP headers directory missing at {include_dir:?}; run `git submodule update --init --recursive` or `cargo xtask regenerate-clap` to fetch them."
+            "CLAP headers directory missing at {include_dir:?}; set `CLAP_HEADERS_DIR` or run `git submodule update --init --recursive` (or `cargo xtask regenerate-clap`).",
         );
+    }
+
+    if !verify_hash {
+        return;
     }
 
     let mut hasher = Sha256::new();
@@ -78,7 +88,7 @@ fn guard_header_hash(manifest_dir: &Path, include_dir: &Path) {
 
     if header_paths.is_empty() {
         panic!(
-            "No CLAP header files found under {include_dir:?}; ensure the `third_party/clap` submodule is checked out by running `git submodule update --init --recursive`."
+            "No CLAP header files found under {include_dir:?}; ensure the `third_party/clap` submodule is checked out by running `git submodule update --init --recursive`.",
         );
     }
 
@@ -99,7 +109,7 @@ fn guard_header_hash(manifest_dir: &Path, include_dir: &Path) {
     let expected = expected.trim();
     if expected != digest_hex {
         panic!(
-            "CLAP headers changed (expected {expected}, found {digest_hex}). Re-run bindings generation."
+            "CLAP headers changed (expected {expected}, found {digest_hex}). Re-run bindings generation.",
         );
     }
 }
