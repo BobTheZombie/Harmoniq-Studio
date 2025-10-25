@@ -6,6 +6,7 @@ pub mod commands;
 pub mod config;
 pub mod console;
 pub mod event_bus;
+pub mod floating;
 pub mod focus;
 pub mod inspector;
 pub mod layout;

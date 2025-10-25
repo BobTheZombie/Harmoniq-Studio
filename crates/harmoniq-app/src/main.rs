@@ -12,6 +12,7 @@ use flacenc::error::Verify;
 
 use anyhow::{anyhow, Context};
 use clap::{Parser, ValueEnum};
+use directories::ProjectDirs;
 use eframe::egui::{
     self, Align2, CursorIcon, Id, Margin, PointerButton, RichText, Rounding, Stroke,
     ViewportCommand,
@@ -55,12 +56,13 @@ use ui::{
     channel_rack::ChannelRackPane,
     command_dispatch::{command_channel, CommandDispatcher, CommandHandler, CommandSender},
     commands::{
-        Command, EditCommand, FileCommand, HelpCommand, InsertCommand, MidiCommand, OptionsCommand,
-        TrackCommand, TransportCommand, ViewCommand,
+        Command, EditCommand, FileCommand, FloatingCommand, HelpCommand, InsertCommand,
+        MidiCommand, OptionsCommand, TrackCommand, TransportCommand, ViewCommand,
     },
     config::RecentProjects,
     console::{ConsolePane, LogLevel},
     event_bus::{AppEvent, EventBus, LayoutEvent, TransportEvent},
+    floating::{FloatingKind, FloatingWindowId, FloatingWindows},
     focus::InputFocus,
     inspector::InspectorPane,
     layout::LayoutState,
@@ -1332,6 +1334,8 @@ struct HarmoniqStudioApp {
     playlist: PlaylistPane,
     inspector: InspectorPane,
     console: ConsolePane,
+    floating: FloatingWindows,
+    floating_config_path: PathBuf,
     plugin_manager: PluginManagerPanel,
     audio_settings: AudioSettingsPanel,
     sound_test: SoundTestSample,
@@ -1365,6 +1369,7 @@ struct HarmoniqStudioApp {
     piano_roll_hidden: bool,
     fullscreen: bool,
     fullscreen_dirty: bool,
+    last_screen_rect: egui::Rect,
 }
 
 impl HarmoniqStudioApp {
@@ -1454,6 +1459,14 @@ impl HarmoniqStudioApp {
             .last_runtime_error()
             .map(|err| format!("Realtime audio unavailable: {err}. Running offline."));
 
+        let floating_config_path = ProjectDirs::from("dev", "HarmoniqStudio", "HarmoniqStudio")
+            .map(|dirs| dirs.config_dir().join("ui_windows.json"))
+            .unwrap_or_else(|| PathBuf::from("config/ui_windows.json"));
+        let mut floating = FloatingWindows::default();
+        if let Err(err) = floating.load(&floating_config_path) {
+            warn!("failed to load floating window layout: {err:?}");
+        }
+
         Ok(Self {
             theme,
             icons,
@@ -1469,6 +1482,8 @@ impl HarmoniqStudioApp {
             playlist,
             inspector,
             console,
+            floating,
+            floating_config_path,
             plugin_manager,
             audio_settings,
             sound_test,
@@ -1502,6 +1517,10 @@ impl HarmoniqStudioApp {
             piano_roll_hidden: false,
             fullscreen: false,
             fullscreen_dirty: false,
+            last_screen_rect: egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::Vec2::new(1280.0, 720.0),
+            ),
         })
     }
 
@@ -1745,6 +1764,89 @@ impl HarmoniqStudioApp {
         ctx.cpu_usage = self.mixer.cpu_estimate();
         ctx.clock = self.transport_clock;
         ctx.master_meter = self.mixer.master_meter();
+    }
+
+    fn floating_defaults(&self, kind: &FloatingKind) -> (egui::Pos2, egui::Vec2, String) {
+        let center = self.last_screen_rect.center();
+        match kind {
+            FloatingKind::PluginEditor { plugin_uid } => (
+                center + egui::vec2(-360.0, -240.0),
+                egui::vec2(720.0, 480.0),
+                format!("Plugin {plugin_uid}"),
+            ),
+            FloatingKind::PianoRoll { track_id } => (
+                center + egui::vec2(-480.0, -320.0),
+                egui::vec2(960.0, 640.0),
+                format!("Piano Roll #{track_id}"),
+            ),
+            FloatingKind::MixerInsert { insert_idx } => (
+                center + egui::vec2(-320.0, -240.0),
+                egui::vec2(640.0, 480.0),
+                format!("Insert {insert_idx}"),
+            ),
+            FloatingKind::MidiMonitor => (
+                center + egui::vec2(-240.0, -160.0),
+                egui::vec2(480.0, 320.0),
+                "MIDI Monitor".into(),
+            ),
+            FloatingKind::Performance => (
+                center + egui::vec2(-240.0, -160.0),
+                egui::vec2(560.0, 360.0),
+                "Performance".into(),
+            ),
+            FloatingKind::Inspector { selection } => (
+                center + egui::vec2(-300.0, -200.0),
+                egui::vec2(600.0, 400.0),
+                selection
+                    .as_deref()
+                    .map(|s| format!("Inspector – {s}"))
+                    .unwrap_or_else(|| "Inspector".into()),
+            ),
+        }
+    }
+
+    fn open_floating_window(&mut self, kind: FloatingKind) {
+        let (pos, size, title) = self.floating_defaults(&kind);
+        self.floating.ensure_open(kind, title, pos, size);
+    }
+
+    fn toggle_floating_window(&mut self, kind: FloatingKind) {
+        let (pos, size, title) = self.floating_defaults(&kind);
+        self.floating.toggle_by_kind(kind, title, pos, size);
+    }
+
+    fn render_floating_content(
+        &mut self,
+        ui: &mut egui::Ui,
+        _id: FloatingWindowId,
+        kind: &FloatingKind,
+    ) {
+        match kind {
+            FloatingKind::PluginEditor { plugin_uid } => {
+                ui.label(format!(
+                    "Plugin editor for {plugin_uid} is not implemented yet."
+                ));
+            }
+            FloatingKind::PianoRoll { .. } => {
+                ui.label("Floating Piano Roll is under construction.");
+            }
+            FloatingKind::MixerInsert { insert_idx } => {
+                ui.label(format!("Mixer insert {insert_idx} inspector pending."));
+            }
+            FloatingKind::MidiMonitor => {
+                ui.label("MIDI Monitor panel is not implemented yet.");
+            }
+            FloatingKind::Performance => {
+                ui.label("Performance panel is not implemented yet.");
+            }
+            FloatingKind::Inspector { selection } => {
+                if let Some(selection) = selection {
+                    ui.label(format!("Inspector for {selection} coming soon."));
+                } else {
+                    ui.label("Inspector panel is not implemented yet.");
+                }
+            }
+        }
     }
 }
 
@@ -2040,6 +2142,13 @@ impl CommandHandler for HarmoniqStudioApp {
                     self.console.log(LogLevel::Info, "CPU meter toggled");
                 }
             },
+            Command::Floating(cmd) => match cmd {
+                FloatingCommand::Open(kind) => self.open_floating_window(kind),
+                FloatingCommand::Close(id) => self.floating.close(id),
+                FloatingCommand::Toggle(kind) => self.toggle_floating_window(kind),
+                FloatingCommand::Focus(id) => self.floating.bring_to_front(id),
+                FloatingCommand::CloseAll(kind) => self.floating.close_all_of_kind(&kind),
+            },
             Command::Help(cmd) => match cmd {
                 HelpCommand::About => {
                     self.status_message = Some("Harmoniq Studio prototype".into());
@@ -2153,6 +2262,7 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
 impl App for HarmoniqStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint_after(Duration::from_millis(16));
+        self.last_screen_rect = ctx.input(|i| i.screen_rect);
         self.shortcuts.handle_input(ctx, &self.command_sender);
         self.process_qwerty_keyboard(ctx);
         for command in self.command_dispatcher.drain_pending() {
@@ -2322,6 +2432,58 @@ impl App for HarmoniqStudioApp {
                 });
         }
 
+        let ids = self.floating.iter_sorted_by_z();
+        for id in ids {
+            let Some(window) = self.floating.windows.get(&id).cloned() else {
+                continue;
+            };
+            if !window.open {
+                continue;
+            }
+            let mut open_flag = window.open;
+            let area_id = egui::Id::new(id.0);
+            let order = if window.pinned {
+                egui::Order::Tooltip
+            } else {
+                egui::Order::Foreground
+            };
+            egui::Area::new(area_id)
+                .movable(true)
+                .order(order)
+                .fixed_pos(window.pos)
+                .show(ctx, |ui| {
+                    egui::containers::Window::new(window.title.clone())
+                        .id(egui::Id::new(("fw", id.0)))
+                        .collapsible(false)
+                        .resizable(true)
+                        .default_size(window.size)
+                        .open(&mut open_flag)
+                        .show(ui.ctx(), |ui| {
+                            self.render_floating_content(ui, id, &window.kind);
+                        });
+                });
+            if let Some(area_state) = ctx.memory(|mem| mem.areas.get(&area_id).cloned()) {
+                self.floating.update_bounds(id, area_state.rect);
+            }
+            if window.open != open_flag {
+                self.floating.set_open(id, open_flag);
+            }
+            let window_focus_id = egui::Id::new(("fw", id.0));
+            if ctx.memory(|mem| mem.focus().is_some_and(|focus| focus == window_focus_id)) {
+                self.floating.bring_to_front(id);
+            }
+        }
+
+        if self.floating.dirty() {
+            if let Some(since) = self.floating.dirty_since() {
+                if since.elapsed() >= Duration::from_millis(500) {
+                    if let Err(err) = self.floating.save(&self.floating_config_path) {
+                        warn!("failed to save floating window layout: {err:?}");
+                    }
+                }
+            }
+        }
+
         self.layout.store_dock(&self.dock_state);
         self.layout.maybe_save();
 
@@ -2331,6 +2493,9 @@ impl App for HarmoniqStudioApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Err(err) = self.floating.save(&self.floating_config_path) {
+            warn!("failed to save floating window layout on exit: {err:?}");
+        }
         self.layout.flush();
     }
 }

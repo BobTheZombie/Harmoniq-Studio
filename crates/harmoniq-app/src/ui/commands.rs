@@ -2,6 +2,8 @@ use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use super::floating::{FloatingKind, FloatingWindowId};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CommandId {
@@ -194,6 +196,7 @@ pub enum Command {
     Transport(TransportCommand),
     Options(OptionsCommand),
     Help(HelpCommand),
+    Floating(FloatingCommand),
 }
 
 impl Command {
@@ -208,6 +211,7 @@ impl Command {
             Command::Transport(cmd) => cmd.id(),
             Command::Options(cmd) => cmd.id(),
             Command::Help(cmd) => cmd.id(),
+            Command::Floating(_) => panic!("floating commands do not have a CommandId"),
         }
     }
 
@@ -507,4 +511,13 @@ impl HelpCommand {
             HelpCommand::UserManual => CommandId::HelpUserManual,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub enum FloatingCommand {
+    Open(FloatingKind),
+    Close(FloatingWindowId),
+    Toggle(FloatingKind),
+    Focus(FloatingWindowId),
+    CloseAll(FloatingKind),
 }
