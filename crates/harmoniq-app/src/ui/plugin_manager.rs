@@ -6,9 +6,7 @@ use egui_extras::{Column, TableBuilder};
 
 use crate::core::{
     plugin_registry::PluginRegistry,
-    plugin_scanner::{
-        PluginDescriptor, PluginFormat, PluginScanner, ScanHandle, ScanState, ScanStatus,
-    },
+    plugin_scanner::{PluginDescriptor, PluginScanner, ScanHandle, ScanState, ScanStatus},
 };
 use crate::plugin_host;
 
@@ -161,6 +159,7 @@ impl PluginManagerPanel {
             .plugins
             .iter()
             .filter(|plugin| plugin.name.to_ascii_lowercase().contains(&filter))
+            .cloned()
             .collect();
 
         if filtered.is_empty() {
@@ -217,7 +216,7 @@ impl PluginManagerPanel {
                         });
                         row.col(|ui| {
                             if ui.button("Load").clicked() {
-                                self.load_plugin(plugin);
+                                self.load_plugin(&plugin);
                             }
                         });
                     });
