@@ -14,13 +14,19 @@ fn main() {
     let (clap_include, verify_hash) = match env::var("CLAP_HEADERS_DIR") {
         Ok(path) => (PathBuf::from(path), false),
         Err(_) => {
-            let include_path = manifest_dir
+            let repo_include = manifest_dir
                 .join("..")
                 .join("..")
                 .join("third_party")
                 .join("clap")
                 .join("include");
-            (include_path, true)
+
+            if repo_include.exists() {
+                (repo_include, true)
+            } else {
+                let bundled_include = manifest_dir.join("include");
+                (bundled_include, true)
+            }
         }
     };
 
@@ -64,7 +70,7 @@ fn main() {
 fn guard_header_hash(manifest_dir: &Path, include_dir: &Path, verify_hash: bool) {
     if !include_dir.exists() {
         panic!(
-            "CLAP headers directory missing at {include_dir:?}; set `CLAP_HEADERS_DIR` or run `git submodule update --init --recursive` (or `cargo xtask regenerate-clap`).",
+            "CLAP headers directory missing at {include_dir:?}; set `CLAP_HEADERS_DIR` or ensure the bundled headers are present (run `git submodule update --init --recursive` or `cargo xtask regenerate-clap`).",
         );
     }
 
@@ -88,7 +94,7 @@ fn guard_header_hash(manifest_dir: &Path, include_dir: &Path, verify_hash: bool)
 
     if header_paths.is_empty() {
         panic!(
-            "No CLAP header files found under {include_dir:?}; ensure the `third_party/clap` submodule is checked out by running `git submodule update --init --recursive`.",
+            "No CLAP header files found under {include_dir:?}; ensure the CLAP headers are available (run `git submodule update --init --recursive` or regenerate them).",
         );
     }
 
