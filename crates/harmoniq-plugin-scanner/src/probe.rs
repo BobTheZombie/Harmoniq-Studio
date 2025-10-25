@@ -25,6 +25,7 @@ impl ProbeResult {
             vendor: Some(match format {
                 PluginFormat::Clap => "Simulated CLAP Vendor".into(),
                 PluginFormat::Vst3 => "Simulated VST3 Vendor".into(),
+                PluginFormat::Ovst3 => "OpenVST3".into(),
                 PluginFormat::Harmoniq => "Harmoniq".into(),
             }),
             category: Some("Utility".into()),

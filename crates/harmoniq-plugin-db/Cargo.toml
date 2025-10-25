@@ -12,6 +12,8 @@ dirs = { workspace = true }
 thiserror = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 parking_lot = { workspace = true }
+walkdir = "2"
+log = { version = "0.4", default-features = false }
 
 [dev-dependencies]
 pretty_assertions = "1.4"

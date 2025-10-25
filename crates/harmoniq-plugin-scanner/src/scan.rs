@@ -1,25 +1,28 @@
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
+use std::path::PathBuf;
 
 use anyhow::Result;
-use walkdir::WalkDir;
 
-use harmoniq_plugin_db::{PluginEntry, PluginFormat, PluginId, PluginStore};
-
-use crate::probe::ProbeResult;
+use harmoniq_plugin_db::{
+    scan_plugins, ManifestProber, PluginEntry, PluginFormat, PluginStore, ScanConfig,
+};
 
 #[derive(Debug, Clone)]
 pub struct ScanOptions {
     pub formats: Vec<PluginFormat>,
     pub extra_paths: Vec<PathBuf>,
-    pub verify: bool,
 }
 
 impl Default for ScanOptions {
     fn default() -> Self {
         Self {
-            formats: vec![PluginFormat::Clap, PluginFormat::Harmoniq],
+            formats: vec![
+                PluginFormat::Clap,
+                PluginFormat::Vst3,
+                PluginFormat::Ovst3,
+                PluginFormat::Harmoniq,
+            ],
             extra_paths: Vec::new(),
-            verify: true,
         }
     }
 }
@@ -34,82 +37,31 @@ impl Scanner {
     }
 
     pub fn scan(&self, options: &ScanOptions) -> Result<Vec<PluginEntry>> {
-        let mut discovered = Vec::new();
-        for format in &options.formats {
-            for path in self.search_paths(*format, &options.extra_paths) {
-                if let Ok(meta) = ProbeResult::simulate(path.clone(), *format) {
-                    let id = PluginId::new(*format, path.to_string_lossy());
-                    let mut entry = PluginEntry::new(id, meta.name);
-                    entry.vendor = meta.vendor;
-                    entry.category = meta.category;
-                    entry.is_instrument = meta.is_instrument;
-                    entry.supports_editor = meta.supports_editor;
-                    entry.verified = options.verify;
-                    self.store.upsert(entry.clone())?;
-                    discovered.push(entry);
-                }
+        let mut config = ScanConfig::default();
+        let mut user_roots: HashSet<PathBuf> = config.user_roots.into_iter().collect();
+        for extra in &options.extra_paths {
+            if extra.is_dir() {
+                user_roots.insert(extra.clone());
+            } else if let Some(parent) = extra.parent() {
+                user_roots.insert(parent.to_path_buf());
             }
         }
-        Ok(discovered)
+        config.user_roots = user_roots.into_iter().collect();
+        let report = scan_plugins(&config, &ManifestProber::default());
+        let mut entries: Vec<_> = report
+            .entries
+            .into_iter()
+            .filter(|entry| options.formats.contains(&entry.reference.format))
+            .collect();
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+        self.store.merge(entries.clone())?;
+        Ok(entries)
     }
-
-    fn search_paths(&self, format: PluginFormat, extra: &[PathBuf]) -> Vec<PathBuf> {
-        let mut paths = Vec::new();
-        for base in self.default_locations(format) {
-            paths.extend(self.walk_plugins(base));
-        }
-        paths.extend(extra.to_vec());
-        paths
-    }
-
-    fn default_locations(&self, format: PluginFormat) -> Vec<PathBuf> {
-        match format {
-            PluginFormat::Clap => vec![
-                PathBuf::from("/usr/lib/clap"),
-                dirs::home_dir()
-                    .map(|mut home| {
-                        home.push(".clap");
-                        home
-                    })
-                    .unwrap_or_default(),
-            ],
-            PluginFormat::Vst3 => vec![PathBuf::from("/usr/lib/vst3")],
-            PluginFormat::Harmoniq => vec![dirs::home_dir()
-                .map(|mut home| {
-                    home.push(".harmoniq/plugins");
-                    home
-                })
-                .unwrap_or_default()],
-        }
-    }
-
-    fn walk_plugins(&self, base: PathBuf) -> Vec<PathBuf> {
-        let mut results = Vec::new();
-        if !base.exists() {
-            return results;
-        }
-        for entry in WalkDir::new(base).max_depth(2) {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if is_plugin_file(path) {
-                    results.push(path.to_path_buf());
-                }
-            }
-        }
-        results
-    }
-}
-
-fn is_plugin_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| matches!(ext, "clap" | "vst3" | "so" | "dll"))
-        .unwrap_or(false)
 }
 
 #[cfg(test)]
 mod tests {
-    use harmoniq_plugin_db::PluginFormat;
+    use harmoniq_plugin_db::{PluginFormat, PluginStore};
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -118,14 +70,17 @@ mod tests {
     #[test]
     fn simulated_scan_discovers_files() {
         let dir = tempdir().unwrap();
-        let fake_plugin = dir.path().join("test.clap");
+        let clap_root = dir.path().join("clap");
+        std::fs::create_dir_all(&clap_root).unwrap();
+        let fake_plugin = clap_root.join("test.clap");
         std::fs::write(&fake_plugin, "").unwrap();
         let store = PluginStore::open(dir.path().join("db.json")).unwrap();
         let scanner = Scanner::new(store);
         let mut options = ScanOptions::default();
-        options.extra_paths.push(fake_plugin.clone());
+        options.formats = vec![PluginFormat::Clap];
+        options.extra_paths.push(clap_root.clone());
         let result = scanner.scan(&options).unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].id.path, fake_plugin.to_string_lossy());
+        assert_eq!(result[0].reference.path, fake_plugin.to_string_lossy());
     }
 }
