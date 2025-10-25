@@ -597,5 +597,6 @@ mod tests {
         let state = MenuBarState::default();
         assert!(!state.plugins_menu.scanner_open);
         assert!(!state.plugins_menu.library_open);
+        assert!(!state.plugins_menu.plugin_manager_open);
     }
 }
