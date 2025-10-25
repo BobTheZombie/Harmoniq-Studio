@@ -1,4 +1,4 @@
-use eframe::egui::{self, Id, Painter, Pos2, Rect, Sense};
+use eframe::egui::{self, Painter, Pos2, Rect};
 use harmoniq_engine::mixer::api::MixerUiApi;
 
 use super::meter;
@@ -12,6 +12,7 @@ pub fn draw(
     painter_fg: &Painter,
     rect: Rect,
     idx: usize,
+    response: &egui::Response,
     _state: &MixerUiState,
     api: &dyn MixerUiApi,
 ) {
@@ -20,8 +21,6 @@ pub fn draw(
 
     widgets::fill_panel(painter_bg, rect, theme.strip_bg, theme.strip_border);
 
-    let id = Id::new(("mixer", "strip", idx));
-    let response = painter_fg.ctx().interact(rect, id, Sense::click());
     if response.hovered() {
         painter_fg.rect_stroke(rect, 0.0, egui::Stroke::new(1.0, theme.overlay));
     }

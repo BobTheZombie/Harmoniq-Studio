@@ -12,7 +12,7 @@ mod tests;
 use std::sync::Arc;
 use std::time::Duration;
 
-use eframe::egui::{self, Key, Ui};
+use eframe::egui::{Key, Ui};
 use harmoniq_engine::mixer::api::MixerUiApi;
 use harmoniq_ui::HarmoniqPalette;
 

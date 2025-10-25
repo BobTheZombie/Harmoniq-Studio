@@ -1,4 +1,4 @@
-use eframe::egui::{self, Id, LayerId, Order};
+use eframe::egui::{self, Id, LayerId, Order, Sense};
 use harmoniq_engine::mixer::api::MixerUiApi;
 
 use super::debug;
@@ -104,7 +104,7 @@ pub fn mixer(ui: &mut egui::Ui, state: &mut MixerUiState, api: &dyn MixerUiApi) 
                 }
 
                 let clip = rect.intersect(viewport_clip);
-                if clip.is_empty() {
+                if !clip.is_positive() {
                     continue;
                 }
 
@@ -112,7 +112,10 @@ pub fn mixer(ui: &mut egui::Ui, state: &mut MixerUiState, api: &dyn MixerUiApi) 
                 let p_mid = painter_mid.with_clip_rect(clip);
                 let p_fg = painter_fg.with_clip_rect(clip);
 
-                strip::draw(&p_bg, &p_mid, &p_fg, rect, index, state, api);
+                let id = Id::new(("mixer", "strip", index));
+                let response = ui.interact(rect, id, Sense::click());
+
+                strip::draw(&p_bg, &p_mid, &p_fg, rect, index, &response, state, api);
             }
 
             if state.debug {
