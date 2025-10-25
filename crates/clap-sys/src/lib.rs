@@ -59,6 +59,11 @@ pub const EXT_THREAD_CHECK: bool = true;
 pub const EXT_THREAD_CHECK: bool = false;
 
 /// Helper to load a CLAP entry point from a dynamic library symbol.
+///
+/// # Safety
+/// The caller must ensure the provided function pointer originates from a valid CLAP shared
+/// library and that the returned entry point is used according to the CLAP ABI.
+#[allow(clippy::missing_safety_doc)]
 pub unsafe fn load_entry(
     entry: Option<unsafe extern "C" fn(*const ::core::ffi::c_char) -> *const clap_plugin_factory>,
 ) -> Option<unsafe extern "C" fn(*const ::core::ffi::c_char) -> *const clap_plugin_factory> {

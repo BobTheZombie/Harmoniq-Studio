@@ -1,115 +1,109 @@
-use std::time::{Duration, Instant};
-
 use eframe::egui;
 
-use super::layout::{LayoutState, MASTER_STRIP_WIDTH_PX, STRIP_GAP_PX};
-use super::meter::{MeterLevels, MeterState};
-use super::{gain_db_to_slider, slider_to_gain_db};
+use super::layout;
+use super::render::MixerUiState;
+use harmoniq_engine::mixer::api::{MixerUiApi, UiStripInfo};
 
-#[test]
-fn visible_range_advances_with_scroll() {
-    let strip_w_pt = 80.0;
-    let gap_pt = 4.0;
-    let ls = LayoutState {
-        strip_w_pt,
-        gap_pt,
-        master_w_pt: 120.0,
-        zoom: 1.0,
-        total: 200,
-        content_w_pt: 200.0 * (strip_w_pt + gap_pt),
-    };
-    let viewport = 400.0;
-    let (first, last) = ls.visible_range(0.0, viewport);
-    assert_eq!(first, 0);
-    assert!(last > first);
+struct DummyMixerApi;
 
-    let pitch = ls.strip_pitch_pt();
-    let (f2, _) = ls.visible_range(pitch, viewport);
-    assert_eq!(f2, first + 1);
+impl MixerUiApi for DummyMixerApi {
+    fn strips_len(&self) -> usize {
+        5
+    }
 
-    let near_end_scroll = ls.content_w_pt - viewport;
-    let (f_end, l_end) = ls.visible_range(near_end_scroll, viewport);
-    assert!(l_end <= ls.total);
-    assert!(f_end <= f2 + (viewport / pitch).ceil() as usize);
+    fn strip_info(&self, idx: usize) -> UiStripInfo {
+        let mut info = UiStripInfo::default();
+        info.name = format!("Track {idx}");
+        info.is_master = idx == self.strips_len() - 1;
+        info
+    }
+
+    fn set_name(&self, _idx: usize, _name: &str) {}
+    fn set_color(&self, _idx: usize, _rgba: [f32; 4]) {}
+    fn set_fader_db(&self, _idx: usize, _db: f32) {}
+    fn set_pan(&self, _idx: usize, _pan: f32) {}
+    fn set_width(&self, _idx: usize, _width: f32) {}
+    fn toggle_mute(&self, _idx: usize) {}
+    fn toggle_solo(&self, _idx: usize) {}
+    fn toggle_arm(&self, _idx: usize) {}
+    fn toggle_phase(&self, _idx: usize) {}
+    fn insert_label(&self, _idx: usize, slot: usize) -> String {
+        format!("Insert {slot}")
+    }
+    fn insert_toggle_bypass(&self, _idx: usize, _slot: usize) {}
+    fn insert_is_bypassed(&self, _idx: usize, _slot: usize) -> bool {
+        false
+    }
+    fn insert_move(&self, _idx: usize, _from: usize, _to: usize) {}
+    fn send_label(&self, _idx: usize, slot: usize) -> String {
+        format!("Send {slot}")
+    }
+    fn send_level(&self, _idx: usize, _slot: usize) -> f32 {
+        -6.0
+    }
+    fn send_set_level(&self, _idx: usize, _slot: usize, _db: f32) {}
+    fn send_toggle_pre(&self, _idx: usize, _slot: usize) {}
+    fn send_is_pre(&self, _idx: usize, _slot: usize) -> bool {
+        false
+    }
+    fn route_target_label(&self, _idx: usize) -> String {
+        "Master".into()
+    }
+    fn set_route_target(&self, _idx: usize, _target: u32) {}
+    fn level_fetch(&self, idx: usize) -> (f32, f32, f32, f32, bool) {
+        if idx == self.strips_len() - 1 {
+            (0.0, 0.0, 0.0, 0.0, false)
+        } else {
+            (-12.0, -12.0, -12.0, -12.0, false)
+        }
+    }
 }
 
 #[test]
-fn clamp_scroll_stays_in_bounds() {
-    let ls = LayoutState {
-        strip_w_pt: 70.0,
-        gap_pt: 3.0,
-        master_w_pt: 100.0,
-        zoom: 1.0,
-        total: 64,
-        content_w_pt: 64.0 * 73.0,
-    };
-    let view = 600.0;
-    assert_eq!(ls.clamp_scroll(-100.0, view), 0.0);
-    let max = (ls.content_w_pt - view).max(0.0);
-    assert_eq!(ls.clamp_scroll(ls.content_w_pt + 100.0, view), max);
-}
-
-#[test]
-fn layout_new_respects_zoom_and_dpi() {
+fn range_scroll_right_increases_first() {
     let ctx = egui::Context::default();
+    let layout = layout::new(&ctx, 80.0, 120.0, true, 1.0, 50, 140.0, 600.0);
+    let width = layout.strip_w_pt * 3.0;
+    let (first, _) = layout::visible_range(&layout, 0.0, width);
+    let pitch = layout.strip_w_pt + layout.gap_pt;
+    let (second, _) = layout::visible_range(&layout, pitch * 2.0, width);
+    assert!(second > first);
+}
+
+#[test]
+fn pixel_snap_is_stable_across_ppi() {
+    let ctx = egui::Context::default();
+    ctx.set_pixels_per_point(1.0);
+    let snapped = layout::snap_px(&ctx, 12.345);
+    let resnapped = layout::snap_px(&ctx, snapped);
+    assert!((snapped - resnapped).abs() < f32::EPSILON);
+
     ctx.set_pixels_per_point(2.0);
-    let zoom = 1.2;
-    let ls = LayoutState::new(&ctx, 60.0, 100.0, true, zoom, 8, MASTER_STRIP_WIDTH_PX);
-    assert!(ls.strip_w_pt > 0.0);
-    assert!(ls.gap_pt > 0.0);
-    let expected_strip = (60.0 * zoom) / 2.0;
-    assert!((ls.strip_w_pt - expected_strip).abs() < f32::EPSILON * 100.0);
-    let expected_gap = (STRIP_GAP_PX * zoom) / 2.0;
-    assert!((ls.gap_pt - expected_gap).abs() < 1e-3);
+    let hi = layout::snap_px(&ctx, 12.345);
+    let hi_again = layout::snap_px(&ctx, hi);
+    assert!((hi - hi_again).abs() < f32::EPSILON);
 }
 
 #[test]
-fn meter_peak_hold_decays() {
-    let mut meter = MeterState::default();
-    meter.update(MeterLevels {
-        left_peak: 0.0,
-        right_peak: 0.0,
-        left_true_peak: 0.0,
-        right_true_peak: 0.0,
-        clipped: false,
-    });
-    meter.set_last_update_for_test(Instant::now() - Duration::from_millis(750));
-    meter.update(MeterLevels {
-        left_peak: -6.0,
-        right_peak: -6.0,
-        left_true_peak: -6.0,
-        right_true_peak: -6.0,
-        clipped: false,
-    });
-    let hold = meter.hold_levels();
-    assert!(hold[0] < 0.0);
-    assert!(hold[0] > -6.0);
-}
+fn no_nested_scroll_areas() {
+    let ctx = egui::Context::default();
+    let mut raw_input = egui::RawInput::default();
+    raw_input.time = Some(0.0);
+    ctx.begin_frame(raw_input);
 
-#[test]
-fn meter_clip_latch_clears() {
-    let mut meter = MeterState::default();
-    meter.update(MeterLevels {
-        left_peak: -3.0,
-        right_peak: -3.0,
-        left_true_peak: -3.0,
-        right_true_peak: -3.0,
-        clipped: true,
+    let mut state = MixerUiState::default();
+    egui::CentralPanel::default().show(&ctx, |ui| {
+        super::theme::with_active_theme(&super::theme::MixerTheme::default(), || {
+            super::render::mixer(ui, &mut state, &DummyMixerApi);
+        });
     });
-    assert!(meter.clip_latched());
-    meter.clear_clip();
-    assert!(!meter.clip_latched());
-}
+    ctx.end_frame();
 
-#[test]
-fn fader_mapping_round_trip() {
-    let slider = gain_db_to_slider(0.0);
-    assert!((slider - 1.0).abs() < 1e-6);
-    let db = slider_to_gain_db(slider);
-    assert!(db.abs() < 1e-4);
+    let stored = ctx.data_mut(|data| {
+        data.get_persisted::<egui::containers::scroll_area::State>(egui::Id::new("mixer_scroll"))
+    });
+    assert!(stored.is_some());
 
-    let quiet_slider = gain_db_to_slider(-60.0);
-    assert!(quiet_slider < 0.01);
-    let db_from_slider = slider_to_gain_db(0.5);
-    assert!((db_from_slider + 6.0206).abs() < 0.5);
+    let total_entries = ctx.data(|data| data.len());
+    assert_eq!(total_entries, 1);
 }
