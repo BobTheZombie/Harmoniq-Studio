@@ -20,6 +20,7 @@ members = [
     "crates/harmoniq-plugin-bass",
     "crates/harmoniq-plugin-westcoast",
     "crates/harmoniq-plugin-sub808",
+    "crates/harmoniq-plugin-grand-piano-clap",
     "crates/harmoniq-plugin-edison",
     "crates/harmoniq-ui",
     "crates/harmoniq-rack",

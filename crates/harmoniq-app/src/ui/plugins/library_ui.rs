@@ -2,8 +2,7 @@ use std::collections::HashSet;
 
 use eframe::egui::{self, Button, Color32, RichText, ScrollArea};
 use harmoniq_plugin_db::{
-    scan_plugins, ManifestProber, PluginEntry, PluginFormat, PluginRef, PluginStore,
-    ScanConfig,
+    scan_plugins, ManifestProber, PluginEntry, PluginFormat, PluginRef, PluginStore, ScanConfig,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

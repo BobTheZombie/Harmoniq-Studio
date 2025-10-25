@@ -23,6 +23,11 @@ use symphonia::core::probe::Hint;
 
 const MAX_CHANNELS: usize = 2;
 
+use crate::samples::grand_piano_clap::{
+    GRAND_PIANO_BASE_FREQ, GRAND_PIANO_SAMPLES, GRAND_PIANO_SAMPLE_RATE, HAND_CLAP_SAMPLES,
+    HAND_CLAP_SAMPLE_RATE,
+};
+
 /// Simplified ADSR envelope shared by several built-in instruments.
 #[derive(Debug, Clone)]
 struct AdsrEnvelope {
@@ -1323,6 +1328,541 @@ impl PluginFactory for GranularSynthFactory {
     fn create(&self) -> Box<dyn NativePlugin> {
         Box::new(GranularSynth::default())
     }
+}
+
+// --- Grand Piano Clap --------------------------------------------------------------------
+
+const GRAND_PIANO_CLAP_MAX_VOICES: usize = 16;
+const GRAND_PIANO_CLAP_PIANO_LEVEL: &str = "grand_piano_clap.piano_level";
+const GRAND_PIANO_CLAP_CLAP_LEVEL: &str = "grand_piano_clap.clap_level";
+const GRAND_PIANO_CLAP_ATTACK: &str = "grand_piano_clap.attack";
+const GRAND_PIANO_CLAP_DECAY: &str = "grand_piano_clap.decay";
+const GRAND_PIANO_CLAP_SUSTAIN: &str = "grand_piano_clap.sustain";
+const GRAND_PIANO_CLAP_RELEASE: &str = "grand_piano_clap.release";
+const GRAND_PIANO_CLAP_TONE: &str = "grand_piano_clap.tone";
+const GRAND_PIANO_CLAP_SPARKLE: &str = "grand_piano_clap.sparkle";
+const GRAND_PIANO_CLAP_BODY: &str = "grand_piano_clap.body";
+const GRAND_PIANO_CLAP_WIDTH: &str = "grand_piano_clap.width";
+const GRAND_PIANO_CLAP_DELAY: &str = "grand_piano_clap.clap_delay";
+const GRAND_PIANO_CLAP_TIGHTNESS: &str = "grand_piano_clap.clap_tightness";
+
+#[derive(Debug, Clone)]
+struct GrandPianoClapVoice {
+    note: u8,
+    velocity: f32,
+    piano_pos: f32,
+    piano_step: f32,
+    clap_pos: f32,
+    clap_step: f32,
+    clap_delay: f32,
+    clap_triggered: bool,
+    envelope: AdsrEnvelope,
+    clap_env: AdsrEnvelope,
+    filter_state: f32,
+    highpass_state: f32,
+    body_phase: f32,
+    body_increment: f32,
+    pan: f32,
+    active: bool,
+}
+
+impl GrandPianoClapVoice {
+    fn new() -> Self {
+        let mut clap_env = AdsrEnvelope::default();
+        clap_env.set_params(0.001, 0.18, 0.0, 0.12);
+        Self {
+            note: 0,
+            velocity: 0.0,
+            piano_pos: 0.0,
+            piano_step: 1.0,
+            clap_pos: 0.0,
+            clap_step: 1.0,
+            clap_delay: 0.0,
+            clap_triggered: false,
+            envelope: AdsrEnvelope::default(),
+            clap_env,
+            filter_state: 0.0,
+            highpass_state: 0.0,
+            body_phase: 0.0,
+            body_increment: 0.0,
+            pan: 0.0,
+            active: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.piano_pos = 0.0;
+        self.clap_pos = 0.0;
+        self.filter_state = 0.0;
+        self.highpass_state = 0.0;
+        self.body_phase = 0.0;
+        self.active = true;
+        self.clap_triggered = false;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GrandPianoClap {
+    sample_rate: f32,
+    parameters: ParameterSet,
+    voices: Vec<GrandPianoClapVoice>,
+    piano_level: f32,
+    clap_level: f32,
+    tone_coeff: f32,
+    sparkle_mix: f32,
+    sparkle_coeff: f32,
+    body_amount: f32,
+    width: f32,
+    clap_delay: f32,
+    clap_tightness: f32,
+    env_attack: f32,
+    env_decay: f32,
+    env_sustain: f32,
+    env_release: f32,
+}
+
+impl Default for GrandPianoClap {
+    fn default() -> Self {
+        let mut plugin = Self {
+            sample_rate: 44_100.0,
+            parameters: ParameterSet::new(grand_piano_clap_layout()),
+            voices: (0..GRAND_PIANO_CLAP_MAX_VOICES)
+                .map(|_| GrandPianoClapVoice::new())
+                .collect(),
+            piano_level: 0.85,
+            clap_level: 0.65,
+            tone_coeff: 0.0,
+            sparkle_mix: 0.0,
+            sparkle_coeff: 0.0,
+            body_amount: 0.35,
+            width: 0.65,
+            clap_delay: 0.05,
+            clap_tightness: 1.0,
+            env_attack: 0.01,
+            env_decay: 0.35,
+            env_sustain: 0.65,
+            env_release: 0.45,
+        };
+        plugin.sync_parameters();
+        plugin
+    }
+}
+
+impl GrandPianoClap {
+    fn sync_parameters(&mut self) {
+        self.piano_level = self
+            .parameters
+            .get(&ParameterId::from(GRAND_PIANO_CLAP_PIANO_LEVEL))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.85);
+        self.clap_level = self
+            .parameters
+            .get(&ParameterId::from(GRAND_PIANO_CLAP_CLAP_LEVEL))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.65);
+        self.env_attack = self
+            .parameters
+            .get(&ParameterId::from(GRAND_PIANO_CLAP_ATTACK))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.01);
+        self.env_decay = self
+            .parameters
+            .get(&ParameterId::from(GRAND_PIANO_CLAP_DECAY))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.35);
+        self.env_sustain = self
+            .parameters
+            .get(&ParameterId::from(GRAND_PIANO_CLAP_SUSTAIN))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.65);
+        self.env_release = self
+            .parameters
+            .get(&ParameterId::from(GRAND_PIANO_CLAP_RELEASE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.45);
+        let tone = self
+            .parameters
+            .get(&ParameterId::from(GRAND_PIANO_CLAP_TONE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.55);
+        self.tone_coeff = one_pole_coefficient(600.0 + tone.powf(2.0) * 9_000.0, self.sample_rate);
+        let sparkle = self
+            .parameters
+            .get(&ParameterId::from(GRAND_PIANO_CLAP_SPARKLE))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.35);
+        self.sparkle_mix = sparkle.powf(1.4) * 0.6;
+        self.sparkle_coeff = one_pole_coefficient(3_600.0, self.sample_rate);
+        self.body_amount = self
+            .parameters
+            .get(&ParameterId::from(GRAND_PIANO_CLAP_BODY))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.35)
+            .powf(1.2)
+            * 0.5;
+        self.width = self
+            .parameters
+            .get(&ParameterId::from(GRAND_PIANO_CLAP_WIDTH))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.65);
+        self.clap_delay = self
+            .parameters
+            .get(&ParameterId::from(GRAND_PIANO_CLAP_DELAY))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.05);
+        self.clap_tightness = self
+            .parameters
+            .get(&ParameterId::from(GRAND_PIANO_CLAP_TIGHTNESS))
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(1.0);
+        self.sync_voice_envelopes();
+    }
+
+    fn sync_voice_envelopes(&mut self) {
+        for voice in &mut self.voices {
+            voice.envelope.set_sample_rate(self.sample_rate);
+            voice.envelope.set_params(
+                self.env_attack,
+                self.env_decay,
+                self.env_sustain,
+                self.env_release,
+            );
+            voice.clap_env.set_sample_rate(self.sample_rate);
+        }
+    }
+
+    fn allocate_voice(&mut self) -> &mut GrandPianoClapVoice {
+        if let Some(voice) = self.voices.iter_mut().find(|voice| !voice.active) {
+            return voice;
+        }
+        let index = self
+            .voices
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                a.envelope
+                    .value
+                    .partial_cmp(&b.envelope.value)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(index, _)| index)
+            .unwrap_or(0);
+        &mut self.voices[index]
+    }
+
+    fn note_on(&mut self, note: u8, velocity: u8) {
+        let freq = midi_note_to_freq(note);
+        let velocity_gain = (velocity as f32 / 127.0).powf(1.2);
+        let voice = self.allocate_voice();
+        voice.reset();
+        voice.note = note;
+        voice.velocity = velocity_gain;
+        voice.pan = (((note % 12) as f32 / 11.0) * 2.0 - 1.0).clamp(-1.0, 1.0);
+        voice.envelope.set_sample_rate(self.sample_rate);
+        voice.envelope.set_params(
+            self.env_attack,
+            self.env_decay,
+            self.env_sustain,
+            self.env_release,
+        );
+        voice.envelope.trigger();
+        voice.clap_env.set_sample_rate(self.sample_rate);
+        voice.clap_env.set_params(0.001, 0.18, 0.0, 0.12);
+        voice.body_increment = TAU * freq / self.sample_rate.max(1.0);
+        let piano_ratio = freq / GRAND_PIANO_BASE_FREQ;
+        let sample_ratio = GRAND_PIANO_SAMPLE_RATE as f32 / self.sample_rate.max(1.0);
+        voice.piano_step = (piano_ratio * sample_ratio).max(0.01);
+        voice.clap_step = (HAND_CLAP_SAMPLE_RATE as f32 / self.sample_rate.max(1.0))
+            * self.clap_tightness.clamp(0.5, 1.5);
+        voice.clap_delay = (self.clap_delay * self.sample_rate).max(0.0);
+        if voice.clap_delay <= 1.0 {
+            voice.clap_triggered = true;
+            voice.clap_env.trigger();
+        }
+    }
+
+    fn note_off(&mut self, note: u8) {
+        for voice in &mut self.voices {
+            if voice.active && voice.note == note {
+                voice.envelope.release();
+            }
+        }
+    }
+
+    fn render_voice(&mut self, voice: &mut GrandPianoClapVoice) -> (f32, f32) {
+        if !voice.active {
+            return (0.0, 0.0);
+        }
+        if !voice.clap_triggered && voice.clap_delay > 0.0 {
+            voice.clap_delay -= 1.0;
+            if voice.clap_delay <= 0.0 {
+                voice.clap_triggered = true;
+                voice.clap_env.trigger();
+                voice.clap_pos = 0.0;
+            }
+        }
+        let env = voice.envelope.next();
+        let mut piano_sample = sample_from_table(&GRAND_PIANO_SAMPLES, voice.piano_pos);
+        voice.piano_pos += voice.piano_step;
+        if voice.piano_pos >= GRAND_PIANO_SAMPLES.len() as f32 {
+            voice.piano_pos = GRAND_PIANO_SAMPLES.len() as f32 - 1.0;
+        }
+        if self.body_amount > 0.0 {
+            voice.body_phase += voice.body_increment;
+            if voice.body_phase > TAU {
+                voice.body_phase -= TAU;
+            }
+            piano_sample += voice.body_phase.sin() * self.body_amount;
+        }
+        voice.filter_state += self.tone_coeff * (piano_sample - voice.filter_state);
+        let mut processed = voice.filter_state;
+        let high = piano_sample - voice.highpass_state;
+        voice.highpass_state += self.sparkle_coeff * high;
+        processed += high * self.sparkle_mix;
+        let mut clap_value = 0.0;
+        if voice.clap_triggered {
+            let clap_sample = sample_from_table(&HAND_CLAP_SAMPLES, voice.clap_pos);
+            voice.clap_pos += voice.clap_step;
+            let clap_env = voice.clap_env.next();
+            clap_value = clap_sample * clap_env;
+            if voice.clap_pos >= HAND_CLAP_SAMPLES.len() as f32 - 1.0 {
+                voice.clap_env.release();
+                if !voice.clap_env.is_active() {
+                    voice.clap_triggered = false;
+                }
+            }
+        }
+        if !voice.envelope.is_active() && !voice.clap_triggered {
+            voice.active = false;
+            return (0.0, 0.0);
+        }
+        let velocity_gain = voice.velocity;
+        let piano_gain = env * self.piano_level * velocity_gain;
+        let clap_gain = self.clap_level * velocity_gain;
+        let mono = processed * piano_gain + clap_value * clap_gain;
+        let pan = (voice.pan * self.width).clamp(-1.0, 1.0);
+        let angle = (pan + 1.0) * (PI / 4.0);
+        let left = mono * angle.cos();
+        let right = mono * angle.sin();
+        (left, right)
+    }
+}
+
+impl AudioProcessor for GrandPianoClap {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new(
+            "harmoniq.grand_piano_clap",
+            "Grand Piano Clap",
+            "Harmoniq Labs",
+        )
+        .with_description("Layered grand piano with expressive hand clap accompaniment")
+    }
+
+    fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
+        self.sample_rate = config.sample_rate.max(1.0);
+        self.sync_parameters();
+        Ok(())
+    }
+
+    fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
+        let frames = buffer.len();
+        if frames == 0 {
+            return Ok(());
+        }
+        let mut left = vec![0.0f32; frames];
+        let mut right = vec![0.0f32; frames];
+        for frame in 0..frames {
+            let mut l = 0.0;
+            let mut r = 0.0;
+            for voice in &mut self.voices {
+                let (vl, vr) = self.render_voice(voice);
+                l += vl;
+                r += vr;
+            }
+            left[frame] = l.tanh();
+            right[frame] = r.tanh();
+        }
+
+        match buffer.channel_count() {
+            0 => {}
+            1 => {
+                let channel = buffer.channel_mut(0);
+                for (index, sample) in channel.iter_mut().enumerate() {
+                    *sample = ((left[index] + right[index]) * 0.5).clamp(-1.0, 1.0);
+                }
+            }
+            _ => {
+                buffer.channel_mut(0).copy_from_slice(&left);
+                buffer.channel_mut(1).copy_from_slice(&right);
+                for channel in 2..buffer.channel_count() {
+                    buffer.channel_mut(channel).fill(0.0);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn supports_layout(&self, layout: ChannelLayout) -> bool {
+        matches!(layout, ChannelLayout::Mono | ChannelLayout::Stereo)
+    }
+}
+
+impl MidiProcessor for GrandPianoClap {
+    fn process_midi(&mut self, events: &[MidiEvent]) -> anyhow::Result<()> {
+        for event in events {
+            match event {
+                MidiEvent::NoteOn { note, velocity, .. } => {
+                    if *velocity > 0 {
+                        self.note_on(*note, *velocity);
+                    } else {
+                        self.note_off(*note);
+                    }
+                }
+                MidiEvent::NoteOff { note, .. } => self.note_off(*note),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+impl NativePlugin for GrandPianoClap {
+    fn parameters(&self) -> &ParameterSet {
+        &self.parameters
+    }
+
+    fn parameters_mut(&mut self) -> &mut ParameterSet {
+        &mut self.parameters
+    }
+
+    fn on_parameter_changed(
+        &mut self,
+        _id: &ParameterId,
+        _value: &ParameterValue,
+    ) -> Result<(), PluginParameterError> {
+        self.sync_parameters();
+        Ok(())
+    }
+}
+
+fn grand_piano_clap_layout() -> ParameterLayout {
+    ParameterLayout::new(vec![
+        ParameterDefinition::new(
+            GRAND_PIANO_CLAP_PIANO_LEVEL,
+            "Piano Level",
+            ParameterKind::continuous(0.0..=1.5, 0.85),
+        )
+        .with_description("Controls the sustained grand piano layer"),
+        ParameterDefinition::new(
+            GRAND_PIANO_CLAP_CLAP_LEVEL,
+            "Clap Level",
+            ParameterKind::continuous(0.0..=1.5, 0.65),
+        )
+        .with_description("Volume of the accompanying layered hand clap"),
+        ParameterDefinition::new(
+            GRAND_PIANO_CLAP_ATTACK,
+            "Attack",
+            ParameterKind::continuous(0.001..=0.2, 0.01),
+        )
+        .with_unit("s")
+        .with_description("Time for the piano layer to reach full amplitude"),
+        ParameterDefinition::new(
+            GRAND_PIANO_CLAP_DECAY,
+            "Decay",
+            ParameterKind::continuous(0.05..=2.0, 0.35),
+        )
+        .with_unit("s"),
+        ParameterDefinition::new(
+            GRAND_PIANO_CLAP_SUSTAIN,
+            "Sustain",
+            ParameterKind::continuous(0.0..=1.0, 0.65),
+        ),
+        ParameterDefinition::new(
+            GRAND_PIANO_CLAP_RELEASE,
+            "Release",
+            ParameterKind::continuous(0.05..=2.5, 0.45),
+        )
+        .with_unit("s"),
+        ParameterDefinition::new(
+            GRAND_PIANO_CLAP_TONE,
+            "Tone",
+            ParameterKind::continuous(0.0..=1.0, 0.55),
+        )
+        .with_description("Balances mellow warmth and bright hammer detail"),
+        ParameterDefinition::new(
+            GRAND_PIANO_CLAP_SPARKLE,
+            "Sparkle",
+            ParameterKind::continuous(0.0..=1.0, 0.35),
+        )
+        .with_description("Enhances high-frequency air for added clarity"),
+        ParameterDefinition::new(
+            GRAND_PIANO_CLAP_BODY,
+            "Body",
+            ParameterKind::continuous(0.0..=1.0, 0.35),
+        )
+        .with_description("Adds synthesized resonance beneath the samples"),
+        ParameterDefinition::new(
+            GRAND_PIANO_CLAP_WIDTH,
+            "Stereo Width",
+            ParameterKind::continuous(0.0..=1.0, 0.65),
+        ),
+        ParameterDefinition::new(
+            GRAND_PIANO_CLAP_DELAY,
+            "Clap Delay",
+            ParameterKind::continuous(0.0..=0.25, 0.05),
+        )
+        .with_unit("s")
+        .with_description("Offsets the clap layer for groove and pocket"),
+        ParameterDefinition::new(
+            GRAND_PIANO_CLAP_TIGHTNESS,
+            "Clap Tightness",
+            ParameterKind::continuous(0.5..=1.5, 1.0),
+        )
+        .with_description("Shortens or stretches the clap sample playback"),
+    ])
+}
+
+pub struct GrandPianoClapFactory;
+
+impl PluginFactory for GrandPianoClapFactory {
+    fn descriptor(&self) -> PluginDescriptor {
+        PluginDescriptor::new(
+            "harmoniq.grand_piano_clap",
+            "Grand Piano Clap",
+            "Harmoniq Labs",
+        )
+    }
+
+    fn parameter_layout(&self) -> std::sync::Arc<ParameterLayout> {
+        std::sync::Arc::new(grand_piano_clap_layout())
+    }
+
+    fn create(&self) -> Box<dyn NativePlugin> {
+        Box::new(GrandPianoClap::default())
+    }
+}
+
+fn sample_from_table(table: &[f32], position: f32) -> f32 {
+    if table.is_empty() {
+        return 0.0;
+    }
+    if position <= 0.0 {
+        return table[0];
+    }
+    let max_index = (table.len() - 1) as f32;
+    if position >= max_index {
+        return table[table.len() - 1];
+    }
+    let index = position.floor() as usize;
+    let frac = position - index as f32;
+    let next = table[index + 1];
+    table[index] + (next - table[index]) * frac
+}
+
+fn one_pole_coefficient(cutoff: f32, sample_rate: f32) -> f32 {
+    let sr = sample_rate.max(1.0);
+    let clamped_cutoff = cutoff.clamp(10.0, sr * 0.45);
+    1.0 - (-2.0 * PI * clamped_cutoff / sr).exp()
 }
 
 // --- Additive Synth ----------------------------------------------------------------------
