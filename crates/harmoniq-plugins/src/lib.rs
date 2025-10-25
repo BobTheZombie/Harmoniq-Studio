@@ -7,6 +7,7 @@ pub mod editors;
 pub mod effects;
 pub mod generators;
 pub mod instruments;
+pub mod samples;
 
 pub use dynamics::{GainPlugin, GainPluginFactory};
 pub use editors::{AudioClipMetrics, AudioEditorPlugin, AudioEditorPluginFactory};
@@ -20,9 +21,10 @@ pub use effects::{
 pub use generators::{NoisePlugin, NoisePluginFactory, SineSynth, SineSynthFactory};
 pub use instruments::{
     AdditiveSynth, AdditiveSynthFactory, AnalogSynth, AnalogSynthFactory, BassSynth,
-    BassSynthFactory, FmSynth, FmSynthFactory, GranularSynth, GranularSynthFactory,
-    OrganPianoEngine, OrganPianoFactory, Sampler, SamplerFactory, Sub808, Sub808Factory,
-    WavetableSynth, WavetableSynthFactory, WestCoastLead, WestCoastLeadFactory,
+    BassSynthFactory, FmSynth, FmSynthFactory, GrandPianoClap, GrandPianoClapFactory,
+    GranularSynth, GranularSynthFactory, OrganPianoEngine, OrganPianoFactory, Sampler,
+    SamplerFactory, Sub808, Sub808Factory, WavetableSynth, WavetableSynthFactory, WestCoastLead,
+    WestCoastLeadFactory,
 };
 
 /// Returns a [`PluginModule`] containing all built-in Harmoniq processors.
@@ -38,6 +40,7 @@ pub fn builtin_module() -> PluginModule {
         .register_factory(Box::new(WavetableSynthFactory))
         .register_factory(Box::new(SamplerFactory))
         .register_factory(Box::new(GranularSynthFactory))
+        .register_factory(Box::new(GrandPianoClapFactory))
         .register_factory(Box::new(AdditiveSynthFactory))
         .register_factory(Box::new(OrganPianoFactory))
         .register_factory(Box::new(BassSynthFactory))
