@@ -6,7 +6,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use walkdir::WalkDir;
 
-use crate::{PluginEntry, PluginFormat, PluginMetadata, PluginRef};
+use crate::{PluginEntry, PluginFormat, PluginMetadata};
 
 #[derive(Debug, Clone)]
 pub struct ScanConfig {
