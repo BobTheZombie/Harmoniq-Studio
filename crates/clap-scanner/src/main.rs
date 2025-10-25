@@ -16,6 +16,6 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
     let directories = scan_directories(args.paths)?;
-    println!("{{}}", serde_json::to_string_pretty(&directories)?);
+    println!("{}", serde_json::to_string_pretty(&directories)?);
     Ok(())
 }
