@@ -28,6 +28,7 @@ arc-swap = "1.6"
 symphonia = { version = "0.5", features = ["wav", "flac", "aiff", "pcm"] }
 hound = "3.5"
 flacenc = "0.5"
+clap-host = { path = "../clap-host" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

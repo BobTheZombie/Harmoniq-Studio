@@ -1,6 +1,7 @@
 //! Simplified sandboxed plugin bridge used for tests and offline development.
 
 pub mod audio_ring;
+pub mod backend_clap;
 pub mod ipc;
 pub mod server;
 

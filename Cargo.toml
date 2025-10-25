@@ -27,6 +27,13 @@ members = [
     "crates/harmoniq-host-clap",
     "crates/harmoniq-host-vst3",
     "benches",
+    "crates/clap-sys",
+    "crates/clap-host",
+    "crates/clap-plugin-authoring",
+    "crates/clap-scanner",
+    "crates/clap-validate",
+    "examples/clap-testgain",
+    "examples/clap-testsynth",
 ]
 resolver = "2"
 

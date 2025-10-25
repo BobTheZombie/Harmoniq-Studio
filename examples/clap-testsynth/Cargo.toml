@@ -1,0 +1,13 @@
+[package]
+name = "clap-testsynth"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anyhow.workspace = true
+clap-plugin-authoring = { path = "../../crates/clap-plugin-authoring" }
+clap-sys = { path = "../../crates/clap-sys" }

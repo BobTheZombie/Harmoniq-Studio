@@ -1,0 +1,14 @@
+[package]
+name = "clap-scanner"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+walkdir = "2.5"
+clap = { workspace = true }
+clap-host = { path = "../clap-host" }
+dirs = { workspace = true }

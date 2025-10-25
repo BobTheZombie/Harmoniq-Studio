@@ -16,6 +16,12 @@ professional mixing, and live performance.
   and piano roll components.
 - `crates/harmoniq-plugin-host`: Host layers for loading third-party binaries
   such as LinuxVST, VST2/3, AudioUnit, and RTAS modules.
+- `crates/clap-sys`, `crates/clap-host`, `crates/clap-plugin-authoring`: CLAP SDK
+  bindings, safe host wrappers, and helper utilities for authoring new CLAP plug-ins.
+- `crates/clap-scanner`, `crates/clap-validate`: command-line tooling for
+  discovering, indexing, and validating CLAP plug-ins.
+- `examples/clap-testgain`, `examples/clap-testsynth`: reference CLAP plug-ins
+  built with the authoring helpers.
 
 ## Getting started
 

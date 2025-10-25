@@ -1,0 +1,17 @@
+[package]
+name = "clap-host"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+heapless = "0.8"
+clap-sys = { path = "../clap-sys" }
+log = "0.4"
+libloading = "0.8"
+
+[features]
+default = []
+rt_debug = []

@@ -11,6 +11,7 @@ crossbeam-channel = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 parking_lot = { workspace = true }
+clap-host = { path = "../clap-host" }
 
 [dev-dependencies]
 pretty_assertions = "1.4"
