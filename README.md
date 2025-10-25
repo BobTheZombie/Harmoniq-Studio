@@ -44,6 +44,61 @@ Add CLI flags (such as `--sample-rate` or `--midi-input`) to adjust the realtime
 engine configuration. To temporarily disable the windowed interface, append
 `--headless` to switch back to the minimal CLI renderer.
 
+### Plugin discovery and library
+
+Harmoniq Studio now keeps a persistent plugin database under
+`~/.config/HarmoniqStudio/plugins.json`. When the application starts it scans the
+following locations:
+
+| Format | System | User |
+| --- | --- | --- |
+| CLAP | `/usr/share/harmoniq-studio/plugins/clap` | `~/.clap` |
+| VST3 | `/usr/share/harmoniq-studio/plugins/vst3` | `~/.vst3` |
+| OpenVST3 shim | `/usr/share/harmoniq-studio/plugins/ovst3` | `~/.vst3` |
+| Harmoniq native | `/usr/share/harmoniq-studio/plugins/harmoniq` | `~/.harmoniq/plugins` |
+
+Each candidate bundle is probed for metadata such as vendor, category, channel
+layout, editor support, and whether it exposes instrument voices. Results are
+deduplicated and stored so the plugin browser can open instantly on subsequent
+runs.
+
+To force a rescan open **Plugins → Add Plugins…** or run the CLI helper:
+
+```bash
+cargo run -p harmoniq-app -- --open-plugin-scanner
+```
+
+This re-indexes the configured locations, merges the results into the JSON
+database, and refreshes the in-app browser.
+
+### Using the Plugin Library
+
+Open **Plugins → Plugin Library…** to browse all installed instruments and
+effects. The dialog includes search, format toggles (CLAP, VST3, OpenVST3, and
+Harmoniq), and quick category chips (Instrument, Effect, Dynamics, EQ, Reverb,
+Delay, Mod, Distortion, Utility). Selecting an entry reveals its metadata and
+offers three actions:
+
+- **Add to Channel as Instrument** – attaches the instrument to a new Channel
+  Rack lane.
+- **Add to Channel as Effect** – inserts the processor on the selected channel
+  effect chain.
+- **Add to Mixer Insert** – makes the processor available on the mixer.
+
+When an instrument is attached to a channel its piano roll opens automatically,
+allowing you to sketch MIDI clips and audition notes immediately. Use the Q/W
+shortcuts to adjust quantize strength, Delete to remove notes, and the standard
+copy/paste shortcuts for arranging phrases.
+
+### Hosting modes
+
+For third-party plug-ins you can choose between in-process hosting (lowest
+latency, but a misbehaving plug-in can crash the DAW) and the sandboxed bridge
+process (slightly higher latency, isolates crashes). Set your preferred default
+under **Options → Preferences → Plugins**; per-plug-in overrides are also saved
+in the project file so experimental instruments can run safely in the bridge
+without affecting the rest of the session.
+
 ### Menu bar and shortcuts
 
 The desktop build now ships with a full menu bar that mirrors familiar DAW

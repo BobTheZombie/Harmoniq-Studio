@@ -29,6 +29,14 @@ impl ScannerUi {
         if ui.checkbox(&mut vst3_enabled, "VST3").changed() {
             toggle_format(&mut self.options.formats, PluginFormat::Vst3, vst3_enabled);
         }
+        let mut ovst3_enabled = self.options.formats.contains(&PluginFormat::Ovst3);
+        if ui.checkbox(&mut ovst3_enabled, "OpenVST3").changed() {
+            toggle_format(
+                &mut self.options.formats,
+                PluginFormat::Ovst3,
+                ovst3_enabled,
+            );
+        }
         let mut harmoniq_enabled = self.options.formats.contains(&PluginFormat::Harmoniq);
         if ui.checkbox(&mut harmoniq_enabled, "Harmoniq").changed() {
             toggle_format(
