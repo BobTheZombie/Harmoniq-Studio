@@ -15,8 +15,9 @@ pub use effects::{
     AutoFilterFactory, AutoFilterPlugin, ChorusFactory, ChorusPlugin, CompressorFactory,
     CompressorPlugin, DelayFactory, DelayPlugin, DistortionFactory, DistortionPlugin,
     FlangerFactory, FlangerPlugin, LimiterFactory, LimiterPlugin, NoiseGateFactory,
-    NoiseGatePlugin, ParametricEqFactory, ParametricEqPlugin, PhaserFactory, PhaserPlugin,
-    ReverbFactory, ReverbPlugin, StereoEnhancerFactory, StereoEnhancerPlugin,
+    NoiseGatePlugin, ParametricEqBandPreset, ParametricEqFactory, ParametricEqPlugin,
+    ParametricEqPreset, PhaserFactory, PhaserPlugin, ReverbFactory, ReverbPlugin,
+    StereoEnhancerFactory, StereoEnhancerPlugin, PARAMETRIC_EQ_FACTORY_PRESETS,
 };
 pub use generators::{NoisePlugin, NoisePluginFactory, SineSynth, SineSynthFactory};
 pub use instruments::{
