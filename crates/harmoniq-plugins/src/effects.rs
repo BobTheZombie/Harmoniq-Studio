@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use harmoniq_engine::{AudioBuffer, AudioProcessor, BufferConfig, ChannelLayout, PluginDescriptor};
 use harmoniq_plugin_sdk::{
-    NativePlugin, ParameterDefinition, ParameterId, ParameterKind, ParameterLayout, ParameterSet,
-    ParameterValue, PluginFactory, PluginParameterError,
+    ContinuousParameterOptions, NativePlugin, ParameterDefinition, ParameterId, ParameterKind,
+    ParameterLayout, ParameterSet, ParameterValue, PluginFactory, PluginParameterError,
 };
 
 const TWO_PI: f32 = PI * 2.0;
@@ -41,22 +41,274 @@ impl BiquadState {
         output
     }
 
-    #[allow(dead_code)]
     fn reset(&mut self) {
         self.z1 = 0.0;
         self.z2 = 0.0;
     }
 }
 
-const PARAM_EQ_FREQ: &str = "frequency";
-const PARAM_EQ_GAIN: &str = "gain";
-const PARAM_EQ_Q: &str = "q";
+const PARAM_EQ_OUTPUT_GAIN: &str = "output_gain";
+
+const EQ_BAND_COUNT: usize = 4;
+
+#[derive(Debug, Clone, Copy)]
+enum EqBandKind {
+    LowShelf,
+    Peak,
+    HighShelf,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RangeSetting {
+    min: f32,
+    max: f32,
+    default: f32,
+    skew: Option<f32>,
+}
+
+impl RangeSetting {
+    const fn new(min: f32, max: f32, default: f32, skew: Option<f32>) -> Self {
+        Self {
+            min,
+            max,
+            default,
+            skew,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EqBandConfig {
+    label: &'static str,
+    kind: EqBandKind,
+    enable_id: &'static str,
+    freq_id: &'static str,
+    gain_id: &'static str,
+    q_id: &'static str,
+    freq: RangeSetting,
+    gain: RangeSetting,
+    q: RangeSetting,
+    q_label: &'static str,
+    default_enabled: bool,
+}
+
+const EQ_BAND_CONFIGS: [EqBandConfig; EQ_BAND_COUNT] = [
+    EqBandConfig {
+        label: "Low Shelf",
+        kind: EqBandKind::LowShelf,
+        enable_id: "low_enable",
+        freq_id: "low_freq",
+        gain_id: "low_gain",
+        q_id: "low_slope",
+        freq: RangeSetting::new(30.0, 400.0, 80.0, Some(0.45)),
+        gain: RangeSetting::new(-18.0, 18.0, 0.0, None),
+        q: RangeSetting::new(0.3, 1.5, 0.7, None),
+        q_label: "Slope",
+        default_enabled: true,
+    },
+    EqBandConfig {
+        label: "Low Mid",
+        kind: EqBandKind::Peak,
+        enable_id: "low_mid_enable",
+        freq_id: "low_mid_freq",
+        gain_id: "low_mid_gain",
+        q_id: "low_mid_q",
+        freq: RangeSetting::new(120.0, 2_000.0, 450.0, Some(0.55)),
+        gain: RangeSetting::new(-18.0, 18.0, 0.0, None),
+        q: RangeSetting::new(0.2, 5.0, 1.2, None),
+        q_label: "Q",
+        default_enabled: true,
+    },
+    EqBandConfig {
+        label: "High Mid",
+        kind: EqBandKind::Peak,
+        enable_id: "high_mid_enable",
+        freq_id: "high_mid_freq",
+        gain_id: "high_mid_gain",
+        q_id: "high_mid_q",
+        freq: RangeSetting::new(1_000.0, 8_000.0, 2_500.0, Some(0.55)),
+        gain: RangeSetting::new(-18.0, 18.0, 0.0, None),
+        q: RangeSetting::new(0.2, 5.0, 1.0, None),
+        q_label: "Q",
+        default_enabled: true,
+    },
+    EqBandConfig {
+        label: "High Shelf",
+        kind: EqBandKind::HighShelf,
+        enable_id: "high_enable",
+        freq_id: "high_freq",
+        gain_id: "high_gain",
+        q_id: "high_slope",
+        freq: RangeSetting::new(2_000.0, 18_000.0, 8_000.0, Some(0.45)),
+        gain: RangeSetting::new(-18.0, 18.0, 0.0, None),
+        q: RangeSetting::new(0.3, 1.5, 0.7, None),
+        q_label: "Slope",
+        default_enabled: true,
+    },
+];
+
+#[derive(Debug, Clone)]
+struct EqBandRuntime {
+    enable_id: ParameterId,
+    freq_id: ParameterId,
+    gain_id: ParameterId,
+    q_id: ParameterId,
+    coeffs: BiquadCoeffs,
+    states: Vec<BiquadState>,
+    enabled: bool,
+}
+
+impl EqBandRuntime {
+    fn new(config_index: usize) -> Self {
+        let config = &EQ_BAND_CONFIGS[config_index];
+        Self {
+            enable_id: ParameterId::from(config.enable_id),
+            freq_id: ParameterId::from(config.freq_id),
+            gain_id: ParameterId::from(config.gain_id),
+            q_id: ParameterId::from(config.q_id),
+            coeffs: BiquadCoeffs {
+                b0: 1.0,
+                b1: 0.0,
+                b2: 0.0,
+                a1: 0.0,
+                a2: 0.0,
+            },
+            states: Vec::new(),
+            enabled: config.default_enabled,
+        }
+    }
+
+    fn resize_states(&mut self, channels: usize) {
+        self.states.resize(channels, BiquadState::new());
+        for state in &mut self.states {
+            state.reset();
+        }
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        if self.enabled != enabled {
+            for state in &mut self.states {
+                state.reset();
+            }
+        }
+        self.enabled = enabled;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ParametricEqBandPreset {
+    pub enabled: bool,
+    pub frequency: f32,
+    pub gain: f32,
+    pub q: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ParametricEqPreset {
+    pub name: &'static str,
+    pub output_gain: f32,
+    pub bands: [ParametricEqBandPreset; EQ_BAND_COUNT],
+}
+
+pub const PARAMETRIC_EQ_FACTORY_PRESETS: &[ParametricEqPreset] = &[
+    ParametricEqPreset {
+        name: "Mastering Glue",
+        output_gain: -0.5,
+        bands: [
+            ParametricEqBandPreset {
+                enabled: true,
+                frequency: 70.0,
+                gain: 1.5,
+                q: 0.8,
+            },
+            ParametricEqBandPreset {
+                enabled: true,
+                frequency: 420.0,
+                gain: -1.8,
+                q: 1.1,
+            },
+            ParametricEqBandPreset {
+                enabled: true,
+                frequency: 2_800.0,
+                gain: 2.4,
+                q: 1.3,
+            },
+            ParametricEqBandPreset {
+                enabled: true,
+                frequency: 11_500.0,
+                gain: 3.0,
+                q: 0.8,
+            },
+        ],
+    },
+    ParametricEqPreset {
+        name: "Vocal Presence",
+        output_gain: 0.0,
+        bands: [
+            ParametricEqBandPreset {
+                enabled: false,
+                frequency: 90.0,
+                gain: 0.0,
+                q: 0.7,
+            },
+            ParametricEqBandPreset {
+                enabled: true,
+                frequency: 250.0,
+                gain: -2.5,
+                q: 1.4,
+            },
+            ParametricEqBandPreset {
+                enabled: true,
+                frequency: 4_500.0,
+                gain: 3.5,
+                q: 0.9,
+            },
+            ParametricEqBandPreset {
+                enabled: true,
+                frequency: 9_500.0,
+                gain: 2.2,
+                q: 0.7,
+            },
+        ],
+    },
+    ParametricEqPreset {
+        name: "Drum Bus Punch",
+        output_gain: 0.0,
+        bands: [
+            ParametricEqBandPreset {
+                enabled: true,
+                frequency: 65.0,
+                gain: 2.8,
+                q: 0.9,
+            },
+            ParametricEqBandPreset {
+                enabled: true,
+                frequency: 180.0,
+                gain: -2.2,
+                q: 1.1,
+            },
+            ParametricEqBandPreset {
+                enabled: true,
+                frequency: 3_200.0,
+                gain: 2.0,
+                q: 1.0,
+            },
+            ParametricEqBandPreset {
+                enabled: true,
+                frequency: 12_000.0,
+                gain: 2.5,
+                q: 0.9,
+            },
+        ],
+    },
+];
 
 #[derive(Debug, Clone)]
 pub struct ParametricEqPlugin {
     sample_rate: f32,
-    coeffs: BiquadCoeffs,
-    states: Vec<BiquadState>,
+    bands: Vec<EqBandRuntime>,
+    output_gain: f32,
+    output_gain_id: ParameterId,
     parameters: ParameterSet,
 }
 
@@ -64,62 +316,115 @@ impl Default for ParametricEqPlugin {
     fn default() -> Self {
         let layout = parametric_eq_layout();
         let parameters = ParameterSet::new(layout);
-        let coeffs = BiquadCoeffs {
+        let mut plugin = Self {
+            sample_rate: 48_000.0,
+            bands: (0..EQ_BAND_COUNT).map(EqBandRuntime::new).collect(),
+            output_gain: 1.0,
+            output_gain_id: ParameterId::from(PARAM_EQ_OUTPUT_GAIN),
+            parameters,
+        };
+        plugin.refresh_output_gain();
+        plugin.update_all_bands();
+        plugin
+    }
+}
+
+impl ParametricEqPlugin {
+    fn refresh_output_gain(&mut self) {
+        let gain_db = self
+            .parameters
+            .get(&self.output_gain_id)
+            .and_then(ParameterValue::as_continuous)
+            .unwrap_or(0.0);
+        self.output_gain = db_to_gain(gain_db);
+    }
+
+    fn identity_coeffs() -> BiquadCoeffs {
+        BiquadCoeffs {
             b0: 1.0,
             b1: 0.0,
             b2: 0.0,
             a1: 0.0,
             a2: 0.0,
-        };
-        Self {
-            sample_rate: 48_000.0,
-            coeffs,
-            states: Vec::new(),
-            parameters,
         }
     }
-}
 
-impl ParametricEqPlugin {
-    fn update_coefficients(&mut self) {
-        let freq = self
-            .parameters
-            .get(&ParameterId::from(PARAM_EQ_FREQ))
-            .and_then(ParameterValue::as_continuous)
-            .unwrap_or(1_000.0);
-        let gain_db = self
-            .parameters
-            .get(&ParameterId::from(PARAM_EQ_GAIN))
-            .and_then(ParameterValue::as_continuous)
-            .unwrap_or(0.0);
-        let q = self
-            .parameters
-            .get(&ParameterId::from(PARAM_EQ_Q))
-            .and_then(ParameterValue::as_continuous)
-            .unwrap_or(1.0)
-            .max(0.05);
+    fn update_all_bands(&mut self) {
+        for index in 0..self.bands.len() {
+            self.update_band(index);
+        }
+    }
 
-        let omega = TWO_PI * (freq / self.sample_rate.max(1.0));
-        let alpha = omega.sin() / (2.0 * q);
-        let cos = omega.cos();
-        let a = alpha * db_to_gain(gain_db);
-        let b = alpha / db_to_gain(gain_db);
-
-        let b0 = 1.0 + a;
-        let b1 = -2.0 * cos;
-        let b2 = 1.0 - a;
-        let a0 = 1.0 + b;
-        let a1 = -2.0 * cos;
-        let a2 = 1.0 - b;
-
-        let inv_a0 = 1.0 / a0.max(1e-6);
-        self.coeffs = BiquadCoeffs {
-            b0: b0 * inv_a0,
-            b1: b1 * inv_a0,
-            b2: b2 * inv_a0,
-            a1: a1 * inv_a0,
-            a2: a2 * inv_a0,
+    fn update_band(&mut self, index: usize) {
+        let config = EQ_BAND_CONFIGS[index];
+        let (enabled, freq, gain_db, q) = {
+            let band = &self.bands[index];
+            let enabled = self
+                .parameters
+                .get(&band.enable_id)
+                .and_then(ParameterValue::as_toggle)
+                .unwrap_or(config.default_enabled);
+            let freq = self
+                .parameters
+                .get(&band.freq_id)
+                .and_then(ParameterValue::as_continuous)
+                .unwrap_or(config.freq.default)
+                .clamp(config.freq.min, config.freq.max);
+            let gain_db = self
+                .parameters
+                .get(&band.gain_id)
+                .and_then(ParameterValue::as_continuous)
+                .unwrap_or(config.gain.default)
+                .clamp(config.gain.min, config.gain.max);
+            let q = self
+                .parameters
+                .get(&band.q_id)
+                .and_then(ParameterValue::as_continuous)
+                .unwrap_or(config.q.default)
+                .clamp(config.q.min, config.q.max);
+            (enabled, freq, gain_db, q)
         };
+
+        let band = &mut self.bands[index];
+        band.set_enabled(enabled);
+        if !enabled {
+            band.coeffs = Self::identity_coeffs();
+            return;
+        }
+
+        let sample_rate = self.sample_rate.max(1.0);
+        let limited_freq = freq.min(sample_rate * 0.45).max(10.0);
+        band.coeffs = match config.kind {
+            EqBandKind::LowShelf => compute_low_shelf(limited_freq, gain_db, q, sample_rate),
+            EqBandKind::HighShelf => compute_high_shelf(limited_freq, gain_db, q, sample_rate),
+            EqBandKind::Peak => compute_peak(limited_freq, gain_db, q, sample_rate),
+        };
+    }
+
+    pub fn apply_preset(&mut self, preset: &ParametricEqPreset) {
+        let _ = self.parameters.set(
+            &self.output_gain_id,
+            ParameterValue::from(preset.output_gain),
+        );
+        self.refresh_output_gain();
+
+        for (index, band_preset) in preset.bands.iter().enumerate() {
+            if let Some(band) = self.bands.get(index) {
+                let _ = self
+                    .parameters
+                    .set(&band.enable_id, ParameterValue::from(band_preset.enabled));
+                let _ = self
+                    .parameters
+                    .set(&band.freq_id, ParameterValue::from(band_preset.frequency));
+                let _ = self
+                    .parameters
+                    .set(&band.gain_id, ParameterValue::from(band_preset.gain));
+                let _ = self
+                    .parameters
+                    .set(&band.q_id, ParameterValue::from(band_preset.q));
+            }
+            self.update_band(index);
+        }
     }
 }
 
@@ -134,17 +439,26 @@ impl AudioProcessor for ParametricEqPlugin {
 
     fn prepare(&mut self, config: &BufferConfig) -> anyhow::Result<()> {
         self.sample_rate = config.sample_rate;
-        self.states = (0..config.layout.channels() as usize)
-            .map(|_| BiquadState::new())
-            .collect();
-        self.update_coefficients();
+        let channels = config.layout.channels() as usize;
+        for band in &mut self.bands {
+            band.resize_states(channels);
+        }
+        self.update_all_bands();
         Ok(())
     }
 
     fn process(&mut self, buffer: &mut AudioBuffer) -> anyhow::Result<()> {
-        for (channel, state) in buffer.channels_mut().zip(self.states.iter_mut()) {
+        for (channel_index, channel) in buffer.channels_mut().enumerate() {
             for sample in channel.iter_mut() {
-                *sample = state.process(*sample, &self.coeffs);
+                let mut value = *sample;
+                for band in &mut self.bands {
+                    if band.enabled {
+                        if let Some(state) = band.states.get_mut(channel_index) {
+                            value = state.process(value, &band.coeffs);
+                        }
+                    }
+                }
+                *sample = value * self.output_gain;
             }
         }
         Ok(())
@@ -169,32 +483,182 @@ impl NativePlugin for ParametricEqPlugin {
         id: &ParameterId,
         _value: &ParameterValue,
     ) -> Result<(), PluginParameterError> {
-        if matches!(id.as_str(), PARAM_EQ_FREQ | PARAM_EQ_GAIN | PARAM_EQ_Q) {
-            self.update_coefficients();
+        if id == &self.output_gain_id {
+            self.refresh_output_gain();
+        } else {
+            for index in 0..self.bands.len() {
+                let band = &self.bands[index];
+                if id == &band.enable_id
+                    || id == &band.freq_id
+                    || id == &band.gain_id
+                    || id == &band.q_id
+                {
+                    self.update_band(index);
+                    break;
+                }
+            }
         }
         Ok(())
     }
 }
 
 fn parametric_eq_layout() -> ParameterLayout {
-    ParameterLayout::new(vec![
+    let mut parameters = Vec::new();
+    let output_gain_options = ContinuousParameterOptions::new(-24.0..=24.0, 0.0);
+    parameters.push(
         ParameterDefinition::new(
-            PARAM_EQ_FREQ,
-            "Frequency",
-            ParameterKind::continuous(20.0..=20_000.0, 1_000.0),
-        )
-        .with_unit("Hz")
-        .with_description("Center frequency of the bell filter"),
-        ParameterDefinition::new(
-            PARAM_EQ_GAIN,
-            "Gain",
-            ParameterKind::continuous(-18.0..=18.0, 0.0),
+            PARAM_EQ_OUTPUT_GAIN,
+            "Output Gain",
+            ParameterKind::Continuous(output_gain_options),
         )
         .with_unit("dB")
-        .with_description("Gain applied at the center frequency"),
-        ParameterDefinition::new(PARAM_EQ_Q, "Q", ParameterKind::continuous(0.1..=10.0, 1.0))
-            .with_description("Quality factor controlling bandwidth"),
-    ])
+        .with_description("Post-EQ output trim"),
+    );
+
+    for config in EQ_BAND_CONFIGS.iter() {
+        parameters.push(
+            ParameterDefinition::new(
+                config.enable_id,
+                format!("{} Enable", config.label),
+                ParameterKind::Toggle {
+                    default: config.default_enabled,
+                },
+            )
+            .with_description(format!("Enable or bypass the {} band", config.label)),
+        );
+
+        let mut freq_options =
+            ContinuousParameterOptions::new(config.freq.min..=config.freq.max, config.freq.default);
+        if let Some(skew) = config.freq.skew {
+            freq_options = freq_options.with_skew(skew);
+        }
+        parameters.push(
+            ParameterDefinition::new(
+                config.freq_id,
+                format!("{} Frequency", config.label),
+                ParameterKind::Continuous(freq_options),
+            )
+            .with_unit("Hz")
+            .with_description(format!("Center frequency for the {} band", config.label)),
+        );
+
+        let gain_options =
+            ContinuousParameterOptions::new(config.gain.min..=config.gain.max, config.gain.default);
+        parameters.push(
+            ParameterDefinition::new(
+                config.gain_id,
+                format!("{} Gain", config.label),
+                ParameterKind::Continuous(gain_options),
+            )
+            .with_unit("dB")
+            .with_description(format!("Gain applied by the {} band", config.label)),
+        );
+
+        let mut q_options =
+            ContinuousParameterOptions::new(config.q.min..=config.q.max, config.q.default);
+        if let Some(skew) = config.q.skew {
+            q_options = q_options.with_skew(skew);
+        }
+        parameters.push(
+            ParameterDefinition::new(
+                config.q_id,
+                format!("{} {}", config.label, config.q_label),
+                ParameterKind::Continuous(q_options),
+            )
+            .with_description(format!("Bandwidth control for the {} band", config.label)),
+        );
+    }
+
+    ParameterLayout::new(parameters)
+}
+
+fn compute_peak(freq: f32, gain_db: f32, q: f32, sample_rate: f32) -> BiquadCoeffs {
+    let frequency = freq.max(10.0);
+    let sample_rate = sample_rate.max(1.0);
+    let omega = TWO_PI * (frequency / sample_rate);
+    let cos = omega.cos();
+    let sin = omega.sin();
+    let q = q.max(0.05);
+    let alpha = sin / (2.0 * q);
+    let a = 10.0_f32.powf(gain_db / 40.0);
+
+    let b0 = 1.0 + alpha * a;
+    let b1 = -2.0 * cos;
+    let b2 = 1.0 - alpha * a;
+    let a0 = 1.0 + alpha / a;
+    let a1 = -2.0 * cos;
+    let a2 = 1.0 - alpha / a;
+
+    let inv_a0 = 1.0 / a0.max(1e-6);
+    BiquadCoeffs {
+        b0: b0 * inv_a0,
+        b1: b1 * inv_a0,
+        b2: b2 * inv_a0,
+        a1: a1 * inv_a0,
+        a2: a2 * inv_a0,
+    }
+}
+
+fn shelf_alpha(a: f32, slope: f32, sin: f32) -> f32 {
+    let slope = slope.max(0.1);
+    let s = ((a + 1.0 / a) * (1.0 / slope - 1.0) + 2.0).max(0.0);
+    sin / 2.0 * s.sqrt()
+}
+
+fn compute_low_shelf(freq: f32, gain_db: f32, slope: f32, sample_rate: f32) -> BiquadCoeffs {
+    let frequency = freq.max(10.0);
+    let sample_rate = sample_rate.max(1.0);
+    let omega = TWO_PI * (frequency / sample_rate);
+    let cos = omega.cos();
+    let sin = omega.sin();
+    let a = 10.0_f32.powf(gain_db / 40.0);
+    let alpha = shelf_alpha(a, slope, sin);
+    let sqrt_a = a.sqrt();
+    let two_sqrt_a_alpha = 2.0 * sqrt_a * alpha;
+
+    let b0 = a * ((a + 1.0) - (a - 1.0) * cos + two_sqrt_a_alpha);
+    let b1 = 2.0 * a * ((a - 1.0) - (a + 1.0) * cos);
+    let b2 = a * ((a + 1.0) - (a - 1.0) * cos - two_sqrt_a_alpha);
+    let a0 = (a + 1.0) + (a - 1.0) * cos + two_sqrt_a_alpha;
+    let a1 = -2.0 * ((a - 1.0) + (a + 1.0) * cos);
+    let a2 = (a + 1.0) + (a - 1.0) * cos - two_sqrt_a_alpha;
+
+    let inv_a0 = 1.0 / a0.max(1e-6);
+    BiquadCoeffs {
+        b0: b0 * inv_a0,
+        b1: b1 * inv_a0,
+        b2: b2 * inv_a0,
+        a1: a1 * inv_a0,
+        a2: a2 * inv_a0,
+    }
+}
+
+fn compute_high_shelf(freq: f32, gain_db: f32, slope: f32, sample_rate: f32) -> BiquadCoeffs {
+    let frequency = freq.max(10.0);
+    let sample_rate = sample_rate.max(1.0);
+    let omega = TWO_PI * (frequency / sample_rate);
+    let cos = omega.cos();
+    let sin = omega.sin();
+    let a = 10.0_f32.powf(gain_db / 40.0);
+    let alpha = shelf_alpha(a, slope, sin);
+    let sqrt_a = a.sqrt();
+    let two_sqrt_a_alpha = 2.0 * sqrt_a * alpha;
+
+    let b0 = a * ((a + 1.0) + (a - 1.0) * cos + two_sqrt_a_alpha);
+    let b1 = -2.0 * a * ((a - 1.0) + (a + 1.0) * cos);
+    let b2 = a * ((a + 1.0) + (a - 1.0) * cos - two_sqrt_a_alpha);
+    let a0 = (a + 1.0) - (a - 1.0) * cos + two_sqrt_a_alpha;
+    let a1 = 2.0 * ((a - 1.0) - (a + 1.0) * cos);
+    let a2 = (a + 1.0) - (a - 1.0) * cos - two_sqrt_a_alpha;
+
+    let inv_a0 = 1.0 / a0.max(1e-6);
+    BiquadCoeffs {
+        b0: b0 * inv_a0,
+        b1: b1 * inv_a0,
+        b2: b2 * inv_a0,
+        a1: a1 * inv_a0,
+        a2: a2 * inv_a0,
+    }
 }
 
 pub struct ParametricEqFactory;
