@@ -31,7 +31,7 @@ impl Ev {
 }
 
 pub struct EventLane {
-    buf: Vec<Ev>,
+    buf: UnsafeCell<Vec<Ev>>,
     capacity: usize,
     head: AtomicUsize,
     tail: AtomicUsize,
@@ -47,7 +47,7 @@ impl EventLane {
         let mut scratch = Vec::with_capacity(capacity);
         scratch.clear();
         Self {
-            buf: vec![Ev::default(); capacity],
+            buf: UnsafeCell::new(vec![Ev::default(); capacity]),
             capacity,
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
@@ -71,7 +71,8 @@ impl EventLane {
             return Err(ev);
         }
         unsafe {
-            *self.buf.get_unchecked_mut(head) = ev;
+            let buf = &mut *self.buf.get();
+            *buf.get_unchecked_mut(head) = ev;
         }
         self.head.store(next, Ordering::Release);
         Ok(())
@@ -99,7 +100,10 @@ pub fn slice_for_block<'a>(lane: &'a EventLane, start: u64, frames: u32) -> Even
     scratch.clear();
 
     while tail != head {
-        let ev = unsafe { lane.buf.get_unchecked(tail).clone() };
+        let ev = unsafe {
+            let buf = &*lane.buf.get();
+            buf.get_unchecked(tail).clone()
+        };
         let sample = ev.sample_u64();
         if sample < start {
             new_tail = lane.advance(tail);
