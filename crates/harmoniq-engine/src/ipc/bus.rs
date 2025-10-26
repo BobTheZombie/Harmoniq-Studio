@@ -1,3 +1,4 @@
+use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -22,7 +23,6 @@ pub struct MetricsSnapshot {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
 pub struct EngineEventWriter {
     transport_state: Arc<AtomicU32>,
     position: Arc<AtomicU64>,
@@ -34,6 +34,12 @@ pub struct EngineEventWriter {
 
 unsafe impl Send for EngineEventWriter {}
 unsafe impl Sync for EngineEventWriter {}
+
+impl fmt::Debug for EngineEventWriter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EngineEventWriter").finish_non_exhaustive()
+    }
+}
 
 #[allow(dead_code)]
 impl EngineEventWriter {
@@ -55,7 +61,6 @@ impl EngineEventWriter {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
 pub struct EngineEventReader {
     transport_state: Arc<AtomicU32>,
     position: Arc<AtomicU64>,
@@ -68,6 +73,12 @@ pub struct EngineEventReader {
 
 unsafe impl Send for EngineEventReader {}
 unsafe impl Sync for EngineEventReader {}
+
+impl fmt::Debug for EngineEventReader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EngineEventReader").finish_non_exhaustive()
+    }
+}
 
 #[allow(dead_code)]
 impl EngineEventReader {
