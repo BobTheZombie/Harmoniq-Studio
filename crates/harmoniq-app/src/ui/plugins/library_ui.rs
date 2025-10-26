@@ -232,7 +232,7 @@ impl PluginLibraryUi {
         ui.horizontal_wrapped(|ui| {
             ui.label("Formats:");
             for format in ALL_FORMATS {
-                let mut enabled = self.filter.selected_formats.contains(format);
+                let enabled = self.filter.selected_formats.contains(format);
                 let label = format_label(*format);
                 let button = egui::SelectableLabel::new(enabled, label);
                 if ui.add(button).clicked() {
@@ -248,7 +248,7 @@ impl PluginLibraryUi {
         ui.horizontal_wrapped(|ui| {
             ui.label("Categories:");
             for category in CATEGORY_ORDER {
-                let mut enabled = self.filter.selected_categories.contains(category);
+                let enabled = self.filter.selected_categories.contains(category);
                 let button = egui::SelectableLabel::new(enabled, category.label());
                 if ui.add(button).clicked() {
                     if enabled {
@@ -272,7 +272,7 @@ impl PluginLibraryUi {
                         .map(|selected| *selected == entry.reference)
                         .unwrap_or(false);
                     let label = RichText::new(&entry.name).strong();
-                    let mut button = Button::new(label).fill(if is_selected {
+                    let button = Button::new(label).fill(if is_selected {
                         Color32::from_rgb(50, 70, 90)
                     } else {
                         Color32::TRANSPARENT
