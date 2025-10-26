@@ -29,6 +29,7 @@ symphonia = { version = "0.5", features = ["wav", "flac", "aiff", "pcm"] }
 hound = "3.5"
 flacenc = "0.5"
 clap-host = { path = "../clap-host" }
+num_cpus = "1.17"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

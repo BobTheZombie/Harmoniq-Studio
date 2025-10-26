@@ -784,6 +784,9 @@ pub struct Engine {
     pub event_lane: crate::sched::events::EventLane,
     pub sample_pos: u64,
     pub transport: crate::transport::Transport,
+    pub pool: crate::sched::executor::RtPool,
+    pub parallel_cfg: crate::config::RtParallelCfg,
+    max_nodes: usize,
     event_capacity: usize,
 }
 
@@ -798,18 +801,29 @@ impl Engine {
         graph
             .nodes
             .push(Box::new(crate::sched::Gain::new(gain_id, 0)));
-        graph.order = vec![pass_id, gain_id];
+        graph.topo = vec![pass_id, gain_id];
+        crate::sched::graph::build(&mut graph);
         for node in graph.nodes.iter_mut() {
             node.prepare(sr, max_block);
         }
 
         let capacity = event_capacity.max(1);
+        let parallel_cfg = crate::config::RtParallelCfg::default();
+        let (_, worker_cores) = crate::rt::cpu::pick_cores(&parallel_cfg);
+        let pool = crate::sched::executor::RtPool::new(
+            graph.nodes.len().max(64),
+            parallel_cfg.workers as usize,
+            &worker_cores,
+        );
 
         Self {
             graph,
             event_lane: crate::sched::events::EventLane::with_capacity(capacity),
             sample_pos: 0,
             transport: crate::transport::Transport::with_sample_rate(sr),
+            pool,
+            parallel_cfg,
+            max_nodes: graph.nodes.len(),
             event_capacity: capacity,
         }
     }
@@ -819,11 +833,32 @@ impl Engine {
         for node in self.graph.nodes.iter_mut() {
             node.prepare(sr, max_block);
         }
+        self.rebuild();
     }
 
     pub fn reset(&mut self) {
         self.sample_pos = 0;
         self.transport.sample_pos.store(0, Ordering::Relaxed);
         self.event_lane = crate::sched::events::EventLane::with_capacity(self.event_capacity);
+    }
+
+    pub fn rebuild(&mut self) {
+        crate::sched::graph::build(&mut self.graph);
+        if self.graph.nodes.len() > self.max_nodes
+            || self.pool.capacity() < self.graph.nodes.len()
+            || self.pool_capacity_mismatch()
+        {
+            let (_, worker_cores) = crate::rt::cpu::pick_cores(&self.parallel_cfg);
+            self.pool = crate::sched::executor::RtPool::new(
+                self.graph.nodes.len().max(64),
+                self.parallel_cfg.workers as usize,
+                &worker_cores,
+            );
+        }
+        self.max_nodes = self.graph.nodes.len();
+    }
+
+    fn pool_capacity_mismatch(&self) -> bool {
+        self.pool.worker_count() != self.parallel_cfg.workers as usize
     }
 }

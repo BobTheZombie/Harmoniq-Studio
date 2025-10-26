@@ -39,3 +39,26 @@ pub fn make<'a>(in_ptr: *const f32, out_ptr: *mut f32, frames: u32) -> AudioBuff
         nframes: frames,
     }
 }
+
+pub struct BlockBuffers {
+    audio: AudioBuffers<'static>,
+}
+
+impl BlockBuffers {
+    pub unsafe fn from_raw(in_ptr: *const f32, out_ptr: *mut f32, frames: u32) -> Self {
+        let audio = make(in_ptr, out_ptr, frames);
+        let audio_static: AudioBuffers<'static> = core::mem::transmute(audio);
+        Self {
+            audio: audio_static,
+        }
+    }
+
+    #[inline]
+    pub fn as_audio(&mut self) -> &mut AudioBuffers<'static> {
+        &mut self.audio
+    }
+}
+
+pub unsafe fn make_block(in_ptr: *const f32, out_ptr: *mut f32, frames: u32) -> BlockBuffers {
+    BlockBuffers::from_raw(in_ptr, out_ptr, frames)
+}

@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod cpu;
 pub mod metrics;
 pub mod thread;
 
@@ -55,36 +56,9 @@ pub fn mlock_process() -> std::io::Result<()> {
     Ok(())
 }
 
-/// Attempts to pin the current thread to the provided logical core. When
-/// affinity management is not available, the call succeeds without making
-/// changes.
-#[cfg(all(target_os = "linux", feature = "core_affinity"))]
+#[allow(dead_code)]
 pub fn pin_current_thread(core: usize) -> std::io::Result<()> {
-    use std::io::{Error, ErrorKind};
-
-    let cores = core_affinity::get_core_ids()
-        .ok_or_else(|| Error::new(ErrorKind::Other, "failed to query CPU topology"))?;
-    if cores.is_empty() {
-        return Err(Error::new(ErrorKind::NotFound, "no CPU cores reported"));
-    }
-
-    let target = cores
-        .get(core)
-        .cloned()
-        .unwrap_or_else(|| cores[core % cores.len()].clone());
-
-    if core_affinity::set_for_current(target) {
-        Ok(())
-    } else {
-        Err(Error::new(
-            ErrorKind::Other,
-            "failed to apply CPU affinity for realtime thread",
-        ))
-    }
-}
-
-#[cfg(not(all(target_os = "linux", feature = "core_affinity")))]
-pub fn pin_current_thread(_core: usize) -> std::io::Result<()> {
+    cpu::pin_current_thread_to(core);
     Ok(())
 }
 

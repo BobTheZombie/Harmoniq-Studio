@@ -20,6 +20,7 @@ impl PassThrough {
                 name,
                 latency: 0,
                 tail: 0,
+                parallel_safe: false,
             },
         }
     }
@@ -73,6 +74,7 @@ impl Gain {
                 name: "gain",
                 latency: 0,
                 tail: 0,
+                parallel_safe: false,
             },
             current: 1.0,
             param_id,
