@@ -28,14 +28,20 @@ pub struct Runtime {
 impl Runtime {
     #[allow(dead_code)]
     pub fn new(buffer_config: BufferConfig, audio: Option<RealtimeAudio>) -> Self {
-        let ui_bus = UiSvcBus::new(2048);
-        let engine_bus = EngineBus::new(2048);
+        let mut ui_bus = UiSvcBus::new(2048);
+        let mut engine_bus = EngineBus::new(2048);
+        let (mut ui_svc_rx, mut ui_svc_tx) = ui_bus
+            .take_service_endpoints()
+            .expect("ui service endpoints consumed");
+        let (mut engine_svc_rx, mut engine_evt_tx) = engine_bus
+            .take_service_endpoints()
+            .expect("engine service endpoints consumed");
         let running = Arc::new(AtomicBool::new(true));
         let service = ServiceThread::spawn(
-            ui_bus.svc_rx,
-            ui_bus.svc_tx,
-            engine_bus.svc_rx,
-            engine_bus.engine_tx,
+            ui_svc_rx,
+            ui_svc_tx,
+            engine_svc_rx,
+            engine_evt_tx,
             running.clone(),
             buffer_config,
             audio,
@@ -263,9 +269,9 @@ impl ServiceState {
             let _ = engine_tx.try_send(EngineEvent {
                 kind: bus::EngineEventKind::Metrics,
                 payload: bus::EngineEventPayload::BlockTiming(bus::BlockTiming {
-                    period: Duration::from_micros(
-                        (self.buffer_config.block_size as f64 / self.buffer_config.sample_rate)
-                            as u64,
+                    period: Duration::from_secs_f64(
+                        self.buffer_config.block_size as f64
+                            / f64::from(self.buffer_config.sample_rate),
                     ),
                     elapsed: Duration::from_millis(0),
                     xruns: 0,

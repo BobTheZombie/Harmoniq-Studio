@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -132,15 +133,25 @@ pub enum TransportToggle {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
 pub struct BusSender<T> {
     inner: HeapProducer<T>,
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
 pub struct BusReceiver<T> {
     inner: HeapConsumer<T>,
+}
+
+impl<T> fmt::Debug for BusSender<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BusSender").finish_non_exhaustive()
+    }
+}
+
+impl<T> fmt::Debug for BusReceiver<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BusReceiver").finish_non_exhaustive()
+    }
 }
 
 #[allow(dead_code)]
@@ -198,9 +209,9 @@ impl<'a, T> Iterator for Drain<'a, T> {
 #[allow(dead_code)]
 pub struct UiSvcBus {
     pub ui_tx: BusSender<UiCommand>,
-    pub svc_rx: BusReceiver<UiCommand>,
-    pub svc_tx: BusSender<SvcEvent>,
     pub ui_rx: BusReceiver<SvcEvent>,
+    svc_rx: Option<BusReceiver<UiCommand>>,
+    svc_tx: Option<BusSender<SvcEvent>>,
 }
 
 impl UiSvcBus {
@@ -210,9 +221,19 @@ impl UiSvcBus {
         let (svc_tx, ui_rx) = channel(capacity);
         Self {
             ui_tx,
-            svc_rx,
-            svc_tx,
             ui_rx,
+            svc_rx: Some(svc_rx),
+            svc_tx: Some(svc_tx),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn take_service_endpoints(
+        &mut self,
+    ) -> Option<(BusReceiver<UiCommand>, BusSender<SvcEvent>)> {
+        match (self.svc_rx.take(), self.svc_tx.take()) {
+            (Some(rx), Some(tx)) => Some((rx, tx)),
+            _ => None,
         }
     }
 }
@@ -220,9 +241,9 @@ impl UiSvcBus {
 #[allow(dead_code)]
 pub struct EngineBus {
     pub ui_tx: BusSender<UiEngineCommand>,
-    pub svc_rx: BusReceiver<UiEngineCommand>,
-    pub engine_tx: BusSender<EngineEvent>,
     pub ui_rx: BusReceiver<EngineEvent>,
+    svc_rx: Option<BusReceiver<UiEngineCommand>>,
+    engine_tx: Option<BusSender<EngineEvent>>,
 }
 
 impl EngineBus {
@@ -232,9 +253,19 @@ impl EngineBus {
         let (engine_tx, ui_rx) = channel(capacity);
         Self {
             ui_tx,
-            svc_rx,
-            engine_tx,
             ui_rx,
+            svc_rx: Some(svc_rx),
+            engine_tx: Some(engine_tx),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn take_service_endpoints(
+        &mut self,
+    ) -> Option<(BusReceiver<UiEngineCommand>, BusSender<EngineEvent>)> {
+        match (self.svc_rx.take(), self.engine_tx.take()) {
+            (Some(rx), Some(tx)) => Some((rx, tx)),
+            _ => None,
         }
     }
 }
