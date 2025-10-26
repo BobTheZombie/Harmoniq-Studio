@@ -39,6 +39,7 @@ winit = { version = "0.29", default-features = false, features = ["rwh_06", "way
 
 [features]
 default = []
+glow = ["eframe/glow"]
 openasio = ["harmoniq-engine/openasio", "dep:openasio"]
 ultra = ["harmoniq-engine/ultra", "openasio"]
 x11-backend = ["eframe/x11", "winit/x11"]

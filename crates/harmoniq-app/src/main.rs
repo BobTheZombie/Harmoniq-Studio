@@ -2257,6 +2257,13 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
             }
         }
     }
+
+    fn on_exit_common(&mut self) {
+        if let Err(err) = self.floating.save(&self.floating_config_path) {
+            warn!("failed to save floating window layout on exit: {err:?}");
+        }
+        self.layout.flush();
+    }
 }
 
 impl App for HarmoniqStudioApp {
@@ -2500,12 +2507,5 @@ impl App for HarmoniqStudioApp {
     #[cfg(not(feature = "glow"))]
     fn on_exit(&mut self) {
         self.on_exit_common();
-    }
-
-    fn on_exit_common(&mut self) {
-        if let Err(err) = self.floating.save(&self.floating_config_path) {
-            warn!("failed to save floating window layout on exit: {err:?}");
-        }
-        self.layout.flush();
     }
 }
