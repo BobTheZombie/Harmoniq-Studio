@@ -1848,6 +1848,13 @@ impl HarmoniqStudioApp {
             }
         }
     }
+
+    fn on_exit_common(&mut self) {
+        if let Err(err) = self.floating.save(&self.floating_config_path) {
+            warn!("failed to save floating window layout on exit: {err:?}");
+        }
+        self.layout.flush();
+    }
 }
 
 fn map_virtual_key(key: egui::Key) -> Option<KeyCode> {
@@ -2258,12 +2265,6 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
         }
     }
 
-    fn on_exit_common(&mut self) {
-        if let Err(err) = self.floating.save(&self.floating_config_path) {
-            warn!("failed to save floating window layout on exit: {err:?}");
-        }
-        self.layout.flush();
-    }
 }
 
 impl App for HarmoniqStudioApp {
