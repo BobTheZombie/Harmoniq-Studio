@@ -1542,8 +1542,11 @@ impl GrandPianoClap {
     }
 
     fn allocate_voice(&mut self) -> &mut GrandPianoClapVoice {
-        if let Some(voice) = self.voices.iter_mut().find(|voice| !voice.active) {
-            return voice;
+        if let Some(index) = self.voices.iter().position(|voice| !voice.active) {
+            return self
+                .voices
+                .get_mut(index)
+                .expect("at least one voice must be available");
         }
 
         let mut selected_index = 0usize;
