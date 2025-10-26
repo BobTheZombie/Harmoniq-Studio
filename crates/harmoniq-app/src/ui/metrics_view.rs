@@ -47,7 +47,7 @@ impl MetricsHud {
     }
 
     pub fn show(&self, ctx: &egui::Context, palette: &HarmoniqPalette) {
-        egui::Area::new("metrics_hud")
+        egui::Area::new("metrics_hud".into())
             .anchor(Align2::RIGHT_TOP, [-16.0, 16.0])
             .show(ctx, |ui| {
                 Frame::none()
@@ -70,11 +70,11 @@ impl MetricsHud {
                                     "Max block: {} µs",
                                     self.max_block_ns / 1_000
                                 ))
-                                .color(palette.text_secondary),
+                                .color(palette.text_muted),
                             );
                             ui.label(
                                 RichText::new(format!("XRuns: {}", self.xruns))
-                                    .color(palette.text_secondary),
+                                    .color(palette.text_muted),
                             );
                         });
                     });
