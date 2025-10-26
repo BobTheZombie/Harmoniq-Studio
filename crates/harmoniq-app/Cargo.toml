@@ -17,7 +17,7 @@ eframe = { version = "0.27", default-features = false, features = ["wgpu", "acce
 egui = { version = "0.27", features = ["serde"] }
 egui_extras = { version = "0.27", features = ["image", "svg"] }
 egui_dock = { version = "0.12", features = ["serde"] }
-indexmap = "2"
+indexmap = { version = "2", features = ["serde"] }
 parking_lot.workspace = true
 crossbeam-channel = "0.5"
 crossbeam-queue.workspace = true

@@ -2462,14 +2462,16 @@ impl App for HarmoniqStudioApp {
                             self.render_floating_content(ui, id, &window.kind);
                         });
                 });
-            if let Some(area_state) = ctx.memory(|mem| mem.areas.get(&area_id).cloned()) {
+            if let Some(area_state) = ctx.memory(|mem| mem.areas().get(&area_id).cloned()) {
                 self.floating.update_bounds(id, area_state.rect);
             }
             if window.open != open_flag {
                 self.floating.set_open(id, open_flag);
             }
             let window_focus_id = egui::Id::new(("fw", id.0));
-            if ctx.memory(|mem| mem.focus().is_some_and(|focus| focus == window_focus_id)) {
+            if ctx
+                .memory(|mem| mem.focused().is_some_and(|focus| focus == window_focus_id))
+            {
                 self.floating.bring_to_front(id);
             }
         }
