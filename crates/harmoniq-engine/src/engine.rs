@@ -103,8 +103,8 @@ impl HarmoniqEngine {
         let block_period_ns = Self::block_period_from_config(&config);
         let transport_metrics = Arc::new(TransportMetrics::default());
         transport_metrics
-            .sample_rate
-            .store(config.sample_rate.round() as u64, Ordering::Relaxed);
+            .sr
+            .store(config.sample_rate.round() as u32, Ordering::Relaxed);
 
         let mixer_ui = MixerUiState::demo();
         let mut engine = Self {
@@ -229,8 +229,8 @@ impl HarmoniqEngine {
         self.block_period_ns = Self::block_period_from_config(&self.config);
         self.metrics.reset();
         self.transport_metrics
-            .sample_rate
-            .store(self.config.sample_rate.round() as u64, Ordering::Relaxed);
+            .sr
+            .store(self.config.sample_rate.round() as u32, Ordering::Relaxed);
 
         self.scratch_buffers.clear();
 
@@ -776,5 +776,54 @@ impl HarmoniqEngine {
             .read()
             .get(&plugin_id)
             .and_then(|lane| lane.parameter_spec(parameter))
+    }
+}
+
+pub struct Engine {
+    pub graph: crate::sched::graph::Graph,
+    pub event_lane: crate::sched::events::EventLane,
+    pub sample_pos: u64,
+    pub transport: crate::transport::Transport,
+    event_capacity: usize,
+}
+
+impl Engine {
+    pub fn new(sr: u32, max_block: u32, event_capacity: usize) -> Self {
+        let mut graph = crate::sched::graph::Graph::new();
+        let pass_id = 0u32;
+        let gain_id = 1u32;
+        graph
+            .nodes
+            .push(Box::new(crate::sched::PassThrough::new(pass_id, "input")));
+        graph
+            .nodes
+            .push(Box::new(crate::sched::Gain::new(gain_id, 0)));
+        graph.order = vec![pass_id, gain_id];
+        for node in graph.nodes.iter_mut() {
+            node.prepare(sr, max_block);
+        }
+
+        let capacity = event_capacity.max(1);
+
+        Self {
+            graph,
+            event_lane: crate::sched::events::EventLane::with_capacity(capacity),
+            sample_pos: 0,
+            transport: crate::transport::Transport::with_sample_rate(sr),
+            event_capacity: capacity,
+        }
+    }
+
+    pub fn configure(&mut self, sr: u32, max_block: u32) {
+        self.transport.set_sample_rate(sr);
+        for node in self.graph.nodes.iter_mut() {
+            node.prepare(sr, max_block);
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.sample_pos = 0;
+        self.transport.sample_pos.store(0, Ordering::Relaxed);
+        self.event_lane = crate::sched::events::EventLane::with_capacity(self.event_capacity);
     }
 }

@@ -25,6 +25,7 @@ pub struct Engine {
     tone_phase: f32,
     tone_freq: f32,
     tone_inc: f32,
+    pub sched_engine: crate::engine::Engine,
 }
 
 impl Engine {
@@ -43,6 +44,7 @@ impl Engine {
             tone_phase: 0.0,
             tone_freq: 440.0,
             tone_inc: 0.0,
+            sched_engine: crate::engine::Engine::new(48_000, 128, 1024),
         }
     }
 
@@ -66,6 +68,8 @@ impl Engine {
             0
         };
         self.update_tone_increment();
+        self.sched_engine.configure(sr, frames.max(1));
+        self.sched_engine.reset();
         unsafe {
             thread::enter_hard_rt();
         }
@@ -157,11 +161,14 @@ impl Engine {
         let engine = unsafe { &mut *(user as *mut Engine) };
         if let Some(cb) = engine.user_cb {
             cb(engine.user_ctx, in_ptr, out_ptr, frames);
-        } else if !out_ptr.is_null() && engine.outputs > 0 {
-            let len = engine.outputs as usize * frames as usize;
-            let buffer = unsafe { core::slice::from_raw_parts_mut(out_ptr, len) };
-            for sample in buffer.iter_mut() {
-                *sample = 0.0;
+        } else {
+            unsafe {
+                crate::sched::executor::process_block(
+                    &mut engine.sched_engine as *mut crate::engine::Engine,
+                    in_ptr,
+                    out_ptr,
+                    frames,
+                );
             }
         }
 

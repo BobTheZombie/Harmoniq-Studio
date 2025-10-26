@@ -433,8 +433,8 @@ impl RealtimeAudio {
             )
         };
         transport_handle
-            .sample_rate
-            .store(sample_rate.max(1) as u64, AtomicOrdering::Relaxed);
+            .sr
+            .store(sample_rate.max(1) as u32, AtomicOrdering::Relaxed);
         transport_handle
             .sample_pos
             .store(0, AtomicOrdering::Relaxed);

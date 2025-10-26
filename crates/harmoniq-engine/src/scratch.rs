@@ -5,6 +5,8 @@ use std::cell::Cell;
 
 #[cfg(any(test, deny_alloc_in_rt))]
 use std::alloc::{GlobalAlloc, Layout, System};
+#[cfg(any(test, deny_alloc_in_rt))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Scratch space reused across audio processing blocks. This allows temporary
 /// buffers to be prepared ahead of time and reused without per-block
@@ -93,10 +95,24 @@ fn on_alloc() {
 pub struct GuardedAllocator;
 
 #[cfg(any(test, deny_alloc_in_rt))]
+static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(any(test, deny_alloc_in_rt))]
+pub fn allocation_count() -> usize {
+    ALLOCATIONS.load(Ordering::Relaxed)
+}
+
+#[cfg(any(test, deny_alloc_in_rt))]
+pub fn reset_allocation_count() {
+    ALLOCATIONS.store(0, Ordering::Relaxed);
+}
+
+#[cfg(any(test, deny_alloc_in_rt))]
 unsafe impl GlobalAlloc for GuardedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         #[cfg(deny_alloc_in_rt)]
         on_alloc();
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         System.alloc(layout)
     }
 
@@ -107,12 +123,14 @@ unsafe impl GlobalAlloc for GuardedAllocator {
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         #[cfg(deny_alloc_in_rt)]
         on_alloc();
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         System.realloc(ptr, layout, new_size)
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         #[cfg(deny_alloc_in_rt)]
         on_alloc();
+        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
         System.alloc_zeroed(layout)
     }
 }
