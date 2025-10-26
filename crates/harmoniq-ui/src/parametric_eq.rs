@@ -69,7 +69,7 @@ struct BiquadCoeffs {
 
 pub fn show_parametric_eq_ui(
     ui: &mut egui::Ui,
-    mut params: ParametricEqParams<'_>,
+    params: ParametricEqParams<'_>,
     palette: &HarmoniqPalette,
     presets: &[ParametricEqPreset],
 ) -> egui::Response {
@@ -289,7 +289,10 @@ fn draw_response_curve(
         points.push(egui::pos2(x, y));
     }
 
-    painter.polyline(points, palette.accent_alt, 2.0);
+    painter.add(egui::Shape::line(
+        points,
+        egui::Stroke::new(2.0, palette.accent_alt),
+    ));
 
     let band_colors = [
         palette.success,
@@ -334,7 +337,7 @@ fn draw_grid(painter: &egui::Painter, rect: egui::Rect, palette: &HarmoniqPalett
         );
     }
 
-    let freqs = [
+    let freqs: [f32; 10] = [
         20.0, 50.0, 100.0, 200.0, 500.0, 1_000.0, 2_000.0, 5_000.0, 10_000.0, 20_000.0,
     ];
     let log_min = RESPONSE_MIN_FREQ.log10();

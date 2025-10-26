@@ -58,7 +58,6 @@ pub fn show_grand_piano_clap_ui(
     params: GrandPianoClapParams<'_>,
     palette: &HarmoniqPalette,
 ) -> egui::Response {
-    let mut params = params;
     ui.group(|ui| {
         ui.vertical_centered(|ui| {
             ui.heading("Grand Piano Clap");

@@ -216,7 +216,7 @@ impl<'a> egui::Widget for LevelMeter<'a> {
         let (rect, response) = ui.allocate_exact_size(self.size, Sense::hover());
         let painter = ui.painter_at(rect);
         let mut mesh = egui::Mesh::default();
-        let mut push_rect = |mesh: &mut egui::Mesh, rect: egui::Rect, color: Color32| {
+        let push_rect = |mesh: &mut egui::Mesh, rect: egui::Rect, color: Color32| {
             let idx = mesh.vertices.len() as u32;
             mesh.indices
                 .extend_from_slice(&[idx, idx + 1, idx + 2, idx, idx + 2, idx + 3]);
