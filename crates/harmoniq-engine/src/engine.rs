@@ -31,6 +31,12 @@ pub enum TransportState {
     Recording,
 }
 
+impl Default for TransportState {
+    fn default() -> Self {
+        TransportState::Stopped
+    }
+}
+
 /// Real-time safe command queue handle for communicating with the engine.
 #[derive(Clone, Debug)]
 pub struct EngineCommandQueue {
