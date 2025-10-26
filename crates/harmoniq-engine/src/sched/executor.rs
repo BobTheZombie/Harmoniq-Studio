@@ -240,10 +240,10 @@ pub unsafe fn process_block(
                     engine.pool.stage(staged, idx as u32);
                     staged += 1;
                 } else {
-                    super::run_node(idx, &mut shared);
+                    run_node(idx, &mut shared);
                 }
             } else {
-                super::run_node(idx, &mut shared);
+                run_node(idx, &mut shared);
             }
         }
 

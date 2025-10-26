@@ -44,7 +44,7 @@ pub fn build(g: &mut Graph) {
     let node_count = g.nodes.len();
     if g.topo.len() != node_count {
         g.topo.clear();
-        g.topo.extend((0..node_count as u32));
+        g.topo.extend(0..node_count as u32);
     }
 
     g.parallel_safe.clear();
