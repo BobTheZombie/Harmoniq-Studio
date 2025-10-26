@@ -38,6 +38,48 @@ members = [
     "examples/clap-testgain",
     "examples/clap-testsynth",
     "xtask",
+# The `westcoast-whine-synth` example depends on system OpenGL/X11 headers.
+# Keep it in the workspace, but exclude it from the default build set so
+# `cargo build` does not require additional system packages.
+]
+default-members = [
+    "crates/harmoniq-dsp",
+    "crates/harmoniq-engine",
+    "crates/harmoniq-app",
+    "crates/harmoniq-cli",
+    "crates/harmoniq-plugins",
+    "crates/harmoniq-plugin-sdk",
+    "crates/harmoniq-plugin-host",
+    "crates/harmoniq-plugin-db",
+    "crates/harmoniq-plugin-scanner",
+    "crates/harmoniq-plugin-bridge",
+    "crates/harmoniq-plugin-analog",
+    "crates/harmoniq-plugin-fm",
+    "crates/harmoniq-plugin-wavetable",
+    "crates/harmoniq-plugin-sampler",
+    "crates/harmoniq-plugin-granular",
+    "crates/harmoniq-plugin-additive",
+    "crates/harmoniq-plugin-organ-piano",
+    "crates/harmoniq-plugin-bass",
+    "crates/harmoniq-plugin-westcoast",
+    "crates/harmoniq-plugin-sub808",
+    "crates/harmoniq-plugin-grand-piano-clap",
+    "crates/harmoniq-plugin-parametric-eq",
+    "crates/harmoniq-plugin-edison",
+    "crates/harmoniq-ui",
+    "crates/harmoniq-rack",
+    "crates/harmoniq-playlist",
+    "crates/harmoniq-host-clap",
+    "crates/harmoniq-host-vst3",
+    "benches",
+    "crates/clap-sys",
+    "crates/clap-host",
+    "crates/clap-plugin-authoring",
+    "crates/clap-scanner",
+    "crates/clap-validate",
+    "examples/clap-testgain",
+    "examples/clap-testsynth",
+    "xtask",
 ]
 resolver = "2"
 
