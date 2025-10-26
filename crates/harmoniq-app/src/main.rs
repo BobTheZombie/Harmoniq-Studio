@@ -2462,16 +2462,14 @@ impl App for HarmoniqStudioApp {
                             self.render_floating_content(ui, id, &window.kind);
                         });
                 });
-            if let Some(area_state) = ctx.memory(|mem| mem.areas().get(&area_id).cloned()) {
-                self.floating.update_bounds(id, area_state.rect);
+            if let Some(area_rect) = ctx.memory(|mem| mem.area_rect(area_id)) {
+                self.floating.update_bounds(id, area_rect);
             }
             if window.open != open_flag {
                 self.floating.set_open(id, open_flag);
             }
             let window_focus_id = egui::Id::new(("fw", id.0));
-            if ctx
-                .memory(|mem| mem.focused().is_some_and(|focus| focus == window_focus_id))
-            {
+            if ctx.memory(|mem| mem.focused().is_some_and(|focus| focus == window_focus_id)) {
                 self.floating.bring_to_front(id);
             }
         }
@@ -2494,7 +2492,17 @@ impl App for HarmoniqStudioApp {
         }
     }
 
+    #[cfg(feature = "glow")]
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.on_exit_common();
+    }
+
+    #[cfg(not(feature = "glow"))]
+    fn on_exit(&mut self) {
+        self.on_exit_common();
+    }
+
+    fn on_exit_common(&mut self) {
         if let Err(err) = self.floating.save(&self.floating_config_path) {
             warn!("failed to save floating window layout on exit: {err:?}");
         }

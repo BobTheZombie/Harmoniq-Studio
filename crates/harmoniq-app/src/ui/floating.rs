@@ -164,12 +164,7 @@ impl FloatingWindows {
     }
 
     pub fn bring_to_front(&mut self, id: FloatingWindowId) {
-        let max_z = self
-            .windows
-            .values()
-            .map(|w| w.z)
-            .max()
-            .unwrap_or(0);
+        let max_z = self.windows.values().map(|w| w.z).max().unwrap_or(0);
 
         if let Some(window) = self.windows.get_mut(&id) {
             if window.z <= max_z {
