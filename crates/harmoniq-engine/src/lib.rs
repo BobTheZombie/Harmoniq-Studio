@@ -21,6 +21,7 @@ pub mod plugin;
 pub mod project;
 pub mod render;
 pub mod rt;
+pub mod sched;
 mod scratch;
 pub mod sound_server;
 pub mod time;

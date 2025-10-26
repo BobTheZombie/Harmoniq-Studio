@@ -1294,8 +1294,8 @@ impl OfflineLoop {
             )
         };
         transport_handle
-            .sample_rate
-            .store(config.sample_rate.round() as u64, AtomicOrdering::Relaxed);
+            .sr
+            .store(config.sample_rate.round() as u32, AtomicOrdering::Relaxed);
         transport_handle
             .sample_pos
             .store(0, AtomicOrdering::Relaxed);
@@ -1762,11 +1762,7 @@ impl HarmoniqStudioApp {
     }
 
     fn update_engine_context(&mut self) {
-        let sample_rate = self
-            .transport
-            .sample_rate
-            .load(AtomicOrdering::Relaxed)
-            .max(1);
+        let sample_rate = self.transport.sr.load(AtomicOrdering::Relaxed).max(1);
         let sample_pos = self.transport.sample_pos.load(AtomicOrdering::Relaxed);
         let is_playing = self.transport.playing.load(AtomicOrdering::Relaxed);
         let seconds = sample_pos as f64 / sample_rate as f64;
