@@ -73,6 +73,7 @@ impl Engine {
         unsafe {
             thread::enter_hard_rt();
         }
+        let ctx = self as *mut _ as *mut c_void;
         self.backend.open(
             &DeviceDesc {
                 name: "default".into(),
@@ -82,7 +83,7 @@ impl Engine {
                 outputs: outs,
             },
             Self::rt_trampoline,
-            self as *mut _ as *mut c_void,
+            ctx,
         )
     }
 

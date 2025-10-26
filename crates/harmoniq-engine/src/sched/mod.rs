@@ -37,25 +37,29 @@ impl Node for PassThrough {
         let frames = bufs.nframes as usize;
         let left_in = bufs.ins[0];
         let right_in = bufs.ins[1];
-        let left_out = &mut bufs.outs[0];
-        let right_out = &mut bufs.outs[1];
-
-        if left_out.len() < frames || right_out.len() < frames {
+        if bufs.outs[0].len() < frames || bufs.outs[1].len() < frames {
             return;
         }
 
-        for sample in left_out.iter_mut().take(frames) {
-            *sample = 0.0;
+        {
+            let left_out = &mut bufs.outs[0];
+            left_out
+                .iter_mut()
+                .take(frames)
+                .for_each(|sample| *sample = 0.0);
+            for (dst, src) in left_out.iter_mut().zip(left_in.iter()).take(frames) {
+                *dst = *src;
+            }
         }
-        for sample in right_out.iter_mut().take(frames) {
-            *sample = 0.0;
-        }
-
-        for i in 0..frames.min(left_in.len()) {
-            left_out[i] = left_in[i];
-        }
-        for i in 0..frames.min(right_in.len()) {
-            right_out[i] = right_in[i];
+        {
+            let right_out = &mut bufs.outs[1];
+            right_out
+                .iter_mut()
+                .take(frames)
+                .for_each(|sample| *sample = 0.0);
+            for (dst, src) in right_out.iter_mut().zip(right_in.iter()).take(frames) {
+                *dst = *src;
+            }
         }
     }
 }
@@ -86,14 +90,20 @@ impl Gain {
             return;
         }
         let end = end.min(buffer.nframes as usize);
-        let left = &mut buffer.outs[0];
-        let right = &mut buffer.outs[1];
-        if left.len() < end || right.len() < end {
+        if buffer.outs[0].len() < end || buffer.outs[1].len() < end {
             return;
         }
-        for frame in start..end {
-            left[frame] *= gain;
-            right[frame] *= gain;
+        {
+            let left = &mut buffer.outs[0];
+            for frame in start..end {
+                left[frame] *= gain;
+            }
+        }
+        {
+            let right = &mut buffer.outs[1];
+            for frame in start..end {
+                right[frame] *= gain;
+            }
         }
     }
 }

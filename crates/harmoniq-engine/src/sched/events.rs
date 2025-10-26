@@ -71,7 +71,7 @@ impl EventLane {
             return Err(ev);
         }
         unsafe {
-            *self.buf.get_unchecked(head) = ev;
+            *self.buf.get_unchecked_mut(head) = ev;
         }
         self.head.store(next, Ordering::Release);
         Ok(())

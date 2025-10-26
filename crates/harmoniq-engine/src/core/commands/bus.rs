@@ -56,17 +56,14 @@ impl CommandBus {
         self.execute_boxed(Box::new(command))
     }
 
-    pub fn execute_boxed(
-        &mut self,
-        mut command: Box<dyn ProjectCommand>,
-    ) -> Result<(), CommandError> {
+    pub fn execute_boxed(&mut self, command: Box<dyn ProjectCommand>) -> Result<(), CommandError> {
         let should_merge = self
             .undo_stack
             .last()
             .map(|entry| command.should_merge(&*entry.command))
             .unwrap_or(false);
         if should_merge {
-            if let Some(mut entry) = self.undo_stack.pop() {
+            if let Some(entry) = self.undo_stack.pop() {
                 let outcome = entry.inverse.apply(&mut self.state)?;
                 drop(outcome.inverse);
             }
@@ -95,7 +92,7 @@ impl CommandBus {
             None => return Ok(None),
         };
         let label = entry.label;
-        let mut inverse = entry.inverse;
+        let inverse = entry.inverse;
         let outcome = inverse.apply(&mut self.state)?;
         self.redo_stack.push(HistoryEntry {
             label,
@@ -111,7 +108,7 @@ impl CommandBus {
             None => return Ok(None),
         };
         let label = entry.label;
-        let mut command = entry.command;
+        let command = entry.command;
         let outcome = command.apply(&mut self.state)?;
         if let Err(err) = self.state.ensure_invariants() {
             let revert = outcome.inverse.apply(&mut self.state)?;

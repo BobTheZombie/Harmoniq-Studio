@@ -816,6 +816,7 @@ impl Engine {
             &worker_cores,
         );
 
+        let max_nodes = graph.nodes.len();
         Self {
             graph,
             event_lane: crate::sched::events::EventLane::with_capacity(capacity),
@@ -823,7 +824,7 @@ impl Engine {
             transport: crate::transport::Transport::with_sample_rate(sr),
             pool,
             parallel_cfg,
-            max_nodes: graph.nodes.len(),
+            max_nodes,
             event_capacity: capacity,
         }
     }
