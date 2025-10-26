@@ -1,3 +1,7 @@
+pub mod backend;
+pub mod metrics;
+pub mod thread;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;

@@ -22,6 +22,7 @@ use egui_dock::{DockArea, DockState, Style as DockStyle, TabViewer};
 use egui_extras::{image::load_svg_bytes, install_image_loaders};
 use harmoniq_engine::{
     automation::{AutomationCommand, CurveShape, ParameterSpec},
+    rt::metrics::BlockStat,
     transport::Transport as EngineTransport,
     AudioBuffer, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine,
     PluginId, TransportState,
@@ -67,6 +68,7 @@ use ui::{
     inspector::InspectorPane,
     layout::LayoutState,
     menu_bar::{MenuBarSnapshot, MenuBarState},
+    metrics_view::MetricsHud,
     mixer::MixerView,
     piano_roll::PianoRollPane,
     playlist::PlaylistPane,
@@ -1255,6 +1257,23 @@ impl EngineRunner {
     fn last_runtime_error(&self) -> Option<&str> {
         self.last_runtime_error.as_deref()
     }
+
+    fn drain_metrics(&self) -> Vec<BlockStat> {
+        let collector = {
+            let engine = self.engine.lock();
+            engine.metrics_collector()
+        };
+        let frames = self.config.block_size as u32;
+        collector
+            .drain_history()
+            .into_iter()
+            .map(|entry| BlockStat {
+                ns: entry.last_block_ns,
+                frames,
+                xruns: entry.xruns as u32,
+            })
+            .collect()
+    }
 }
 
 struct OfflineLoop {
@@ -1339,6 +1358,7 @@ struct HarmoniqStudioApp {
     plugin_manager: PluginManagerPanel,
     audio_settings: AudioSettingsPanel,
     sound_test: SoundTestSample,
+    metrics_hud: MetricsHud,
     event_bus: EventBus,
     input_focus: InputFocus,
     shortcuts: ShortcutMap,
@@ -1487,6 +1507,7 @@ impl HarmoniqStudioApp {
             plugin_manager,
             audio_settings,
             sound_test,
+            metrics_hud: MetricsHud::new(),
             event_bus,
             input_focus,
             shortcuts,
@@ -2264,7 +2285,6 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
             }
         }
     }
-
 }
 
 impl App for HarmoniqStudioApp {
@@ -2288,6 +2308,11 @@ impl App for HarmoniqStudioApp {
         self.plugin_manager.tick();
 
         let palette = self.theme.palette().clone();
+        let stats = self.engine_runner.drain_metrics();
+        let config = self.engine_runner.config();
+        let sample_rate = config.sample_rate.round() as u32;
+        let frames = config.block_size as u32;
+        self.metrics_hud.pull(stats, sample_rate, frames);
 
         egui::TopBottomPanel::top("menu_bar")
             .frame(
@@ -2424,6 +2449,8 @@ impl App for HarmoniqStudioApp {
             }
             self.status_message = Some(feedback.message().to_string());
         }
+
+        self.metrics_hud.show(ctx, &palette);
 
         if let Some(message) = &self.status_message {
             egui::Area::new(Id::new("status_message"))
