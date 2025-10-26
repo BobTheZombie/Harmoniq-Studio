@@ -15,6 +15,7 @@ pub mod cpu_pinning;
 pub mod dsp;
 pub mod engine;
 pub mod graph;
+pub mod ipc;
 pub mod media;
 pub mod mixer;
 pub mod nodes;
