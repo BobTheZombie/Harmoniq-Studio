@@ -224,7 +224,9 @@ pub unsafe fn process_block(
         ev: events,
     };
 
-    for &(start, end) in shared.graph.depths.iter() {
+    let depths = shared.graph.depths.clone();
+
+    for (start, end) in depths {
         let mut staged = 0usize;
         for idx in start..end {
             let topo_idx = shared.graph.topo[idx];
