@@ -1,4 +1,4 @@
-use super::{CommandOutcome, ProjectCommand};
+use super::ProjectCommand;
 use crate::core::state::ProjectState;
 use crate::core::CommandError;
 
