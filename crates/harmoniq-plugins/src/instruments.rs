@@ -1421,6 +1421,16 @@ pub struct GrandPianoClap {
     env_release: f32,
 }
 
+struct GrandPianoClapRenderParams {
+    body_amount: f32,
+    tone_coeff: f32,
+    sparkle_coeff: f32,
+    sparkle_mix: f32,
+    piano_level: f32,
+    clap_level: f32,
+    width: f32,
+}
+
 impl Default for GrandPianoClap {
     fn default() -> Self {
         let mut plugin = Self {
@@ -1535,46 +1545,51 @@ impl GrandPianoClap {
         if let Some(voice) = self.voices.iter_mut().find(|voice| !voice.active) {
             return voice;
         }
-        let index = self
-            .voices
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| {
-                a.envelope
-                    .value
-                    .partial_cmp(&b.envelope.value)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|(index, _)| index)
-            .unwrap_or(0);
-        &mut self.voices[index]
+
+        let mut selected_index = 0usize;
+        let mut lowest_value = f32::INFINITY;
+        for (index, voice) in self.voices.iter().enumerate() {
+            let value = voice.envelope.value;
+            if value < lowest_value {
+                lowest_value = value;
+                selected_index = index;
+            }
+        }
+
+        self.voices
+            .get_mut(selected_index)
+            .expect("at least one voice must be available")
     }
 
     fn note_on(&mut self, note: u8, velocity: u8) {
         let freq = midi_note_to_freq(note);
         let velocity_gain = (velocity as f32 / 127.0).powf(1.2);
+        let sample_rate = self.sample_rate.max(1.0);
+        let env_attack = self.env_attack;
+        let env_decay = self.env_decay;
+        let env_sustain = self.env_sustain;
+        let env_release = self.env_release;
+        let clap_tightness = self.clap_tightness.clamp(0.5, 1.5);
+        let clap_delay = (self.clap_delay * sample_rate).max(0.0);
+
         let voice = self.allocate_voice();
         voice.reset();
         voice.note = note;
         voice.velocity = velocity_gain;
         voice.pan = (((note % 12) as f32 / 11.0) * 2.0 - 1.0).clamp(-1.0, 1.0);
-        voice.envelope.set_sample_rate(self.sample_rate);
-        voice.envelope.set_params(
-            self.env_attack,
-            self.env_decay,
-            self.env_sustain,
-            self.env_release,
-        );
+        voice.envelope.set_sample_rate(sample_rate);
+        voice
+            .envelope
+            .set_params(env_attack, env_decay, env_sustain, env_release);
         voice.envelope.trigger();
-        voice.clap_env.set_sample_rate(self.sample_rate);
+        voice.clap_env.set_sample_rate(sample_rate);
         voice.clap_env.set_params(0.001, 0.18, 0.0, 0.12);
-        voice.body_increment = TAU * freq / self.sample_rate.max(1.0);
+        voice.body_increment = TAU * freq / sample_rate;
         let piano_ratio = freq / GRAND_PIANO_BASE_FREQ;
-        let sample_ratio = GRAND_PIANO_SAMPLE_RATE as f32 / self.sample_rate.max(1.0);
+        let sample_ratio = GRAND_PIANO_SAMPLE_RATE as f32 / sample_rate;
         voice.piano_step = (piano_ratio * sample_ratio).max(0.01);
-        voice.clap_step = (HAND_CLAP_SAMPLE_RATE as f32 / self.sample_rate.max(1.0))
-            * self.clap_tightness.clamp(0.5, 1.5);
-        voice.clap_delay = (self.clap_delay * self.sample_rate).max(0.0);
+        voice.clap_step = (HAND_CLAP_SAMPLE_RATE as f32 / sample_rate) * clap_tightness;
+        voice.clap_delay = clap_delay;
         if voice.clap_delay <= 1.0 {
             voice.clap_triggered = true;
             voice.clap_env.trigger();
@@ -1589,7 +1604,10 @@ impl GrandPianoClap {
         }
     }
 
-    fn render_voice(&mut self, voice: &mut GrandPianoClapVoice) -> (f32, f32) {
+    fn render_voice(
+        voice: &mut GrandPianoClapVoice,
+        params: &GrandPianoClapRenderParams,
+    ) -> (f32, f32) {
         if !voice.active {
             return (0.0, 0.0);
         }
@@ -1607,18 +1625,18 @@ impl GrandPianoClap {
         if voice.piano_pos >= GRAND_PIANO_SAMPLES.len() as f32 {
             voice.piano_pos = GRAND_PIANO_SAMPLES.len() as f32 - 1.0;
         }
-        if self.body_amount > 0.0 {
+        if params.body_amount > 0.0 {
             voice.body_phase += voice.body_increment;
             if voice.body_phase > TAU {
                 voice.body_phase -= TAU;
             }
-            piano_sample += voice.body_phase.sin() * self.body_amount;
+            piano_sample += voice.body_phase.sin() * params.body_amount;
         }
-        voice.filter_state += self.tone_coeff * (piano_sample - voice.filter_state);
+        voice.filter_state += params.tone_coeff * (piano_sample - voice.filter_state);
         let mut processed = voice.filter_state;
         let high = piano_sample - voice.highpass_state;
-        voice.highpass_state += self.sparkle_coeff * high;
-        processed += high * self.sparkle_mix;
+        voice.highpass_state += params.sparkle_coeff * high;
+        processed += high * params.sparkle_mix;
         let mut clap_value = 0.0;
         if voice.clap_triggered {
             let clap_sample = sample_from_table(&HAND_CLAP_SAMPLES, voice.clap_pos);
@@ -1637,10 +1655,10 @@ impl GrandPianoClap {
             return (0.0, 0.0);
         }
         let velocity_gain = voice.velocity;
-        let piano_gain = env * self.piano_level * velocity_gain;
-        let clap_gain = self.clap_level * velocity_gain;
+        let piano_gain = env * params.piano_level * velocity_gain;
+        let clap_gain = params.clap_level * velocity_gain;
         let mono = processed * piano_gain + clap_value * clap_gain;
-        let pan = (voice.pan * self.width).clamp(-1.0, 1.0);
+        let pan = (voice.pan * params.width).clamp(-1.0, 1.0);
         let angle = (pan + 1.0) * (PI / 4.0);
         let left = mono * angle.cos();
         let right = mono * angle.sin();
@@ -1669,13 +1687,22 @@ impl AudioProcessor for GrandPianoClap {
         if frames == 0 {
             return Ok(());
         }
+        let render_params = GrandPianoClapRenderParams {
+            body_amount: self.body_amount,
+            tone_coeff: self.tone_coeff,
+            sparkle_coeff: self.sparkle_coeff,
+            sparkle_mix: self.sparkle_mix,
+            piano_level: self.piano_level,
+            clap_level: self.clap_level,
+            width: self.width,
+        };
         let mut left = vec![0.0f32; frames];
         let mut right = vec![0.0f32; frames];
         for frame in 0..frames {
             let mut l = 0.0;
             let mut r = 0.0;
             for voice in &mut self.voices {
-                let (vl, vr) = self.render_voice(voice);
+                let (vl, vr) = GrandPianoClap::render_voice(voice, &render_params);
                 l += vl;
                 r += vr;
             }
