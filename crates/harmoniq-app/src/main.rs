@@ -41,6 +41,7 @@ mod config;
 mod core;
 mod midi;
 mod plugin_host;
+mod runtime;
 mod ui;
 
 use crate::core::plugin_registry::PluginRegistry;

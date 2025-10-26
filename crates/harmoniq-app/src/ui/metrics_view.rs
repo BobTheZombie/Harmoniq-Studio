@@ -6,6 +6,8 @@ pub struct MetricsHud {
     average_load: f32,
     max_block_ns: u64,
     xruns: u32,
+    rt_tick_hz: f32,
+    worker_count: u32,
 }
 
 impl MetricsHud {
@@ -14,6 +16,8 @@ impl MetricsHud {
             average_load: 0.0,
             max_block_ns: 0,
             xruns: 0,
+            rt_tick_hz: 0.0,
+            worker_count: 0,
         }
     }
 
@@ -44,6 +48,9 @@ impl MetricsHud {
         }
         self.max_block_ns = max_block_ns;
         self.xruns = xruns;
+        if frames > 0 {
+            self.rt_tick_hz = sample_rate as f32 / frames as f32;
+        }
     }
 
     pub fn show(&self, ctx: &egui::Context, palette: &HarmoniqPalette) {
@@ -76,8 +83,20 @@ impl MetricsHud {
                                 RichText::new(format!("XRuns: {}", self.xruns))
                                     .color(palette.text_muted),
                             );
+                            ui.label(
+                                RichText::new(format!("RT tick: {:.1} Hz", self.rt_tick_hz))
+                                    .color(palette.text_muted),
+                            );
+                            ui.label(
+                                RichText::new(format!("Workers: {}", self.worker_count))
+                                    .color(palette.text_muted),
+                            );
                         });
                     });
             });
+    }
+
+    pub fn set_worker_count(&mut self, count: u32) {
+        self.worker_count = count;
     }
 }
