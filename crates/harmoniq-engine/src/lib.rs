@@ -4,6 +4,7 @@
 //! deterministic, low latency audio processing suitable for professional audio
 //! workstations and live performance scenarios.
 
+pub mod api;
 pub mod automation;
 pub mod buffer;
 pub mod buffers;
@@ -30,6 +31,7 @@ pub mod transport;
 #[cfg(feature = "native")]
 pub mod realtime;
 
+pub use api::Engine as RtEngine;
 pub use automation::{
     AutomationCommand, AutomationCurve, AutomationEvent, AutomationWriteMode, CurveShape,
     ParameterSpec,
