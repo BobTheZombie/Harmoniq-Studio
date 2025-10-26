@@ -2341,6 +2341,7 @@ impl App for HarmoniqStudioApp {
                     &self.shortcuts,
                     &self.command_sender,
                     &snapshot,
+                    &self.event_bus,
                 );
             });
 

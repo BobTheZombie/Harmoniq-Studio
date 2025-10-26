@@ -8,6 +8,7 @@ use super::commands::{
     Command, CommandId, FileCommand, FloatingCommand, HelpCommand, InsertCommand, MidiCommand,
     OptionsCommand, PluginCategory, ThemeMode, TrackCommand, TransportCommand, ViewCommand,
 };
+use super::event_bus::{AppEvent, EventBus};
 use super::floating::FloatingKind;
 use super::menu_plugins::PluginsMenuState;
 use super::shortcuts::ShortcutMap;
@@ -69,6 +70,7 @@ impl MenuBarState {
         shortcuts: &ShortcutMap,
         commands: &CommandSender,
         snapshot: &MenuBarSnapshot,
+        events: &EventBus,
     ) {
         egui::menu::bar(ui, |ui| {
             ui.add_space(6.0);
@@ -88,7 +90,7 @@ impl MenuBarState {
             self.midi_menu(ui, shortcuts, commands, snapshot);
             self.transport_menu(ui, shortcuts, commands, snapshot);
             self.plugins_menu.render(ui, palette, commands);
-            self.options_menu(ui, shortcuts, commands, snapshot);
+            self.options_menu(ui, shortcuts, commands, snapshot, events);
             self.help_menu(ui, commands);
         });
     }
@@ -518,6 +520,7 @@ impl MenuBarState {
         shortcuts: &ShortcutMap,
         commands: &CommandSender,
         _snapshot: &MenuBarSnapshot,
+        events: &EventBus,
     ) {
         ui.menu_button("Options", |ui| {
             if ui
@@ -528,7 +531,7 @@ impl MenuBarState {
                 ))
                 .clicked()
             {
-                let _ = commands.try_send(Command::Options(OptionsCommand::AudioDeviceDialog));
+                events.publish(AppEvent::OpenAudioSettings);
                 ui.close_menu();
             }
             if ui
