@@ -30,10 +30,10 @@ impl Runtime {
     pub fn new(buffer_config: BufferConfig, audio: Option<RealtimeAudio>) -> Self {
         let mut ui_bus = UiSvcBus::new(2048);
         let mut engine_bus = EngineBus::new(2048);
-        let (mut ui_svc_rx, mut ui_svc_tx) = ui_bus
+        let (ui_svc_rx, ui_svc_tx) = ui_bus
             .take_service_endpoints()
             .expect("ui service endpoints consumed");
-        let (mut engine_svc_rx, mut engine_evt_tx) = engine_bus
+        let (engine_svc_rx, engine_evt_tx) = engine_bus
             .take_service_endpoints()
             .expect("engine service endpoints consumed");
         let running = Arc::new(AtomicBool::new(true));
