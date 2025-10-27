@@ -51,7 +51,7 @@ mod ui;
 
 use crate::core::plugin_registry::PluginRegistry;
 use crate::core::plugin_scanner::PluginScanner;
-use crate::rt::{self, rt_event::RtEvent};
+use crate::rt::rt_event::RtEvent;
 use audio::{
     available_backends, describe_layout, AudioBackend, AudioRuntimeOptions, RealtimeAudio,
     SoundTestSample,
