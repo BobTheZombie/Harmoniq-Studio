@@ -1,7 +1,7 @@
 use std::fmt;
 use std::io::Cursor;
 use std::sync::atomic::Ordering as AtomicOrdering;
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 #[cfg(target_os = "linux")]
 use std::env;
@@ -40,6 +40,8 @@ pub enum AudioBackend {
     Wasapi,
     CoreAudio,
 }
+
+static RT_DENORM_INIT: Once = Once::new();
 
 impl AudioBackend {
     pub fn host_id(self) -> Option<cpal::HostId> {
@@ -939,6 +941,8 @@ impl RealtimeAudio {
     ) where
         T: SizedSample + FromSample<f32>,
     {
+        RT_DENORM_INIT.call_once(|| harmoniq_engine::rt::enable_denorm_mode());
+
         if channels == 0 {
             return;
         }

@@ -11,6 +11,7 @@ harmoniq-plugin-host = { path = "../harmoniq-plugin-host" }
 harmoniq-ui = { path = "../harmoniq-ui" }
 harmoniq-plugin-db = { path = "../harmoniq-plugin-db" }
 harmoniq-plugin-scanner = { path = "../harmoniq-plugin-scanner" }
+harmoniq-rt = { path = "../harmoniq-rt" }
 anyhow.workspace = true
 clap.workspace = true
 eframe = { version = "0.27", default-features = false, features = ["wgpu", "accesskit", "default_fonts", "wayland", "x11"] }
@@ -23,6 +24,8 @@ crossbeam-channel = "0.5"
 crossbeam-queue.workspace = true
 once_cell.workspace = true
 ringbuf.workspace = true
+rtrb = "0.3"
+heapless = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 hound = "3.5"

@@ -31,6 +31,11 @@ pub fn enable_ftz_daz() {
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 pub fn enable_ftz_daz() {}
 
+#[inline]
+pub fn enable_denorm_mode() {
+    enable_ftz_daz();
+}
+
 /// Pins the current process's address space into RAM to avoid major page faults
 /// during realtime processing. On platforms where this is not supported the
 /// call becomes a no-op.
