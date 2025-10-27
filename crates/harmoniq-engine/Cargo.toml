@@ -18,11 +18,14 @@ crossbeam = "0.8"
 rayon = "1.8"
 petgraph = "0.6"
 harmoniq-dsp = { path = "../harmoniq-dsp" }
+harmoniq-rt = { path = "../harmoniq-rt" }
 arrayvec = "0.7"
 cpal = { version = "0.16", optional = true }
 openasio = { git = "https://github.com/BobTheZombie/OpenASIO-SDK", package = "openasio", optional = true }
 crossbeam-queue.workspace = true
 ringbuf.workspace = true
+rtrb = "0.3"
+heapless = "0.8"
 core_affinity = { version = "0.8", optional = true }
 arc-swap = "1.6"
 symphonia = { version = "0.5", features = ["wav", "flac", "aiff", "pcm"] }

@@ -23,6 +23,7 @@ use egui_extras::{image::load_svg_bytes, install_image_loaders};
 use harmoniq_engine::{
     automation::{AutomationCommand, CurveShape, ParameterSpec},
     rt::metrics::BlockStat,
+    rt_bridge::RtBridge,
     transport::Transport as EngineTransport,
     AudioBuffer, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine,
     PluginId, TransportState,
@@ -31,21 +32,26 @@ use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth};
 use harmoniq_ui::{HarmoniqPalette, HarmoniqTheme};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use parking_lot::Mutex;
+use rtrb::Consumer;
 use serde::{Deserialize, Serialize};
 use tracing::{error, warn};
 use tracing_subscriber::EnvFilter;
 use winit::keyboard::{KeyCode, ModifiersState};
+
+const RT_RING_CAPACITY: usize = 1024;
 
 mod audio;
 mod config;
 mod core;
 mod midi;
 mod plugin_host;
+mod rt;
 mod runtime;
 mod ui;
 
 use crate::core::plugin_registry::PluginRegistry;
 use crate::core::plugin_scanner::PluginScanner;
+use crate::rt::{self, rt_event::RtEvent};
 use audio::{
     available_backends, describe_layout, AudioBackend, AudioRuntimeOptions, RealtimeAudio,
     SoundTestSample,
@@ -1372,6 +1378,7 @@ struct HarmoniqStudioApp {
     midi_channel: u8,
     engine_runner: EngineRunner,
     command_queue: harmoniq_engine::EngineCommandQueue,
+    rt_cons: Consumer<RtEvent>,
     qwerty: Option<QwertyKeyboardInput>,
     qwerty_config: QwertyConfig,
     transport: Arc<EngineTransport>,
@@ -1393,6 +1400,9 @@ struct HarmoniqStudioApp {
     fullscreen: bool,
     fullscreen_dirty: bool,
     last_screen_rect: egui::Rect,
+    engine_load_pct: u16,
+    last_xruns: u32,
+    last_block_warn: Option<u32>,
 }
 
 impl HarmoniqStudioApp {
@@ -1413,6 +1423,9 @@ impl HarmoniqStudioApp {
         let _ = configure_demo_graph(&mut engine, &graph_config)?;
         engine.set_transport(TransportState::Stopped);
         engine.execute_command(EngineCommand::SetTempo(initial_tempo))?;
+
+        let (rt_prod, rt_consumer) = rt::init_rt_ring(RT_RING_CAPACITY);
+        engine.install_rt_bridge(RtBridge::new(rt_prod));
 
         let mixer_api = engine.mixer_ui_api();
 
@@ -1522,6 +1535,7 @@ impl HarmoniqStudioApp {
             midi_channel: 1,
             engine_runner,
             command_queue,
+            rt_cons: rt_consumer,
             qwerty,
             qwerty_config,
             transport,
@@ -1546,6 +1560,9 @@ impl HarmoniqStudioApp {
                 egui::Pos2::ZERO,
                 egui::Vec2::new(1280.0, 720.0),
             ),
+            engine_load_pct: 0,
+            last_xruns: 0,
+            last_block_warn: None,
         })
     }
 
@@ -1681,6 +1698,40 @@ impl HarmoniqStudioApp {
                     self.audio_settings.open(&config, &runtime);
                 }
                 AppEvent::RequestRepaint => {}
+            }
+        }
+    }
+
+    fn poll_rt_events(&mut self) {
+        while let Ok(event) = self.rt_cons.pop() {
+            match event {
+                RtEvent::Xrun { count } => {
+                    if count > self.last_xruns {
+                        let prev_bucket = self.last_xruns / 50;
+                        let new_bucket = count / 50;
+                        let should_toast = self.last_xruns == 0 || new_bucket > prev_bucket;
+                        self.last_xruns = count;
+                        if should_toast {
+                            self.notices
+                                .warning(format!("Audio engine reported {} xruns", count));
+                        }
+                    }
+                }
+                RtEvent::EngineLoad { pct } => {
+                    self.engine_load_pct = pct.min(1000);
+                }
+                RtEvent::MaxBlockMicros { us } => {
+                    let previous = self.last_block_warn.unwrap_or(0);
+                    let new_max = previous.max(us);
+                    if us >= 10_000
+                        && (self.last_block_warn.is_none() || us >= previous.saturating_add(1_000))
+                    {
+                        let ms = us as f32 / 1000.0;
+                        self.notices
+                            .warning(format!("Audio block processing peaked at {ms:.1} ms"));
+                    }
+                    self.last_block_warn = Some(new_max);
+                }
             }
         }
     }
@@ -2301,6 +2352,7 @@ impl App for HarmoniqStudioApp {
             self.fullscreen_dirty = false;
         }
         self.process_events();
+        self.poll_rt_events();
         self.update_engine_context();
         self.input_focus.maybe_release_on_escape(ctx);
         self.inspector

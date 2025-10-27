@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crossbeam::queue::ArrayQueue;
 use parking_lot::{Mutex, RwLock};
@@ -14,11 +14,13 @@ use crate::{
     nodes::{GainNode as BuiltinGain, NodeNoise as BuiltinNoise, NodeOsc as BuiltinSine},
     plugin::{MidiEvent, PluginDescriptor, PluginId},
     rt::{AudioMetrics, AudioMetricsCollector},
+    rt_bridge::RtBridge,
     scratch::RtAllocGuard,
     tone::ToneShaper,
     transport::Transport as TransportMetrics,
     AudioBuffer, AudioClip, AudioProcessor, BufferConfig,
 };
+use harmoniq_rt::RtEvent;
 
 const COMMAND_QUEUE_CAPACITY: usize = 1024;
 const METRICS_HISTORY_CAPACITY: usize = 512;
@@ -99,6 +101,10 @@ pub struct HarmoniqEngine {
     block_period_ns: u64,
     automation_cursor: u64,
     mixer_ui: Arc<MixerUiState>,
+    rt_bridge: Option<RtBridge>,
+    last_reported_xruns: u64,
+    last_reported_engine_load: u16,
+    last_reported_max_block_us: u32,
 }
 
 impl HarmoniqEngine {
@@ -133,9 +139,20 @@ impl HarmoniqEngine {
             block_period_ns,
             automation_cursor: 0,
             mixer_ui,
+            rt_bridge: None,
+            last_reported_xruns: 0,
+            last_reported_engine_load: 0,
+            last_reported_max_block_us: 0,
         };
         engine.install_default_graph()?;
         Ok(engine)
+    }
+
+    pub fn install_rt_bridge(&mut self, bridge: RtBridge) {
+        self.rt_bridge = Some(bridge);
+        self.last_reported_xruns = 0;
+        self.last_reported_engine_load = 0;
+        self.last_reported_max_block_us = 0;
     }
 
     pub fn config(&self) -> &BufferConfig {
@@ -164,6 +181,9 @@ impl HarmoniqEngine {
             .store(false, Ordering::Relaxed);
         self.automation_cursor = 0;
         self.metrics.reset();
+        self.last_reported_xruns = 0;
+        self.last_reported_engine_load = 0;
+        self.last_reported_max_block_us = 0;
         self.sound_test = None;
         self.master_buffer.lock().clear();
         for buffer in &mut self.scratch_buffers {
@@ -481,7 +501,9 @@ impl HarmoniqEngine {
             Ok(result)
         })();
 
-        self.metrics.record_block(start.elapsed(), period_ns);
+        let elapsed = start.elapsed();
+        self.metrics.record_block(elapsed, period_ns);
+        self.emit_rt_metrics(elapsed, period_ns);
         if matches!(
             self.transport(),
             TransportState::Playing | TransportState::Recording
@@ -493,6 +515,36 @@ impl HarmoniqEngine {
             self.automation_cursor = self.automation_cursor.saturating_add(rendered);
         }
         result
+    }
+
+    fn emit_rt_metrics(&mut self, elapsed: Duration, period_ns: u64) {
+        let Some(bridge) = self.rt_bridge.as_mut() else {
+            return;
+        };
+
+        let snapshot = self.metrics.snapshot();
+
+        if snapshot.xruns != self.last_reported_xruns {
+            let count = snapshot.xruns.min(u64::from(u32::MAX)) as u32;
+            bridge.push(RtEvent::Xrun { count });
+            self.last_reported_xruns = snapshot.xruns;
+        }
+
+        if period_ns > 0 {
+            let block_ns = elapsed.as_nanos().min(u128::from(u64::MAX)) as u64;
+            let pct =
+                ((u128::from(block_ns) * 1000) / u128::from(period_ns.max(1))).min(1000) as u16;
+            if pct != self.last_reported_engine_load {
+                bridge.push(RtEvent::EngineLoad { pct });
+                self.last_reported_engine_load = pct;
+            }
+        }
+
+        let max_block_us = (snapshot.max_block_ns / 1_000).min(u64::from(u32::MAX)) as u32;
+        if max_block_us != 0 && max_block_us > self.last_reported_max_block_us {
+            bridge.push(RtEvent::MaxBlockMicros { us: max_block_us });
+            self.last_reported_max_block_us = max_block_us;
+        }
     }
 
     fn drain_command_queue(&mut self) -> anyhow::Result<()> {
