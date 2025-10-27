@@ -14,6 +14,7 @@ pub mod menu_bar;
 pub mod menu_plugins;
 pub mod metrics_view;
 pub mod mixer;
+pub mod notifications;
 pub mod piano_roll;
 pub mod playlist;
 pub mod plugin_manager;

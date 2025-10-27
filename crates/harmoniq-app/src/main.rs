@@ -71,6 +71,7 @@ use ui::{
     menu_bar::{MenuBarSnapshot, MenuBarState},
     metrics_view::MetricsHud,
     mixer::MixerView,
+    notifications::Notifications,
     piano_roll::PianoRollPane,
     playlist::PlaylistPane,
     plugin_manager::{
@@ -1385,6 +1386,7 @@ struct HarmoniqStudioApp {
     record_armed: bool,
     last_engine_update: Instant,
     status_message: Option<String>,
+    notices: Notifications,
     browser_hidden: bool,
     mixer_hidden: bool,
     piano_roll_hidden: bool,
@@ -1534,6 +1536,7 @@ impl HarmoniqStudioApp {
             record_armed: false,
             last_engine_update: Instant::now(),
             status_message,
+            notices: Notifications::default(),
             browser_hidden: !browser_visible,
             mixer_hidden: false,
             piano_roll_hidden: false,
@@ -2519,6 +2522,8 @@ impl App for HarmoniqStudioApp {
 
         self.layout.store_dock(&self.dock_state);
         self.layout.maybe_save();
+
+        self.notices.paint(ctx);
 
         if ctx.input(|i| i.pointer.button_released(PointerButton::Primary)) {
             ctx.set_cursor_icon(CursorIcon::Default);
