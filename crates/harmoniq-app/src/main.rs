@@ -1396,6 +1396,9 @@ struct HarmoniqStudioApp {
     transport_loop_enabled: bool,
     record_armed: bool,
     last_engine_update: Instant,
+    frame_interval: Duration,
+    meter_interval: Duration,
+    last_meter_tick: Instant,
     status_message: Option<String>,
     notices: Notifications,
     browser_hidden: bool,
@@ -1509,6 +1512,10 @@ impl HarmoniqStudioApp {
             warn!("failed to load floating window layout: {err:?}");
         }
 
+        let frame_interval = Duration::from_secs_f32(1.0 / 60.0);
+        let meter_interval = Duration::from_secs_f32(1.0 / 30.0);
+        let last_meter_tick = Instant::now();
+
         Ok(Self {
             theme,
             icons,
@@ -1557,6 +1564,9 @@ impl HarmoniqStudioApp {
             transport_loop_enabled: false,
             record_armed: false,
             last_engine_update: Instant::now(),
+            frame_interval,
+            meter_interval,
+            last_meter_tick,
             status_message,
             notices: Notifications::default(),
             browser_hidden: !browser_visible,
@@ -2353,7 +2363,18 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
 
 impl App for HarmoniqStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.request_repaint_after(Duration::from_millis(16));
+        let now = Instant::now();
+        let transport_active = matches!(
+            self.transport_state,
+            TransportState::Playing | TransportState::Recording
+        );
+        if transport_active {
+            self.last_meter_tick = now;
+            ctx.request_repaint_after(self.frame_interval);
+        } else if now.duration_since(self.last_meter_tick) >= self.meter_interval {
+            self.last_meter_tick = now;
+            ctx.request_repaint_after(self.frame_interval);
+        }
         self.last_screen_rect = ctx.input(|i| i.screen_rect);
         self.shortcuts.handle_input(ctx, &self.command_sender);
         self.process_qwerty_keyboard(ctx);
