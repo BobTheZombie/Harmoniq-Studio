@@ -844,6 +844,8 @@ pub struct Engine {
     pub transport: crate::transport::Transport,
     pub pool: crate::sched::executor::RtPool,
     pub parallel_cfg: crate::config::RtParallelCfg,
+    pub pool_disabled: bool,
+    pub parallel_nodes: usize,
     max_nodes: usize,
     event_capacity: usize,
 }
@@ -875,16 +877,20 @@ impl Engine {
         );
 
         let max_nodes = graph.nodes.len();
-        Self {
+        let mut engine = Self {
             graph,
             event_lane: crate::sched::events::EventLane::with_capacity(capacity),
             sample_pos: 0,
             transport: crate::transport::Transport::with_sample_rate(sr),
             pool,
             parallel_cfg,
+            pool_disabled: false,
+            parallel_nodes: 0,
             max_nodes,
             event_capacity: capacity,
-        }
+        };
+        engine.refresh_parallel_state();
+        engine
     }
 
     pub fn configure(&mut self, sr: u32, max_block: u32) {
@@ -915,9 +921,21 @@ impl Engine {
             );
         }
         self.max_nodes = self.graph.nodes.len();
+        self.refresh_parallel_state();
     }
 
     fn pool_capacity_mismatch(&self) -> bool {
         self.pool.worker_count() != self.parallel_cfg.workers as usize
+    }
+
+    fn refresh_parallel_state(&mut self) {
+        self.parallel_nodes = self
+            .graph
+            .parallel_safe
+            .iter()
+            .filter(|flag| **flag)
+            .count();
+        let insufficient_workers = self.parallel_cfg.workers <= 1;
+        self.pool_disabled = insufficient_workers || self.parallel_nodes < 2;
     }
 }

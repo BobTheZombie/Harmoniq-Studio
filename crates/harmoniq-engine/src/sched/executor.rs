@@ -1,14 +1,27 @@
 use core::sync::atomic::{
     AtomicBool, AtomicU32,
-    Ordering::{AcqRel, Acquire, Release},
+    Ordering::{AcqRel, Acquire, Relaxed, Release},
 };
 use std::cell::UnsafeCell;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use crate::sched::events;
 
 use super::{buffer, graph};
+
+pub mod test_metrics {
+    use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
+
+    pub static SLEEP_COUNT: AtomicU32 = AtomicU32::new(0);
+    pub static YIELD_COUNT: AtomicU32 = AtomicU32::new(0);
+
+    pub fn reset() {
+        SLEEP_COUNT.store(0, Relaxed);
+        YIELD_COUNT.store(0, Relaxed);
+    }
+}
 
 #[derive(Clone, Copy, Default)]
 struct Job {
@@ -151,11 +164,29 @@ impl Drop for RtPool {
 }
 
 fn worker_loop(pool: Arc<RtPoolInner>) {
-    while !pool.stop.load(Acquire) {
+    let mut idle_spins = 0u32;
+    loop {
+        if pool.stop.load(Acquire) {
+            break;
+        }
         if !pool.has_work.load(Acquire) {
-            thread::yield_now();
+            if idle_spins < 500 {
+                core::hint::spin_loop();
+                idle_spins = idle_spins.saturating_add(1);
+                continue;
+            }
+            if idle_spins < 2000 {
+                test_metrics::YIELD_COUNT.fetch_add(1, Relaxed);
+                thread::yield_now();
+                idle_spins = idle_spins.saturating_add(1);
+                continue;
+            }
+            thread::sleep(Duration::from_micros(200));
+            test_metrics::SLEEP_COUNT.fetch_add(1, Relaxed);
+            idle_spins = 0;
             continue;
         }
+        idle_spins = 0;
         let total = pool.job_count.load(Acquire);
         loop {
             let next = pool.next_job.fetch_add(1, AcqRel);
@@ -225,8 +256,16 @@ pub unsafe fn process_block(
     };
 
     let depths = shared.graph.depths.clone();
+    let use_pool = !engine.pool_disabled && engine.transport.playing.load(Acquire);
 
     for (start, end) in depths {
+        if !use_pool {
+            for idx in start..end {
+                run_node(idx, &mut shared);
+            }
+            continue;
+        }
+
         let mut staged = 0usize;
         for idx in start..end {
             let topo_idx = shared.graph.topo[idx];
