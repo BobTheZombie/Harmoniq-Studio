@@ -9,10 +9,12 @@ mod widgets;
 #[cfg(test)]
 mod tests;
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use eframe::egui::{Key, Ui};
 use harmoniq_engine::mixer::api::MixerUiApi;
 use harmoniq_ui::HarmoniqPalette;
-use std::sync::Arc;
 
 pub use render::MixerUiState;
 pub use theme::MixerTheme;
@@ -45,6 +47,7 @@ impl MixerView {
     }
 
     pub fn ui(&mut self, ui: &mut Ui, palette: &HarmoniqPalette) {
+        ui.ctx().request_repaint_after(Duration::from_millis(16));
         self.theme = MixerTheme::from_palette(palette);
         self.handle_shortcuts(ui);
 
