@@ -233,6 +233,7 @@ fn key_to_string(key: Key) -> String {
         Key::Minus => "-".into(),
         Key::Space => "Space".into(),
         Key::F11 => "F11".into(),
+        Key::F12 => "F12".into(),
         Key::Delete => "Del".into(),
         Key::Home => "Home".into(),
         Key::Num0 => "0".into(),
@@ -293,6 +294,7 @@ fn parse_key(token: &str) -> Option<Key> {
         "8" => Some(Key::Num8),
         "9" => Some(Key::Num9),
         "F11" => Some(Key::F11),
+        "F12" => Some(Key::F12),
         _ => None,
     }
 }
@@ -394,6 +396,7 @@ fn default_bindings() -> Vec<(CommandId, ShortcutBinding)> {
         (ViewZoomIn, ShortcutBinding::new_primary(Key::Plus)),
         (ViewZoomOut, ShortcutBinding::new_primary(Key::Minus)),
         (ViewToggleFullscreen, ShortcutBinding::new_fixed(Key::F11)),
+        (ViewTogglePerfHud, ShortcutBinding::new_fixed(Key::F12)),
         (TrackArmRecord, ShortcutBinding::new_fixed(Key::R)),
         (TrackSolo, ShortcutBinding::new_fixed(Key::S)),
         (TrackMute, ShortcutBinding::new_fixed(Key::M)),

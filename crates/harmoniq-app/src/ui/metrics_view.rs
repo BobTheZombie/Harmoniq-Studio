@@ -53,6 +53,26 @@ impl MetricsHud {
         }
     }
 
+    pub fn average_load(&self) -> f32 {
+        self.average_load
+    }
+
+    pub fn max_block_us(&self) -> u32 {
+        (self.max_block_ns / 1_000).min(u32::MAX as u64) as u32
+    }
+
+    pub fn xruns(&self) -> u32 {
+        self.xruns
+    }
+
+    pub fn rt_tick_hz(&self) -> f32 {
+        self.rt_tick_hz
+    }
+
+    pub fn worker_count(&self) -> u32 {
+        self.worker_count
+    }
+
     pub fn show(&self, ctx: &egui::Context, palette: &HarmoniqPalette) {
         egui::Area::new("metrics_hud".into())
             .anchor(Align2::RIGHT_TOP, [-16.0, 16.0])

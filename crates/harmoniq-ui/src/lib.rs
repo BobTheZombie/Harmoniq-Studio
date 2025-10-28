@@ -12,3 +12,5 @@ pub use parametric_eq::{
 };
 pub use theme::{HarmoniqPalette, HarmoniqTheme};
 pub use widgets::{Fader, Knob, LevelMeter, NoteBlock, StateToggleButton, StepToggle};
+
+pub mod perf_hud;
