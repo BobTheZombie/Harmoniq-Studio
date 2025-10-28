@@ -137,7 +137,8 @@ struct Cli {
     ultra: bool,
 
     /// Preferred realtime audio backend
-    #[arg(long, default_value_t = AudioBackend::Auto)]
+    #[cfg_attr(target_os = "linux", arg(long, default_value_t = AudioBackend::Asio))]
+    #[cfg_attr(not(target_os = "linux"), arg(long, default_value_t = AudioBackend::Auto))]
     audio_backend: AudioBackend,
 
     /// Path to the OpenASIO driver (.so)
