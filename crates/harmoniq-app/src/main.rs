@@ -2220,6 +2220,10 @@ impl CommandHandler for HarmoniqStudioApp {
                 OptionsCommand::CpuMeter => {
                     self.console.log(LogLevel::Info, "CPU meter toggled");
                 }
+                OptionsCommand::MidiDevices => {
+                    self.console
+                        .log(LogLevel::Info, "MIDI devices dialog requested");
+                }
             },
             Command::Floating(cmd) => match cmd {
                 FloatingCommand::Open(kind) => self.open_floating_window(kind),
