@@ -9,6 +9,8 @@ use std::env;
 use std::path::Path;
 
 use anyhow::{anyhow, Context};
+use clap::builder::PossibleValue;
+use clap::ValueEnum;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, FromSample, SampleFormat, SizedSample, StreamConfig};
 #[cfg(target_os = "linux")]
@@ -26,7 +28,7 @@ use linux_asio::LinuxAsioDriver;
 
 use crate::midi::{open_midi_input, MidiConnection};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioBackend {
     Auto,
     Alsa,
@@ -39,6 +41,119 @@ pub enum AudioBackend {
     Asio4All,
     Wasapi,
     CoreAudio,
+}
+
+impl ValueEnum for AudioBackend {
+    fn value_variants<'a>() -> &'a [Self] {
+        #[cfg(feature = "openasio")]
+        {
+            const VARIANTS: &[AudioBackend] = &[
+                AudioBackend::Auto,
+                AudioBackend::Alsa,
+                AudioBackend::Harmoniq,
+                AudioBackend::OpenAsio,
+                AudioBackend::PulseAudio,
+                AudioBackend::PipeWire,
+                AudioBackend::Asio,
+                AudioBackend::Asio4All,
+                AudioBackend::Wasapi,
+                AudioBackend::CoreAudio,
+            ];
+            VARIANTS
+        }
+
+        #[cfg(not(feature = "openasio"))]
+        {
+            const VARIANTS: &[AudioBackend] = &[
+                AudioBackend::Auto,
+                AudioBackend::Alsa,
+                AudioBackend::Harmoniq,
+                AudioBackend::PulseAudio,
+                AudioBackend::PipeWire,
+                AudioBackend::Asio,
+                AudioBackend::Asio4All,
+                AudioBackend::Wasapi,
+                AudioBackend::CoreAudio,
+            ];
+            VARIANTS
+        }
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        let value = match self {
+            AudioBackend::Auto => PossibleValue::new("auto"),
+            AudioBackend::Alsa => PossibleValue::new("alsa"),
+            AudioBackend::Harmoniq => PossibleValue::new("harmoniq"),
+            #[cfg(feature = "openasio")]
+            AudioBackend::OpenAsio => PossibleValue::new("open-asio"),
+            AudioBackend::PulseAudio => PossibleValue::new("pulse-audio"),
+            AudioBackend::PipeWire => PossibleValue::new("pipe-wire"),
+            AudioBackend::Asio => PossibleValue::new("asio"),
+            AudioBackend::Asio4All => PossibleValue::new("asio4-all"),
+            AudioBackend::Wasapi => PossibleValue::new("wasapi"),
+            AudioBackend::CoreAudio => PossibleValue::new("core-audio"),
+        };
+
+        Some(value)
+    }
+
+    fn from_str(input: &str, _ignore_case: bool) -> Result<Self, String> {
+        let normalized = input.replace('_', "-");
+        let normalized = normalized.trim();
+
+        if normalized.eq_ignore_ascii_case("auto") {
+            return Ok(AudioBackend::Auto);
+        }
+
+        if normalized.eq_ignore_ascii_case("alsa") {
+            return Ok(AudioBackend::Alsa);
+        }
+
+        if normalized.eq_ignore_ascii_case("harmoniq") {
+            return Ok(AudioBackend::Harmoniq);
+        }
+
+        #[cfg(feature = "openasio")]
+        if normalized.eq_ignore_ascii_case("open-asio")
+            || normalized.eq_ignore_ascii_case("openasio")
+        {
+            return Ok(AudioBackend::OpenAsio);
+        }
+
+        if normalized.eq_ignore_ascii_case("pulse-audio")
+            || normalized.eq_ignore_ascii_case("pulseaudio")
+        {
+            return Ok(AudioBackend::PulseAudio);
+        }
+
+        if normalized.eq_ignore_ascii_case("pipe-wire")
+            || normalized.eq_ignore_ascii_case("pipewire")
+        {
+            return Ok(AudioBackend::PipeWire);
+        }
+
+        if normalized.eq_ignore_ascii_case("asio") {
+            return Ok(AudioBackend::Asio);
+        }
+
+        if normalized.eq_ignore_ascii_case("asio4-all")
+            || normalized.eq_ignore_ascii_case("asio4all")
+        {
+            return Ok(AudioBackend::Asio4All);
+        }
+
+        if normalized.eq_ignore_ascii_case("wasapi") {
+            return Ok(AudioBackend::Wasapi);
+        }
+
+        if normalized.eq_ignore_ascii_case("core-audio")
+            || normalized.eq_ignore_ascii_case("coreaudio")
+        {
+            return Ok(AudioBackend::CoreAudio);
+        }
+
+        Err(input.to_owned())
+    }
 }
 
 static RT_DENORM_INIT: Once = Once::new();
