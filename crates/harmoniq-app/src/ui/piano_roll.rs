@@ -1,399 +1,263 @@
-use eframe::egui::{self, Color32, RichText};
-use harmoniq_ui::{HarmoniqPalette, NoteBlock};
+use crossbeam_channel::Sender;
+use eframe::egui::{self, Color32, Pos2, Rect, RichText, Sense};
 
-use crate::ui::event_bus::EventBus;
-use crate::ui::focus::InputFocus;
-use crate::ui::workspace::WorkspacePane;
+use crate::commands::Command;
+use crate::state::session::{ChannelId, MidiNote, NoteId, PatternId};
 
-struct Note {
-    start: f32,
-    length: f32,
-    pitch: i32,
-    velocity: f32,
+const TOTAL_STEPS: u32 = 16;
+const MIN_KEY: i32 = 48; // C3
+const MAX_KEY: i32 = 72; // C5
+
+#[derive(Default)]
+pub struct PianoRollState {
+    drag: Option<DragInfo>,
+    pub velocity: u8,
 }
 
-impl Note {
-    fn color(&self) -> Color32 {
-        if self.velocity > 0.8 {
-            Color32::from_rgb(240, 150, 110)
-        } else {
-            Color32::from_rgb(130, 180, 220)
-        }
-    }
+#[derive(Clone, Copy)]
+struct DragInfo {
+    start_tick: u32,
+    current_tick: u32,
+    key: i8,
 }
 
-pub struct PianoRollPane {
-    notes: Vec<Note>,
-    selected: Option<usize>,
-    min_pitch: i32,
-    max_pitch: i32,
-    scale_enabled: bool,
-    scale_root: i32,
-    scale_kind: ScaleKind,
-    chord_library: Vec<ChordDefinition>,
-    insert_position: f32,
-}
-
-impl Default for PianoRollPane {
+impl Default for DragInfo {
     fn default() -> Self {
         Self {
-            notes: vec![
-                Note {
-                    start: 0.0,
-                    length: 1.0,
-                    pitch: 60,
-                    velocity: 0.9,
-                },
-                Note {
-                    start: 1.5,
-                    length: 0.5,
-                    pitch: 64,
-                    velocity: 0.6,
-                },
-                Note {
-                    start: 2.0,
-                    length: 1.0,
-                    pitch: 67,
-                    velocity: 0.7,
-                },
-                Note {
-                    start: 3.0,
-                    length: 0.75,
-                    pitch: 72,
-                    velocity: 0.8,
-                },
-            ],
-            selected: None,
-            min_pitch: 48,
-            max_pitch: 84,
-            scale_enabled: true,
-            scale_root: 0,
-            scale_kind: ScaleKind::Ionian,
-            chord_library: default_chord_library(),
-            insert_position: 0.0,
+            start_tick: 0,
+            current_tick: 0,
+            key: 60,
         }
     }
 }
 
-impl PianoRollPane {
-    pub fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        palette: &HarmoniqPalette,
-        _event_bus: &EventBus,
-        focus: &mut InputFocus,
-    ) {
-        let beat_width = 64.0;
-        let key_height = 22.0;
-        let beats = 16.0;
-        let total_height = (self.max_pitch - self.min_pitch + 1) as f32 * key_height;
-        let total_width = beats * beat_width;
+impl Default for PianoRollState {
+    fn default() -> Self {
+        Self {
+            drag: None,
+            velocity: 96,
+        }
+    }
+}
 
-        let ctx = ui.ctx().clone();
-        let mut root_rect = ui.min_rect();
-        ui.vertical(|ui| {
-            ui.heading(RichText::new("Piano Roll").color(palette.text_primary));
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut self.scale_enabled, "Scale guide");
-                egui::ComboBox::from_id_source("scale_root")
-                    .selected_text(note_name(self.scale_root))
-                    .show_ui(ui, |ui| {
-                        for root in 0..12 {
-                            ui.selectable_value(&mut self.scale_root, root, note_name(root));
-                        }
-                    });
-                egui::ComboBox::from_id_source("scale_kind")
-                    .selected_text(self.scale_kind.label())
-                    .show_ui(ui, |ui| {
-                        for kind in ScaleKind::ALL {
-                            ui.selectable_value(&mut self.scale_kind, kind, kind.label());
-                        }
-                    });
-                ui.label(RichText::new("Insert beat").color(palette.text_muted));
-                ui.add(
-                    egui::DragValue::new(&mut self.insert_position)
-                        .clamp_range(0.0..=beats)
-                        .speed(0.25),
-                );
-            });
-            ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Chord palette").color(palette.text_muted));
-                for index in 0..self.chord_library.len() {
-                    let chord = self.chord_library[index].clone();
-                    let chord_name = chord.name().to_owned();
-                    if ui.button(chord_name).clicked() {
-                        self.apply_chord(&chord);
-                    }
-                }
-            });
-            ui.add_space(8.0);
+pub struct PianoRollContext<'a> {
+    pub channel_id: ChannelId,
+    pub pattern_id: PatternId,
+    pub channel_name: &'a str,
+    pub pattern_name: &'a str,
+    pub ppq: u32,
+    pub notes: &'a [(NoteId, MidiNote)],
+}
 
-            let scroll = egui::ScrollArea::both()
-                .id_source("piano_roll_scroll")
-                .show(ui, |ui| {
-                    let (response, painter) = ui.allocate_painter(
-                        egui::vec2(total_width + 120.0, total_height + 40.0),
-                        egui::Sense::click_and_drag(),
-                    );
-                    let rect = response.rect.shrink2(egui::vec2(40.0, 20.0));
+pub fn render(
+    ui: &mut egui::Ui,
+    state: &mut PianoRollState,
+    ctx: &PianoRollContext<'_>,
+    tx: &Sender<Command>,
+) {
+    header(ui, ctx, state, tx);
+    ui.add_space(8.0);
+    canvas(ui, state, ctx, tx);
+}
 
-                    painter.rect_filled(rect, 8.0, palette.panel_alt);
-                    painter.rect_stroke(rect, 8.0, egui::Stroke::new(1.0, palette.toolbar_outline));
+fn header(
+    ui: &mut egui::Ui,
+    ctx: &PianoRollContext<'_>,
+    state: &mut PianoRollState,
+    tx: &Sender<Command>,
+) {
+    ui.horizontal(|ui| {
+        let title = format!("Piano Roll – {}, {}", ctx.channel_name, ctx.pattern_name);
+        ui.label(RichText::new(title).heading());
+        ui.add_space(12.0);
+        ui.label("Velocity");
+        let mut velocity = state.velocity as f32;
+        if ui
+            .add_sized([120.0, 16.0], egui::Slider::new(&mut velocity, 1.0..=127.0))
+            .changed()
+        {
+            state.velocity = velocity.round() as u8;
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Close").clicked() {
+                let _ = tx.send(Command::ClosePianoRoll);
+            }
+        });
+    });
+}
 
-                    for pitch in self.min_pitch..=self.max_pitch {
-                        let row = (self.max_pitch - pitch) as f32;
-                        let y = rect.top() + row * key_height;
-                        let is_white = is_white_key(pitch);
-                        let mut fill = if is_white {
-                            palette.panel
-                        } else {
-                            palette.panel_alt.gamma_multiply(0.9)
-                        };
-                        if self.scale_enabled
-                            && !note_in_scale(pitch, self.scale_root, self.scale_kind)
-                        {
-                            fill = fill.gamma_multiply(0.8);
-                        }
-                        let row_rect = egui::Rect::from_min_max(
-                            egui::pos2(rect.left(), y),
-                            egui::pos2(rect.right(), y + key_height),
-                        );
-                        painter.rect_filled(row_rect, 0.0, fill);
-                        painter.line_segment(
-                            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
-                            egui::Stroke::new(1.0, palette.timeline_grid_secondary),
-                        );
-                    }
+fn canvas(
+    ui: &mut egui::Ui,
+    state: &mut PianoRollState,
+    ctx: &PianoRollContext<'_>,
+    tx: &Sender<Command>,
+) {
+    let ticks_per_step = (ctx.ppq / 4).max(1);
+    let rows = (MAX_KEY - MIN_KEY + 1) as usize;
+    let key_height = 22.0;
+    let step_width = 32.0;
+    let total_size = egui::vec2(step_width * TOTAL_STEPS as f32, key_height * rows as f32);
 
-                    for beat in 0..=beats as i32 {
-                        let x = rect.left() + beat as f32 * beat_width;
-                        let is_measure = beat % 4 == 0;
-                        let color = if is_measure {
-                            palette.timeline_grid_primary
-                        } else {
-                            palette.timeline_grid_secondary
-                        };
-                        painter.line_segment(
-                            [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                            egui::Stroke::new(if is_measure { 1.4 } else { 0.8 }, color),
-                        );
-                    }
+    let (response, painter) = ui.allocate_painter(total_size, Sense::click_and_drag());
+    let rect = response.rect;
 
-                    let mut quantize_request: Option<usize> = None;
-                    let mut delete_request: Option<usize> = None;
+    draw_grid(&painter, rect, rows, key_height, step_width);
+    let mut note_rects: Vec<(NoteId, Rect)> = Vec::new();
 
-                    for (index, note) in self.notes.iter().enumerate() {
-                        if note.pitch < self.min_pitch || note.pitch > self.max_pitch {
-                            continue;
-                        }
-                        let x = rect.left() + note.start * beat_width;
-                        let width = note.length * beat_width;
-                        let row = (self.max_pitch - note.pitch) as f32;
-                        let y = rect.top() + row * key_height;
-                        let note_rect = egui::Rect::from_min_size(
-                            egui::pos2(x, y + 2.0),
-                            egui::vec2(width.max(12.0), key_height - 4.0),
-                        );
-                        let response = ui.put(
-                            note_rect,
-                            NoteBlock::new(
-                                note_rect,
-                                palette,
-                                note.color(),
-                                if self.selected == Some(index) {
-                                    palette.clip_border_active
-                                } else {
-                                    palette.timeline_grid_primary
-                                },
-                            )
-                            .selected(self.selected == Some(index)),
-                        );
-                        if response.clicked() {
-                            self.selected = Some(index);
-                        }
-                        response.context_menu(|ui| {
-                            if ui.button("Quantize to scale").clicked() {
-                                if self.scale_enabled {
-                                    quantize_request = Some(index);
-                                }
-                                ui.close_menu();
-                            }
-                            if ui.button("Delete").clicked() {
-                                delete_request = Some(index);
-                                ui.close_menu();
-                            }
-                        });
-                    }
+    for (note_id, note) in ctx.notes.iter() {
+        let note_rect = note_rect(rect, note, ticks_per_step, key_height, step_width);
+        note_rects.push((*note_id, note_rect));
+        paint_note(&painter, note_rect, Color32::from_rgb(130, 190, 255));
+    }
 
-                    if let Some(index) = quantize_request {
-                        if self.scale_enabled {
-                            self.quantize_note_to_scale(index);
-                        }
-                    }
+    if let Some(drag) = &mut state.drag {
+        if let Some(pos) = response.interact_pointer_pos() {
+            drag.current_tick = snap_tick(rect, pos, ticks_per_step, step_width)
+                .max(drag.start_tick + ticks_per_step);
+            drag.key = snap_key(rect, pos, key_height);
+        }
 
-                    if let Some(index) = delete_request {
-                        if index < self.notes.len() {
-                            self.notes.remove(index);
-                            self.selected = None;
-                        }
-                    }
+        let preview_note = MidiNote {
+            id: 0,
+            start_ticks: drag.start_tick,
+            length_ticks: drag.current_tick.saturating_sub(drag.start_tick),
+            key: drag.key,
+            velocity: state.velocity,
+        };
+        let preview_rect = note_rect(rect, &preview_note, ticks_per_step, key_height, step_width);
+        paint_note(
+            &painter,
+            preview_rect,
+            Color32::from_rgba_unmultiplied(255, 140, 100, 120),
+        );
+    }
+
+    if response.drag_started() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            if rect.contains(pos) {
+                let start_tick = snap_tick(rect, pos, ticks_per_step, step_width);
+                let key = snap_key(rect, pos, key_height);
+                state.drag = Some(DragInfo {
+                    start_tick,
+                    current_tick: start_tick + ticks_per_step,
+                    key,
                 });
-            root_rect = root_rect.union(scroll.inner_rect);
-        });
-
-        focus.track_pane_interaction(&ctx, root_rect, WorkspacePane::PianoRoll);
+            }
+        }
     }
 
-    fn quantize_note_to_scale(&mut self, index: usize) {
-        if index >= self.notes.len() {
-            return;
-        }
-        let note = &mut self.notes[index];
-        if note_in_scale(note.pitch, self.scale_root, self.scale_kind) {
-            return;
-        }
-        let mut pitch = note.pitch;
-        for offset in 1..12 {
-            if note_in_scale(pitch + offset, self.scale_root, self.scale_kind) {
-                pitch += offset;
-                break;
-            }
-            if note_in_scale(pitch - offset, self.scale_root, self.scale_kind) {
-                pitch -= offset;
-                break;
-            }
-        }
-        pitch = pitch.clamp(self.min_pitch, self.max_pitch);
-        note.pitch = pitch;
-    }
-
-    fn apply_chord(&mut self, chord: &ChordDefinition) {
-        let base = self.scale_root + 60;
-        let start = self.insert_position.max(0.0);
-        let length = 1.0;
-        for interval in chord.intervals() {
-            let pitch = base + interval;
-            if pitch < self.min_pitch || pitch > self.max_pitch {
-                continue;
-            }
-            self.notes.push(Note {
-                start,
-                length,
-                pitch,
-                velocity: 0.85,
+    if response.drag_released() {
+        if let Some(drag) = state.drag.take() {
+            let length = drag
+                .current_tick
+                .saturating_sub(drag.start_tick)
+                .max(ticks_per_step);
+            let _ = tx.send(Command::PianoRollInsertNotes {
+                channel_id: ctx.channel_id,
+                pattern_id: ctx.pattern_id,
+                notes: vec![(drag.start_tick, length, drag.key, state.velocity)],
             });
         }
-        self.notes.sort_by(|a, b| {
-            a.start
-                .partial_cmp(&b.start)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.pitch.cmp(&b.pitch))
-        });
     }
-}
 
-fn is_white_key(pitch: i32) -> bool {
-    matches!(pitch % 12, 0 | 2 | 4 | 5 | 7 | 9 | 11)
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ScaleKind {
-    Ionian,
-    Dorian,
-    Phrygian,
-    Lydian,
-    Mixolydian,
-    Aeolian,
-    Locrian,
-}
-
-impl ScaleKind {
-    const ALL: [Self; 7] = [
-        ScaleKind::Ionian,
-        ScaleKind::Dorian,
-        ScaleKind::Phrygian,
-        ScaleKind::Lydian,
-        ScaleKind::Mixolydian,
-        ScaleKind::Aeolian,
-        ScaleKind::Locrian,
-    ];
-
-    fn intervals(self) -> &'static [i32] {
-        match self {
-            ScaleKind::Ionian => &[0, 2, 4, 5, 7, 9, 11],
-            ScaleKind::Dorian => &[0, 2, 3, 5, 7, 9, 10],
-            ScaleKind::Phrygian => &[0, 1, 3, 5, 7, 8, 10],
-            ScaleKind::Lydian => &[0, 2, 4, 6, 7, 9, 11],
-            ScaleKind::Mixolydian => &[0, 2, 4, 5, 7, 9, 10],
-            ScaleKind::Aeolian => &[0, 2, 3, 5, 7, 8, 10],
-            ScaleKind::Locrian => &[0, 1, 3, 5, 6, 8, 10],
+    if response.clicked() && state.drag.is_none() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            if rect.contains(pos) {
+                let start_tick = snap_tick(rect, pos, ticks_per_step, step_width);
+                let key = snap_key(rect, pos, key_height);
+                let _ = tx.send(Command::PianoRollInsertNotes {
+                    channel_id: ctx.channel_id,
+                    pattern_id: ctx.pattern_id,
+                    notes: vec![(start_tick, ticks_per_step, key, state.velocity)],
+                });
+            }
         }
     }
 
-    fn label(self) -> &'static str {
-        match self {
-            ScaleKind::Ionian => "Ionian (Major)",
-            ScaleKind::Dorian => "Dorian",
-            ScaleKind::Phrygian => "Phrygian",
-            ScaleKind::Lydian => "Lydian",
-            ScaleKind::Mixolydian => "Mixolydian",
-            ScaleKind::Aeolian => "Aeolian (Minor)",
-            ScaleKind::Locrian => "Locrian",
+    if response.secondary_clicked() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            if let Some((note_id, _)) = note_rects
+                .iter()
+                .find(|(_, rect)| rect.contains(pos))
+                .cloned()
+            {
+                let _ = tx.send(Command::PianoRollDeleteNotes {
+                    channel_id: ctx.channel_id,
+                    pattern_id: ctx.pattern_id,
+                    note_ids: vec![note_id],
+                });
+            }
         }
     }
 }
 
-#[derive(Clone)]
-struct ChordDefinition {
-    name: String,
-    intervals: Vec<i32>,
-}
+fn draw_grid(painter: &egui::Painter, rect: Rect, rows: usize, key_height: f32, step_width: f32) {
+    painter.rect_filled(rect, 6.0, Color32::from_gray(28));
 
-impl ChordDefinition {
-    fn name(&self) -> &str {
-        &self.name
+    for row in 0..rows {
+        let y = rect.top() + row as f32 * key_height;
+        let key = MAX_KEY - row as i32;
+        let is_black = is_black_key(key);
+        let fill = if is_black {
+            Color32::from_gray(22)
+        } else {
+            Color32::from_gray(32)
+        };
+        let row_rect = Rect::from_min_size(
+            Pos2::new(rect.left(), y),
+            egui::vec2(rect.width(), key_height),
+        );
+        painter.rect_filled(row_rect, 0.0, fill);
+        painter.line_segment(
+            [Pos2::new(rect.left(), y), Pos2::new(rect.right(), y)],
+            egui::Stroke::new(0.5, Color32::from_gray(60)),
+        );
     }
 
-    fn intervals(&self) -> impl Iterator<Item = i32> + '_ {
-        self.intervals.iter().copied()
+    for step in 0..=TOTAL_STEPS {
+        let x = rect.left() + step as f32 * step_width;
+        let strong = step % 4 == 0;
+        painter.line_segment(
+            [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+            egui::Stroke::new(if strong { 1.2 } else { 0.5 }, Color32::from_gray(80)),
+        );
     }
 }
 
-fn default_chord_library() -> Vec<ChordDefinition> {
-    vec![
-        ChordDefinition {
-            name: "Triad".into(),
-            intervals: vec![0, 4, 7],
-        },
-        ChordDefinition {
-            name: "Sus2".into(),
-            intervals: vec![0, 2, 7],
-        },
-        ChordDefinition {
-            name: "Sus4".into(),
-            intervals: vec![0, 5, 7],
-        },
-        ChordDefinition {
-            name: "Seventh".into(),
-            intervals: vec![0, 4, 7, 10],
-        },
-        ChordDefinition {
-            name: "Ninth".into(),
-            intervals: vec![0, 2, 4, 7, 10],
-        },
-    ]
+fn note_rect(
+    rect: Rect,
+    note: &MidiNote,
+    ticks_per_step: u32,
+    key_height: f32,
+    step_width: f32,
+) -> Rect {
+    let start_steps = note.start_ticks as f32 / ticks_per_step as f32;
+    let length_steps = (note.length_ticks as f32 / ticks_per_step as f32).max(1.0);
+    let x = rect.left() + start_steps * step_width;
+    let width = length_steps * step_width;
+    let row = (MAX_KEY - note.key as i32).clamp(0, MAX_KEY - MIN_KEY) as f32;
+    let y = rect.top() + row * key_height;
+    Rect::from_min_size(Pos2::new(x, y + 2.0), egui::vec2(width, key_height - 4.0))
 }
 
-fn note_in_scale(pitch: i32, root: i32, kind: ScaleKind) -> bool {
-    let offset = (pitch - root).rem_euclid(12);
-    kind.intervals().contains(&offset)
+fn paint_note(painter: &egui::Painter, rect: Rect, color: Color32) {
+    painter.rect_filled(rect, 4.0, color);
+    painter.rect_stroke(rect, 4.0, egui::Stroke::new(1.0, Color32::from_gray(20)));
 }
 
-fn note_name(root: i32) -> &'static str {
-    const NAMES: [&str; 12] = [
-        "C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B",
-    ];
-    NAMES[(root.rem_euclid(12)) as usize]
+fn snap_tick(rect: Rect, pos: Pos2, ticks_per_step: u32, step_width: f32) -> u32 {
+    let relative = (pos.x - rect.left()).clamp(0.0, rect.width());
+    let step = (relative / step_width).floor() as u32;
+    step.min(TOTAL_STEPS - 1) * ticks_per_step
+}
+
+fn snap_key(rect: Rect, pos: Pos2, key_height: f32) -> i8 {
+    let relative = (pos.y - rect.top()).clamp(0.0, rect.height());
+    let row = (relative / key_height).floor() as i32;
+    let key = MAX_KEY - row;
+    key.clamp(MIN_KEY, MAX_KEY) as i8
+}
+
+fn is_black_key(key: i32) -> bool {
+    matches!(key % 12, 1 | 3 | 6 | 8 | 10 | -11 | -9 | -6 | -4 | -1)
 }
