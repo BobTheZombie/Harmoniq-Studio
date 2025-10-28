@@ -30,7 +30,10 @@ use harmoniq_engine::{
 };
 use harmoniq_midi::config::{self as midi_config, MidiSettings};
 use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth};
-use harmoniq_ui::{startup_banner, HarmoniqPalette, HarmoniqTheme};
+use harmoniq_ui::{
+    perf_hud::{self, PerfHudState, PerfMetrics},
+    startup_banner, HarmoniqPalette, HarmoniqTheme,
+};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use parking_lot::Mutex;
 use rtrb::Consumer;
@@ -1371,6 +1374,7 @@ struct HarmoniqStudioApp {
     midi_settings: MidiSettings,
     sound_test: SoundTestSample,
     metrics_hud: MetricsHud,
+    perf_hud: PerfHudState,
     event_bus: EventBus,
     input_focus: InputFocus,
     shortcuts: ShortcutMap,
@@ -1405,8 +1409,10 @@ struct HarmoniqStudioApp {
     fullscreen_dirty: bool,
     last_screen_rect: egui::Rect,
     engine_load_pct: u16,
-    last_xruns: u32,
+    xruns_reported: u64,
     last_block_warn: Option<u32>,
+    last_xrun_toast: Option<Instant>,
+    last_frame_instant: Instant,
     startup_visible: bool,
     startup_progress: Option<f32>,
     startup_msg: String,
@@ -1464,6 +1470,9 @@ impl HarmoniqStudioApp {
         let resources_root = env::current_dir()
             .map(|path| path.join("resources"))
             .unwrap_or_else(|_| PathBuf::from("resources"));
+
+        let mut metrics_hud = MetricsHud::new();
+        metrics_hud.set_worker_count(Self::detect_worker_count());
 
         let event_bus = EventBus::default();
         let menu = MenuBarState::default();
@@ -1537,7 +1546,8 @@ impl HarmoniqStudioApp {
             midi_devices,
             midi_settings,
             sound_test,
-            metrics_hud: MetricsHud::new(),
+            metrics_hud,
+            perf_hud: PerfHudState::default(),
             event_bus,
             input_focus,
             shortcuts,
@@ -1575,8 +1585,10 @@ impl HarmoniqStudioApp {
                 egui::Vec2::new(1280.0, 720.0),
             ),
             engine_load_pct: 0,
-            last_xruns: 0,
+            xruns_reported: 0,
             last_block_warn: None,
+            last_xrun_toast: None,
+            last_frame_instant: Instant::now(),
             startup_visible: false,
             startup_progress: None,
             startup_msg: String::new(),
@@ -1641,6 +1653,49 @@ impl HarmoniqStudioApp {
         style.overlay.hovered_leaf_highlight.stroke = Stroke::new(1.0, palette.accent);
 
         style
+    }
+
+    fn detect_worker_count() -> u32 {
+        std::thread::available_parallelism()
+            .map(|n| {
+                let workers = n.get().saturating_sub(1);
+                if workers == 0 {
+                    1
+                } else {
+                    workers as u32
+                }
+            })
+            .unwrap_or(0)
+    }
+
+    fn toggle_perf_hud(&mut self) {
+        self.perf_hud.visible = !self.perf_hud.visible;
+        self.perf_hud.last_activity_ms = 0;
+    }
+
+    fn on_engine_stats(&mut self, xruns_total: u64) {
+        if xruns_total > self.xruns_reported {
+            let delta = xruns_total - self.xruns_reported;
+            self.xruns_reported = xruns_total;
+            perf_hud::perf_hud_on_activity(&mut self.perf_hud);
+            self.perf_hud.visible = true;
+
+            let now = Instant::now();
+            let should_toast = self
+                .last_xrun_toast
+                .map(|last| now.duration_since(last) >= Duration::from_millis(500))
+                .unwrap_or(true);
+            if should_toast {
+                self.toast_warning(format!(
+                    "Audio engine reported {delta} xruns (total {xruns_total})"
+                ));
+                self.last_xrun_toast = Some(now);
+            }
+        }
+    }
+
+    fn toast_warning(&mut self, message: impl Into<String>) {
+        self.notices.warning(message);
     }
 
     fn show_startup(&mut self, msg: impl Into<String>) {
@@ -1752,19 +1807,11 @@ impl HarmoniqStudioApp {
         while let Ok(event) = self.rt_cons.pop() {
             match event {
                 RtEvent::Xrun { count } => {
-                    if count > self.last_xruns {
-                        let prev_bucket = self.last_xruns / 50;
-                        let new_bucket = count / 50;
-                        let should_toast = self.last_xruns == 0 || new_bucket > prev_bucket;
-                        self.last_xruns = count;
-                        if should_toast {
-                            self.notices
-                                .warning(format!("Audio engine reported {} xruns", count));
-                        }
-                    }
+                    self.on_engine_stats(count as u64);
                 }
                 RtEvent::EngineLoad { pct } => {
                     self.engine_load_pct = pct.min(1000);
+                    perf_hud::perf_hud_on_activity(&mut self.perf_hud);
                 }
                 RtEvent::MaxBlockMicros { us } => {
                     let previous = self.last_block_warn.unwrap_or(0);
@@ -1773,8 +1820,9 @@ impl HarmoniqStudioApp {
                         && (self.last_block_warn.is_none() || us >= previous.saturating_add(1_000))
                     {
                         let ms = us as f32 / 1000.0;
-                        self.notices
-                            .warning(format!("Audio block processing peaked at {ms:.1} ms"));
+                        self.toast_warning(format!("Audio block processing peaked at {ms:.1} ms"));
+                        self.perf_hud.visible = true;
+                        perf_hud::perf_hud_on_activity(&mut self.perf_hud);
                     }
                     self.last_block_warn = Some(new_max);
                 }
@@ -2120,6 +2168,16 @@ impl CommandHandler for HarmoniqStudioApp {
                     };
                     self.console.log(LogLevel::Info, format!("Browser {state}"));
                 }
+                ViewCommand::TogglePerfHud => {
+                    self.toggle_perf_hud();
+                    let state = if self.perf_hud.visible {
+                        "shown"
+                    } else {
+                        "hidden"
+                    };
+                    self.console
+                        .log(LogLevel::Info, format!("Performance HUD {state}"));
+                }
                 ViewCommand::ZoomIn => {
                     self.mixer.zoom_in();
                     self.console.log(LogLevel::Info, "Mixer zoom increased");
@@ -2392,6 +2450,10 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
 impl App for HarmoniqStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint_after(Duration::from_millis(16));
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_frame_instant);
+        self.last_frame_instant = now;
+        perf_hud::perf_hud_tick(&mut self.perf_hud, dt.as_millis() as u64);
         self.last_screen_rect = ctx.input(|i| i.screen_rect);
         self.shortcuts.handle_input(ctx, &self.command_sender);
         self.process_qwerty_keyboard(ctx);
@@ -2445,6 +2507,7 @@ impl App for HarmoniqStudioApp {
                     mixer_visible: !self.mixer_hidden,
                     piano_roll_visible: !self.piano_roll_hidden,
                     browser_visible: !self.browser_hidden,
+                    perf_hud_visible: self.perf_hud.visible,
                     fullscreen: self.fullscreen,
                     can_undo: false,
                     can_redo: false,
@@ -2578,8 +2641,6 @@ impl App for HarmoniqStudioApp {
             self.status_message = Some(feedback.message().to_string());
         }
 
-        self.metrics_hud.show(ctx, &palette);
-
         if let Some(message) = &self.status_message {
             egui::Area::new(Id::new("status_message"))
                 .anchor(Align2::LEFT_BOTTOM, [16.0, -16.0])
@@ -2671,6 +2732,26 @@ impl App for HarmoniqStudioApp {
             self.startup_progress = None;
             self.startup_shown_at = None;
         }
+
+        let event_load = self.engine_load_pct as f32 / 1000.0;
+        let audio_load = if event_load > 0.0 {
+            event_load
+        } else {
+            self.metrics_hud.average_load()
+        }
+        .clamp(0.0, 1.0);
+        let max_block_us = self
+            .metrics_hud
+            .max_block_us()
+            .max(self.last_block_warn.unwrap_or(0));
+        let metrics = PerfMetrics {
+            audio_load,
+            max_block_us,
+            xruns_total: self.xruns_reported,
+            rt_tick_hz: self.metrics_hud.rt_tick_hz(),
+            workers: self.metrics_hud.worker_count(),
+        };
+        perf_hud::perf_hud(ctx, &mut self.perf_hud, &metrics);
 
         self.notices.paint(ctx);
 

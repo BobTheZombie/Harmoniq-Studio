@@ -30,6 +30,7 @@ pub struct MenuBarSnapshot<'a> {
     pub mixer_visible: bool,
     pub piano_roll_visible: bool,
     pub browser_visible: bool,
+    pub perf_hud_visible: bool,
     pub fullscreen: bool,
     pub can_undo: bool,
     pub can_redo: bool,
@@ -48,6 +49,7 @@ impl Default for MenuBarSnapshot<'_> {
             mixer_visible: true,
             piano_roll_visible: true,
             browser_visible: true,
+            perf_hud_visible: false,
             fullscreen: false,
             can_undo: false,
             can_redo: false,
@@ -252,6 +254,17 @@ impl MenuBarState {
                 &mut browser,
             ) {
                 let _ = commands.try_send(Command::View(ViewCommand::ToggleBrowser));
+                ui.close_menu();
+            }
+            let mut perf_hud = snapshot.perf_hud_visible;
+            if toggle_item(
+                ui,
+                "Performance HUD",
+                CommandId::ViewTogglePerfHud,
+                shortcuts,
+                &mut perf_hud,
+            ) {
+                let _ = commands.try_send(Command::View(ViewCommand::TogglePerfHud));
                 ui.close_menu();
             }
             ui.separator();
