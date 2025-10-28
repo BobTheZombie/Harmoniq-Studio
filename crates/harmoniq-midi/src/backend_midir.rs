@@ -66,6 +66,7 @@ impl MidiBackend for MidirBackend {
         let id = self.allocate_id();
         let epoch = self.epoch;
         let name_for_cb = Arc::clone(&name_arc);
+        let user_ptr = user as usize;
         let connection = input
             .connect(
                 port,
@@ -95,7 +96,7 @@ impl MidiBackend for MidirBackend {
                             name: Arc::clone(&name_for_cb),
                         },
                         event,
-                        user,
+                        user_ptr as *mut c_void,
                     );
                 },
                 (),

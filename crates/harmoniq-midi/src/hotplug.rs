@@ -24,7 +24,7 @@ pub struct HotplugWatcher<B: MidiBackend + Send + 'static> {
 
 impl<B: MidiBackend + Send + 'static> HotplugWatcher<B> {
     /// Spawn a new watcher.
-    pub fn spawn(mut backend: B, interval: Duration) -> anyhow::Result<Self> {
+    pub fn spawn(backend: B, interval: Duration) -> anyhow::Result<Self> {
         let (event_tx, event_rx) = mpsc::channel();
         let (stop_tx, stop_rx) = mpsc::channel();
         let handle = thread::Builder::new()
