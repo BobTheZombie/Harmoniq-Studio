@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align2};
+use egui::{self, Align2};
 
 pub fn startup_banner(ctx: &egui::Context, visible: &mut bool, progress: Option<f32>, text: &str) {
     if !*visible {
