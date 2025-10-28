@@ -1,163 +1,190 @@
-use eframe::egui::{self, Color32, RichText};
-use harmoniq_ui::{HarmoniqPalette, Knob, StepToggle};
+use crossbeam_channel::Sender;
+use eframe::egui::{self, Align};
 
-use crate::ui::event_bus::{AppEvent, EventBus};
+use crate::commands::Command;
+use crate::state::session::{ChannelId, ChannelKind, PatternId, Session};
 
-#[derive(Clone)]
-struct Channel {
-    name: String,
-    color: Color32,
-    steps: Vec<bool>,
-    volume: f32,
-    pan: f32,
+pub struct ChannelRackProps<'a> {
+    pub session: &'a mut Session,
+    pub selected_pattern: PatternId,
+    pub command_tx: Sender<Command>,
 }
 
-impl Channel {
-    fn new(name: &str, color: Color32) -> Self {
-        Self {
-            name: name.to_string(),
-            color,
-            steps: vec![false; 16],
-            volume: 0.75,
-            pan: 0.0,
+pub fn channel_rack_ui(ui: &mut egui::Ui, props: ChannelRackProps<'_>) {
+    ui.heading("Channel Rack");
+    ui.add_space(8.0);
+
+    pattern_picker(
+        ui,
+        &*props.session,
+        props.selected_pattern,
+        &props.command_tx,
+    );
+    ui.add_space(10.0);
+
+    ui.horizontal(|ui| {
+        ui.label("Add:");
+        if ui.button("Instrument").clicked() {
+            // When the plugin browser is wired up, hook the selection callback here and call:
+            // let _ = command_tx.send(Command::AddChannelInstrument { name, plugin_uid });
+            let name = format!("Instrument {}", props.session.channels.len() + 1);
+            let _ = props.command_tx.send(Command::AddChannelInstrument {
+                name,
+                plugin_uid: None,
+            });
         }
-    }
-}
-
-pub struct ChannelRackPane {
-    channels: Vec<Channel>,
-}
-
-impl ChannelRackPane {
-    fn seed_channels() -> Vec<Channel> {
-        vec![
-            Channel::new("Kick", Color32::from_rgb(240, 170, 100)),
-            Channel::new("Snare", Color32::from_rgb(160, 200, 240)),
-            Channel::new("Hat", Color32::from_rgb(190, 200, 120)),
-            Channel::new("Bass", Color32::from_rgb(150, 140, 220)),
-        ]
-    }
-
-    pub fn ui(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette, event_bus: &EventBus) {
-        if self.channels.is_empty() {
-            self.channels = Self::seed_channels();
+        if ui.button("Sample").clicked() {
+            let name = format!("Sample {}", props.session.channels.len() + 1);
+            let _ = props.command_tx.send(Command::AddChannelSample {
+                name,
+                path: String::new(),
+            });
         }
-        let mut clone_requests: Vec<(usize, Channel)> = Vec::new();
+    });
 
-        ui.vertical(|ui| {
-            ui.heading(RichText::new("Channel Rack").color(palette.text_primary));
-            ui.add_space(6.0);
-            for (index, channel) in self.channels.iter_mut().enumerate() {
-                egui::Frame::none()
-                    .fill(palette.panel_alt)
-                    .rounding(egui::Rounding::same(10.0))
-                    .stroke(egui::Stroke::new(1.0, palette.toolbar_outline))
-                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
-                    .show(ui, |ui| {
-                        ui.vertical(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(&channel.name)
-                                        .color(channel.color)
-                                        .strong()
-                                        .size(16.0),
-                                );
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.label(
-                                            RichText::new(format!(
-                                                "Vol {:.0}%",
-                                                channel.volume * 100.0
-                                            ))
-                                            .color(palette.text_muted),
-                                        );
-                                    },
-                                );
+    ui.add_space(12.0);
+
+    let total_steps = props
+        .session
+        .pattern(props.selected_pattern)
+        .map(|pattern| pattern.total_16th_steps())
+        .unwrap_or(16);
+
+    for index in 0..props.session.channels.len() {
+        let channel_id = props.session.channels[index].id;
+        props
+            .session
+            .ensure_steps(channel_id, props.selected_pattern);
+
+        let channel_kind = props.session.channels[index].kind;
+        let channel_name = props.session.channels[index].name.clone();
+        let plugin_badge = props.session.channels[index]
+            .target_plugin_uid
+            .clone()
+            .unwrap_or_default();
+        let mute_state = props.session.channels[index].mute;
+        let solo_state = props.session.channels[index].solo;
+
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(channel_name.clone());
+                if !plugin_badge.is_empty() {
+                    ui.weak(format!("plugin: {plugin_badge}"));
+                }
+                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                    ui.menu_button("⋮", |ui| {
+                        if ui.button("Edit in Piano Roll").clicked() {
+                            let _ = props.command_tx.send(Command::OpenPianoRoll {
+                                channel_id,
+                                pattern_id: props.selected_pattern,
                             });
-                            ui.add_space(6.0);
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                for step in 0..channel.steps.len() {
-                                    let accent = channel.color.gamma_multiply(if step % 4 == 0 {
-                                        0.9
-                                    } else {
-                                        0.7
-                                    });
-                                    let toggle = ui.add(
-                                        StepToggle::new(palette, accent)
-                                            .active(channel.steps[step])
-                                            .emphasise(step % 4 == 0)
-                                            .with_size(egui::vec2(20.0, 34.0)),
-                                    );
-                                    if toggle.clicked() {
-                                        channel.steps[step] = !channel.steps[step];
-                                        event_bus.publish(AppEvent::RequestRepaint);
-                                    }
-                                }
+                            ui.close_menu();
+                        }
+                        if ui.button("Convert Steps → MIDI Clip").clicked() {
+                            let _ = props.command_tx.send(Command::ConvertStepsToMidi {
+                                channel_id,
+                                pattern_id: props.selected_pattern,
                             });
-                            ui.add_space(10.0);
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 14.0;
-                                ui.label(RichText::new("Volume").color(palette.text_muted));
-                                let mut volume = channel.volume;
-                                if ui
-                                    .add(
-                                        Knob::new(&mut volume, 0.0, 1.0, 0.75, "", palette)
-                                            .with_diameter(40.0),
-                                    )
-                                    .changed()
-                                {
-                                    channel.volume = volume;
-                                }
-                                ui.label(RichText::new("Pan").color(palette.text_muted));
-                                let mut pan = channel.pan;
-                                if ui
-                                    .add(
-                                        Knob::new(&mut pan, -1.0, 1.0, 0.0, "", palette)
-                                            .with_diameter(40.0),
-                                    )
-                                    .changed()
-                                {
-                                    channel.pan = pan;
-                                }
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if ui.button("Clone").clicked() {
-                                            let mut clone = channel.clone();
-                                            clone.name = format!("{} Copy", channel.name);
-                                            clone_requests.push((index + 1, clone));
-                                        }
-                                    },
-                                );
-                            });
-                        });
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Clone Channel").clicked() {
+                            let _ = props.command_tx.send(Command::CloneChannel(channel_id));
+                            ui.close_menu();
+                        }
+                        if ui.button("Delete Channel").clicked() {
+                            let _ = props.command_tx.send(Command::RemoveChannel(channel_id));
+                            ui.close_menu();
+                        }
                     });
-                ui.add_space(8.0);
-            }
-            if ui.button("Add Channel").clicked() {
-                self.channels.push(Channel::new(
-                    &format!("Channel {}", self.channels.len() + 1),
-                    palette.accent,
-                ));
+
+                    let mut mute = mute_state;
+                    if ui.toggle_value(&mut mute, "M").clicked() {
+                        let _ = props
+                            .command_tx
+                            .send(Command::ToggleChannelMute(channel_id, mute));
+                        if let Some(channel) = props.session.channel_mut(channel_id) {
+                            channel.mute = mute;
+                        }
+                    }
+
+                    let mut solo = solo_state;
+                    if ui.toggle_value(&mut solo, "S").clicked() {
+                        let _ = props
+                            .command_tx
+                            .send(Command::ToggleChannelSolo(channel_id, solo));
+                        if let Some(channel) = props.session.channel_mut(channel_id) {
+                            channel.solo = solo;
+                        }
+                    }
+                });
+            });
+
+            ui.add_space(6.0);
+
+            if channel_kind != ChannelKind::Effect {
+                step_lane(
+                    ui,
+                    channel_id,
+                    props.selected_pattern,
+                    total_steps,
+                    props.session,
+                );
+            } else {
+                ui.label("Effects do not have step lanes.");
             }
         });
 
-        if !clone_requests.is_empty() {
-            let mut offset = 0;
-            for (index, channel) in clone_requests {
-                self.channels.insert(index + offset, channel);
-                offset += 1;
-            }
-        }
+        ui.add_space(6.0);
     }
 }
 
-impl Default for ChannelRackPane {
-    fn default() -> Self {
-        Self {
-            channels: Self::seed_channels(),
+fn pattern_picker(
+    ui: &mut egui::Ui,
+    session: &Session,
+    selected_pattern: PatternId,
+    command_tx: &Sender<Command>,
+) {
+    ui.horizontal(|ui| {
+        ui.label("Patterns:");
+        for pattern in &session.patterns {
+            let button = ui.selectable_label(pattern.id == selected_pattern, &pattern.name);
+            if button.clicked() {
+                let _ = command_tx.send(Command::SelectPattern(pattern.id));
+            }
+        }
+        if ui.button("+").clicked() {
+            let _ = command_tx.send(Command::AddPattern);
+        }
+    });
+}
+
+fn step_lane(
+    ui: &mut egui::Ui,
+    channel_id: ChannelId,
+    pattern_id: PatternId,
+    total_steps: usize,
+    session: &mut Session,
+) {
+    if let Some(channel) = session.channel_mut(channel_id) {
+        if let Some(steps) = channel.steps.get_mut(&pattern_id) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for (index, step) in steps.iter_mut().enumerate().take(total_steps) {
+                    let active = *step;
+                    let label = if active { "●" } else { "○" };
+                    if ui
+                        .add_sized([20.0, 20.0], egui::Button::new(label))
+                        .clicked()
+                    {
+                        *step = !*step;
+                    }
+
+                    if (index + 1) % channel.steps_per_bar == 0 {
+                        ui.add_space(8.0);
+                    }
+                }
+            });
         }
     }
 }
