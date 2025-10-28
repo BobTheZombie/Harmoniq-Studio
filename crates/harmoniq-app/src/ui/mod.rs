@@ -13,6 +13,7 @@ pub mod layout;
 pub mod menu_bar;
 pub mod menu_plugins;
 pub mod metrics_view;
+pub mod midi;
 pub mod mixer;
 pub mod notifications;
 pub mod piano_roll;

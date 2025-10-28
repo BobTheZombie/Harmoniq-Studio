@@ -536,6 +536,17 @@ impl MenuBarState {
             }
             if ui
                 .button(with_shortcut(
+                    "MIDI Devices…",
+                    shortcuts,
+                    CommandId::OptionsMidiDevices,
+                ))
+                .clicked()
+            {
+                let _ = commands.try_send(Command::Options(OptionsCommand::MidiDevices));
+                ui.close_menu();
+            }
+            if ui
+                .button(with_shortcut(
                     "Project Settings…",
                     shortcuts,
                     CommandId::OptionsProjectSettings,

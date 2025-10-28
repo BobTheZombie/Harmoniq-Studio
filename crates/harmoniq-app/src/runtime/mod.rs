@@ -15,6 +15,7 @@ use self::bus::{
 
 pub mod bus;
 pub mod frame_pacing;
+pub mod midi_service;
 pub mod tick;
 
 #[allow(dead_code)]

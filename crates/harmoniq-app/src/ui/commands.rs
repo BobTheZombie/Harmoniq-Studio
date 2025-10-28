@@ -57,6 +57,7 @@ pub enum CommandId {
     OptionsThemeLight,
     OptionsThemeAuto,
     OptionsCpuMeter,
+    OptionsMidiDevices,
     HelpAbout,
     HelpOpenLogs,
     HelpUserManual,
@@ -115,6 +116,7 @@ impl CommandId {
             CommandId::OptionsThemeLight => "options.theme_light",
             CommandId::OptionsThemeAuto => "options.theme_auto",
             CommandId::OptionsCpuMeter => "options.cpu_meter",
+            CommandId::OptionsMidiDevices => "options.midi_devices",
             CommandId::HelpAbout => "help.about",
             CommandId::HelpOpenLogs => "help.open_logs",
             CommandId::HelpUserManual => "help.user_manual",
@@ -177,6 +179,7 @@ impl FromStr for CommandId {
             "options.theme_light" => Ok(CommandId::OptionsThemeLight),
             "options.theme_auto" => Ok(CommandId::OptionsThemeAuto),
             "options.cpu_meter" => Ok(CommandId::OptionsCpuMeter),
+            "options.midi_devices" => Ok(CommandId::OptionsMidiDevices),
             "help.about" => Ok(CommandId::HelpAbout),
             "help.open_logs" => Ok(CommandId::HelpOpenLogs),
             "help.user_manual" => Ok(CommandId::HelpUserManual),
@@ -481,6 +484,7 @@ pub enum OptionsCommand {
     ProjectSettings,
     Theme(ThemeMode),
     CpuMeter,
+    MidiDevices,
 }
 
 impl OptionsCommand {
@@ -492,6 +496,7 @@ impl OptionsCommand {
             OptionsCommand::Theme(ThemeMode::Light) => CommandId::OptionsThemeLight,
             OptionsCommand::Theme(ThemeMode::Auto) => CommandId::OptionsThemeAuto,
             OptionsCommand::CpuMeter => CommandId::OptionsCpuMeter,
+            OptionsCommand::MidiDevices => CommandId::OptionsMidiDevices,
         }
     }
 }

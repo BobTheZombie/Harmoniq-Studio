@@ -77,6 +77,11 @@ impl EventLane {
         self.head.store(next, Ordering::Release);
         Ok(())
     }
+
+    /// Convenience wrapper for enqueuing a MIDI event.
+    pub fn push_midi(&self, bytes: [u8; 3], sample_in_block: u32) -> bool {
+        self.push(Ev::Midi(bytes, sample_in_block)).is_ok()
+    }
 }
 
 pub struct EventSlice<'a> {
