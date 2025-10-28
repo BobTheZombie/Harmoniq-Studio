@@ -224,7 +224,7 @@ mod tests {
     use super::*;
 
     struct DummyBackend {
-        pub opened: Vec<usize>;
+        pub opened: Vec<usize>,
     }
 
     impl Default for DummyBackend {
