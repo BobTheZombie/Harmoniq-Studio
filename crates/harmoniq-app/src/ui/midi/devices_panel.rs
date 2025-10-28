@@ -61,11 +61,15 @@ impl MidiDevicesPanel {
             .open(&mut open_flag)
             .show(ctx, |ui| {
                 ui.heading("MIDI inputs");
-                ui.label(RichText::new(
-                    "Enable or configure hardware MIDI devices available to Harmoniq Studio.",
-                ))
-                .wrap(true)
-                .color(ui.visuals().weak_text_color());
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(
+                            "Enable or configure hardware MIDI devices available to Harmoniq Studio.",
+                        )
+                        .color(ui.visuals().weak_text_color()),
+                    )
+                    .wrap(true),
+                );
                 ui.add_space(8.0);
 
                 if let Some(err) = &self.ports_error {
@@ -211,7 +215,10 @@ impl MidiDevicesPanel {
             .show_ui(ui, |combo| {
                 for (port_index, name) in self.available_ports.iter().enumerate() {
                     if combo
-                        .selectable_label(input.port_index == port_index, format!("#{:02} {name}"))
+                        .selectable_label(
+                            input.port_index == port_index,
+                            format!("#{:02} {name}", port_index),
+                        )
                         .clicked()
                     {
                         input.port_index = port_index;
