@@ -6,10 +6,4 @@ license = "GPL-3.0-or-later"
 authors = ["Harmoniq Studio Contributors"]
 
 [dependencies]
-serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
-parking_lot = { workspace = true }
-
-[dev-dependencies]
-pretty_assertions = "1.4"
+egui = "0.28"
