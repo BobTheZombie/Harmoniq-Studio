@@ -3,12 +3,12 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Sample, SampleFormat, StreamConfig};
-use crossbeam::channel::{self, Receiver, Sender};
+use crossbeam::channel::{self, Receiver, RecvTimeoutError, Sender};
 use crossbeam::queue::ArrayQueue;
 use parking_lot::Mutex;
 
@@ -177,19 +177,10 @@ impl UltraLowLatencyServer {
         let render_queue = Arc::clone(&queue);
         let render_running = Arc::clone(&running);
         let (control_tx, control_rx) = channel::bounded(1);
+        let (primed_tx, primed_rx) = channel::bounded(1);
         let render_config = config.clone();
         let render_options = options.clone();
         let render_metrics = metrics.clone();
-
-        let stream = build_stream(
-            &device,
-            &stream_config,
-            supported.sample_format(),
-            Arc::clone(&queue),
-            Arc::clone(&running),
-            metrics.clone(),
-        )?;
-        stream.play()?;
 
         let render_handle = thread::Builder::new()
             .name("harmoniq-ultra-render".into())
@@ -203,11 +194,23 @@ impl UltraLowLatencyServer {
                     render_options,
                     channels,
                     render_metrics,
+                    Some(primed_tx),
                 ) {
                     tracing::error!(?err, "sound server render loop terminated with error");
                 }
             })
             .context("failed to spawn render thread")?;
+
+        let stream = build_stream(
+            &device,
+            &stream_config,
+            supported.sample_format(),
+            Arc::clone(&queue),
+            Arc::clone(&running),
+            metrics.clone(),
+        )?;
+        wait_for_render_prime(&queue, &primed_rx, config.block_size, channels);
+        stream.play()?;
 
         Ok(Self {
             stream: StreamHandle::Cpal(stream),
@@ -249,9 +252,6 @@ impl UltraLowLatencyServer {
         let queue_capacity =
             queue_capacity(config.block_size, out_channels_usize, options.queue_depth);
         let queue = Arc::new(ArrayQueue::new(queue_capacity));
-        for _ in 0..queue_capacity {
-            let _ = queue.push(0.0);
-        }
         let running = Arc::new(AtomicBool::new(true));
         let metrics = {
             let guard = engine.lock();
@@ -261,6 +261,7 @@ impl UltraLowLatencyServer {
         let render_queue = Arc::clone(&queue);
         let render_running = Arc::clone(&running);
         let (control_tx, control_rx) = channel::bounded(1);
+        let (primed_tx, primed_rx) = channel::bounded(1);
         let render_config = config.clone();
         let render_options = options.clone();
         let render_metrics = metrics.clone();
@@ -276,11 +277,14 @@ impl UltraLowLatencyServer {
                     render_options,
                     out_channels_usize,
                     render_metrics,
+                    Some(primed_tx),
                 ) {
                     tracing::error!(?err, "sound server render loop terminated with error");
                 }
             })
             .context("failed to spawn render thread")?;
+
+        wait_for_render_prime(&queue, &primed_rx, config.block_size, out_channels_usize);
 
         let sample_rate = openasio
             .sample_rate
@@ -647,6 +651,7 @@ fn render_loop(
     options: UltraLowLatencyOptions,
     target_channels: usize,
     metrics: AudioMetricsCollector,
+    mut primed: Option<Sender<()>>,
 ) -> anyhow::Result<()> {
     rt::enable_ftz_daz();
     if let Err(err) = rt::pin_current_thread(0) {
@@ -709,11 +714,41 @@ fn render_loop(
         }
         if dropped_samples > 0 {
             metrics.register_xrun();
+        } else if let Some(tx) = primed.take() {
+            let _ = tx.send(());
         }
     }
 
     running.store(false, Ordering::Relaxed);
+    if let Some(tx) = primed {
+        let _ = tx.send(());
+    }
     Ok(())
+}
+
+fn wait_for_render_prime(
+    queue: &Arc<ArrayQueue<f32>>,
+    signal: &Receiver<()>,
+    block_frames: usize,
+    channels: usize,
+) {
+    const PRIME_TIMEOUT: Duration = Duration::from_millis(500);
+    let required_samples = block_frames.max(1).saturating_mul(channels.max(1));
+    match signal.recv_timeout(PRIME_TIMEOUT) {
+        Ok(()) => {}
+        Err(RecvTimeoutError::Timeout) => {
+            if queue.len() < required_samples {
+                tracing::warn!(
+                    required_samples,
+                    available_samples = queue.len(),
+                    "timeout waiting for realtime render thread to prime queue"
+                );
+            }
+        }
+        Err(RecvTimeoutError::Disconnected) => {
+            tracing::warn!("render thread terminated before priming queue");
+        }
+    }
 }
 
 fn write_interleaved(buffer: &AudioBuffer, target: &mut [f32], target_channels: usize) {
