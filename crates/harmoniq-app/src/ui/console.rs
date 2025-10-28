@@ -75,7 +75,7 @@ impl Default for ConsolePane {
             "Hot reload enabled for scripts",
         ));
         entries.push(ConsoleEntry::new(
-            LogLevel::Error,
+            LogLevel::Warning,
             "Missing impulse response - using fallback",
         ));
         Self {
