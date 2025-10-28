@@ -278,6 +278,7 @@ impl Command {
             }
             CommandId::OptionsThemeAuto => Command::Options(OptionsCommand::Theme(ThemeMode::Auto)),
             CommandId::OptionsCpuMeter => Command::Options(OptionsCommand::CpuMeter),
+            CommandId::OptionsMidiDevices => Command::Options(OptionsCommand::MidiDevices),
             CommandId::HelpAbout => Command::Help(HelpCommand::About),
             CommandId::HelpOpenLogs => Command::Help(HelpCommand::OpenLogsFolder),
             CommandId::HelpUserManual => Command::Help(HelpCommand::UserManual),

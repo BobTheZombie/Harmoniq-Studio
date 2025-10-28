@@ -12,6 +12,7 @@ harmoniq-ui = { path = "../harmoniq-ui" }
 harmoniq-plugin-db = { path = "../harmoniq-plugin-db" }
 harmoniq-plugin-scanner = { path = "../harmoniq-plugin-scanner" }
 harmoniq-rt = { path = "../harmoniq-rt" }
+harmoniq-midi = { path = "../harmoniq-midi" }
 anyhow.workspace = true
 clap.workspace = true
 eframe = { version = "0.27", default-features = false, features = ["wgpu", "accesskit", "default_fonts", "wayland", "x11"] }
