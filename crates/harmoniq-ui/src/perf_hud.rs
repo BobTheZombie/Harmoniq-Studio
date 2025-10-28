@@ -1,4 +1,4 @@
-use egui::{self, Align2, Frame, Rounding, Stroke, Vec2};
+use egui::{self, Align2, Frame, Margin, Rounding, Stroke, Vec2};
 
 /// Non-blocking performance HUD. Does not intercept input.
 /// Show a small chip; on hover or when `expanded` is true, show full panel.
@@ -36,7 +36,7 @@ pub fn perf_hud(ctx: &egui::Context, st: &mut PerfHudState, m: &PerfMetrics) {
     let mut hovered = false;
 
     // Small chip (top-right)
-    egui::Area::new("perf_hud_chip")
+    egui::Area::new("perf_hud_chip".into())
         .anchor(Align2::RIGHT_TOP, Vec2::new(-8.0, 8.0))
         .order(egui::Order::Foreground)
         .interactable(false)
@@ -45,8 +45,8 @@ pub fn perf_hud(ctx: &egui::Context, st: &mut PerfHudState, m: &PerfMetrics) {
                 .fill(ui.visuals().extreme_bg_color.gamma_multiply(0.92))
                 .rounding(Rounding::same(10.0))
                 .stroke(Stroke::new(1.0, ui.visuals().faint_bg_color))
-                .inner_margin(egui::style::Margin::symmetric(10.0, 5.0));
-            egui::containers::Container::new(frame).show(ui, |ui| {
+                .inner_margin(Margin::symmetric(10.0, 5.0));
+            frame.show(ui, |ui| {
                 let pct = (m.audio_load * 100.0).clamp(0.0, 999.0);
                 let bar = egui::ProgressBar::new(m.audio_load)
                     .desired_width(100.0)
@@ -61,7 +61,7 @@ pub fn perf_hud(ctx: &egui::Context, st: &mut PerfHudState, m: &PerfMetrics) {
 
     // Expanded card (center-top), only when hovered or forced
     if st.expanded || hovered {
-        egui::Area::new("perf_hud_card")
+        egui::Area::new("perf_hud_card".into())
             .anchor(Align2::CENTER_TOP, Vec2::new(0.0, 48.0))
             .order(egui::Order::Foreground)
             .interactable(false)
@@ -70,8 +70,8 @@ pub fn perf_hud(ctx: &egui::Context, st: &mut PerfHudState, m: &PerfMetrics) {
                     .fill(ui.visuals().extreme_bg_color.gamma_multiply(0.95))
                     .rounding(Rounding::same(12.0))
                     .stroke(Stroke::new(1.0, ui.visuals().faint_bg_color))
-                    .inner_margin(egui::style::Margin::symmetric(14.0, 10.0));
-                egui::containers::Container::new(frame).show(ui, |ui| {
+                    .inner_margin(Margin::symmetric(14.0, 10.0));
+                frame.show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Audio Load").strong());
                         let pct = (m.audio_load * 100.0).clamp(0.0, 999.0);
