@@ -93,8 +93,9 @@ impl MidiDevicesPanel {
                 }
 
                 let mut remove_index = None;
+                let available_ports = self.available_ports.clone();
                 for (index, input) in self.settings.inputs.iter_mut().enumerate() {
-                    self.ensure_port_valid(input);
+                    Self::ensure_port_valid(&available_ports, input);
                     ui.group(|ui| {
                         ui.horizontal(|ui| {
                             ui.checkbox(&mut input.enabled, "Enabled");
@@ -121,7 +122,7 @@ impl MidiDevicesPanel {
                             .spacing([12.0, 6.0])
                             .show(ui, |grid| {
                                 grid.label("Port");
-                                self.port_selector(grid, input, index);
+                                Self::port_selector(&available_ports, grid, input, index);
 
                                 grid.label("Transpose");
                                 grid.add(
@@ -129,7 +130,7 @@ impl MidiDevicesPanel {
                                 );
 
                                 grid.label("Channel filter");
-                                self.channel_filter_selector(grid, input, index);
+                                Self::channel_filter_selector(grid, input, index);
 
                                 grid.label("MPE mode");
                                 grid.checkbox(&mut input.mpe, "Enable MPE messages");
@@ -187,25 +188,29 @@ impl MidiDevicesPanel {
         self.pending_refresh = false;
     }
 
-    fn ensure_port_valid(&self, input: &mut MidiInputConfig) {
-        if self.available_ports.is_empty() {
+    fn ensure_port_valid(available_ports: &[String], input: &mut MidiInputConfig) {
+        if available_ports.is_empty() {
             return;
         }
 
-        if input.port_index >= self.available_ports.len() {
-            input.port_index = self.available_ports.len() - 1;
+        if input.port_index >= available_ports.len() {
+            input.port_index = available_ports.len() - 1;
         }
 
         if input.name.is_empty() {
-            if let Some(name) = self.available_ports.get(input.port_index) {
+            if let Some(name) = available_ports.get(input.port_index) {
                 input.name = name.clone();
             }
         }
     }
 
-    fn port_selector(&self, ui: &mut egui::Ui, input: &mut MidiInputConfig, idx: usize) {
-        let selected_label = self
-            .available_ports
+    fn port_selector(
+        available_ports: &[String],
+        ui: &mut egui::Ui,
+        input: &mut MidiInputConfig,
+        idx: usize,
+    ) {
+        let selected_label = available_ports
             .get(input.port_index)
             .map(|name| format!("#{:02} {name}", input.port_index))
             .unwrap_or_else(|| format!("Port {}", input.port_index));
@@ -213,7 +218,7 @@ impl MidiDevicesPanel {
         ComboBox::from_id_source(("midi_port", idx))
             .selected_text(selected_label)
             .show_ui(ui, |combo| {
-                for (port_index, name) in self.available_ports.iter().enumerate() {
+                for (port_index, name) in available_ports.iter().enumerate() {
                     if combo
                         .selectable_label(
                             input.port_index == port_index,
@@ -228,7 +233,7 @@ impl MidiDevicesPanel {
             });
     }
 
-    fn channel_filter_selector(&self, ui: &mut egui::Ui, input: &mut MidiInputConfig, idx: usize) {
+    fn channel_filter_selector(ui: &mut egui::Ui, input: &mut MidiInputConfig, idx: usize) {
         let selected = input.channel_filter.unwrap_or(0);
         let label = if selected == 0 {
             "All channels".to_string()
