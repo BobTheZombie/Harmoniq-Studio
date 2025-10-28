@@ -30,7 +30,7 @@ use harmoniq_engine::{
 };
 use harmoniq_midi::config::{self as midi_config, MidiSettings};
 use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth};
-use harmoniq_ui::{HarmoniqPalette, HarmoniqTheme};
+use harmoniq_ui::{startup_banner, HarmoniqPalette, HarmoniqTheme};
 use hound::{SampleFormat, WavSpec, WavWriter};
 use parking_lot::Mutex;
 use rtrb::Consumer;
@@ -1407,6 +1407,10 @@ struct HarmoniqStudioApp {
     engine_load_pct: u16,
     last_xruns: u32,
     last_block_warn: Option<u32>,
+    startup_visible: bool,
+    startup_progress: Option<f32>,
+    startup_msg: String,
+    startup_shown_at: Option<Instant>,
 }
 
 impl HarmoniqStudioApp {
@@ -1478,8 +1482,10 @@ impl HarmoniqStudioApp {
             .shared();
         let plugin_scanner = PluginScanner::new(Arc::clone(&plugin_registry));
         let mut plugin_manager = PluginManagerPanel::new(plugin_registry, plugin_scanner);
+        let mut startup_message = None;
         if plugin_manager.is_empty() {
             plugin_manager.request_scan();
+            startup_message = Some("Scanning plugins…".to_string());
         }
         let input_focus = InputFocus::default();
         let audio_settings =
@@ -1509,7 +1515,7 @@ impl HarmoniqStudioApp {
             warn!("failed to load floating window layout: {err:?}");
         }
 
-        Ok(Self {
+        let mut app = Self {
             theme,
             icons,
             dock_style,
@@ -1571,7 +1577,17 @@ impl HarmoniqStudioApp {
             engine_load_pct: 0,
             last_xruns: 0,
             last_block_warn: None,
-        })
+            startup_visible: false,
+            startup_progress: None,
+            startup_msg: String::new(),
+            startup_shown_at: None,
+        };
+
+        if let Some(msg) = startup_message {
+            app.show_startup(msg);
+        }
+
+        Ok(app)
     }
 
     fn create_dock_style(base_style: &egui::Style, palette: &HarmoniqPalette) -> DockStyle {
@@ -1625,6 +1641,28 @@ impl HarmoniqStudioApp {
         style.overlay.hovered_leaf_highlight.stroke = Stroke::new(1.0, palette.accent);
 
         style
+    }
+
+    fn show_startup(&mut self, msg: impl Into<String>) {
+        self.startup_visible = true;
+        self.startup_progress = Some(0.0);
+        self.startup_msg = msg.into();
+        self.startup_shown_at = Some(Instant::now());
+    }
+
+    fn set_startup_progress(&mut self, progress: f32) {
+        let clamped = progress.clamp(0.0, 1.0);
+        self.startup_progress = Some(clamped);
+        if clamped >= 1.0 {
+            self.hide_startup();
+        }
+    }
+
+    fn hide_startup(&mut self) {
+        self.startup_visible = false;
+        self.startup_progress = None;
+        self.startup_msg.clear();
+        self.startup_shown_at = None;
     }
 
     fn send_command(&mut self, command: EngineCommand) {
@@ -2371,6 +2409,23 @@ impl App for HarmoniqStudioApp {
         self.inspector
             .sync_selection(self.playlist.current_selection());
         self.plugin_manager.tick();
+        if let Some(status) = self.plugin_manager.progress() {
+            let total = status.total.max(1);
+            let completed = status.completed.min(total);
+            let fraction = completed as f32 / total as f32;
+            self.startup_msg = status.message.clone();
+            if self.startup_visible {
+                self.set_startup_progress(fraction);
+            } else {
+                self.startup_progress = Some(fraction);
+            }
+        } else if self.startup_visible && !self.plugin_manager.is_scanning() {
+            self.hide_startup();
+        } else if !self.plugin_manager.is_scanning() {
+            self.startup_progress = None;
+            self.startup_msg.clear();
+            self.startup_shown_at = None;
+        }
 
         let palette = self.theme.palette().clone();
         let stats = self.engine_runner.drain_metrics();
@@ -2594,6 +2649,28 @@ impl App for HarmoniqStudioApp {
 
         self.layout.store_dock(&self.dock_state);
         self.layout.maybe_save();
+
+        if self.startup_visible && self.startup_progress.is_none() {
+            if let Some(shown_at) = self.startup_shown_at {
+                if shown_at.elapsed() > Duration::from_secs(5) {
+                    self.hide_startup();
+                }
+            } else {
+                self.startup_shown_at = Some(Instant::now());
+            }
+        }
+
+        let was_visible = self.startup_visible;
+        startup_banner(
+            ctx,
+            &mut self.startup_visible,
+            self.startup_progress,
+            &self.startup_msg,
+        );
+        if was_visible && !self.startup_visible {
+            self.startup_progress = None;
+            self.startup_shown_at = None;
+        }
 
         self.notices.paint(ctx);
 
