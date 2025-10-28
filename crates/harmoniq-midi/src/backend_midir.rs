@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Context;
-use midir::{Ignore, MidiInput, MidiInputConnection};
+use midir::{Ignore, MidiInput, MidiInputConnection, MidiInputPort};
 
 use crate::device::{MidiBackend, MidiCallback, MidiDeviceId, MidiEvent, MidiMessage, MidiSource};
 use crate::MidiTimestamp;
@@ -38,8 +38,7 @@ impl MidiBackend for MidirBackend {
     fn enumerate(&self) -> anyhow::Result<Vec<String>> {
         let input = MidiInput::new("harmoniq-midi").context("initialise midir for enumeration")?;
         let mut names = Vec::new();
-        for index in 0..input.port_count() {
-            let port = input.port(index);
+        for (index, port) in input.ports().into_iter().enumerate() {
             let name = input
                 .port_name(&port)
                 .unwrap_or_else(|_| format!("Port {index}"));
@@ -56,12 +55,12 @@ impl MidiBackend for MidirBackend {
     ) -> anyhow::Result<MidiDeviceId> {
         let mut input = MidiInput::new("harmoniq-midi").context("initialise midir for input")?;
         input.ignore(Ignore::None);
-        if port_index >= input.port_count() {
+        let ports: Vec<MidiInputPort> = input.ports();
+        let Some(port) = ports.get(port_index) else {
             anyhow::bail!("midi port index out of range");
-        }
-        let port = input.port(port_index);
+        };
         let name = input
-            .port_name(&port)
+            .port_name(port)
             .unwrap_or_else(|_| format!("Port {port_index}"));
         let name_arc: Arc<str> = Arc::from(name);
         let id = self.allocate_id();
@@ -69,7 +68,7 @@ impl MidiBackend for MidirBackend {
         let name_for_cb = Arc::clone(&name_arc);
         let connection = input
             .connect(
-                &port,
+                port,
                 "harmoniq-midi-conn",
                 move |_timestamp, message, _| {
                     if message.is_empty() {
@@ -101,7 +100,7 @@ impl MidiBackend for MidirBackend {
                 },
                 (),
             )
-            .context("failed to connect midi input")?;
+            .map_err(|err| anyhow::anyhow!("failed to connect midi input: {err}"))?;
         self.connections.insert(id, connection);
         Ok(id)
     }
