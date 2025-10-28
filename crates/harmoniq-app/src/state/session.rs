@@ -155,15 +155,10 @@ impl Session {
         let id = self.next_pattern_id;
         self.next_pattern_id += 1;
         let pattern = Pattern::new(id, name, bars);
-        let total_steps = pattern.total_16th_steps();
-        for channel in &mut self.channels {
-            channel
-                .steps
-                .entry(id)
-                .or_insert_with(|| vec![false; total_steps])
-                .resize(total_steps, false);
-        }
         self.patterns.push(pattern);
+        for channel in &mut self.channels {
+            self.ensure_steps(channel.id, id);
+        }
         id
     }
 
@@ -176,7 +171,7 @@ impl Session {
     }
 
     pub fn add_sample_channel(&mut self, name: String, path: String) -> ChannelId {
-        let channel = self.add_channel(name, ChannelKind::Sample, Some(path.clone()));
+        let mut channel = self.add_channel(name, ChannelKind::Sample, Some(path.clone()));
         if let Some(ch) = self.channel_mut(channel) {
             ch.target_plugin_uid = Some(path);
         }
@@ -193,15 +188,10 @@ impl Session {
         self.next_channel_id += 1;
         let mut channel = Channel::new(id, name, kind);
         channel.target_plugin_uid = plugin_uid;
-        for pattern in &self.patterns {
-            let total_steps = pattern.total_16th_steps();
-            channel
-                .steps
-                .entry(pattern.id)
-                .or_insert_with(|| vec![false; total_steps])
-                .resize(total_steps, false);
-        }
         self.channels.push(channel);
+        for pattern in &self.patterns {
+            self.ensure_steps(id, pattern.id);
+        }
         id
     }
 
