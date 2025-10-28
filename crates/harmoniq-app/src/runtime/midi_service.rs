@@ -78,7 +78,7 @@ impl MidiService {
     pub fn update_settings(&mut self, new_settings: MidiSettings) {
         if new_settings != self.settings {
             self.settings = new_settings;
-            if let Ok(mut mgr) = self.manager.try_lock() {
+            if let Some(mut mgr) = self.manager.try_lock() {
                 config::apply_settings(&mut mgr, &self.settings);
             }
             config::save(&self.settings);
@@ -87,7 +87,7 @@ impl MidiService {
 
     /// Periodic maintenance.
     pub fn tick(&mut self) {
-        if let Ok(mgr) = self.manager.try_lock() {
+        if let Some(mgr) = self.manager.try_lock() {
             let mut snapshot = self.settings.clone();
             config::capture_settings(&mgr, &mut snapshot);
             if snapshot != self.settings {

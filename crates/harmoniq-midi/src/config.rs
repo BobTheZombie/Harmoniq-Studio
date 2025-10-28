@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::device::MidiInputConfig;
 
 /// Persisted MIDI settings stored on disk.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MidiSettings {
     /// Configured hardware inputs.
     pub inputs: Vec<MidiInputConfig>,
