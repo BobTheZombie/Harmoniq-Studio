@@ -28,6 +28,7 @@ use harmoniq_engine::{
     AudioBuffer, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine,
     PluginId, TransportState,
 };
+use harmoniq_midi::config::{self as midi_config, MidiSettings};
 use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth};
 use harmoniq_ui::{HarmoniqPalette, HarmoniqTheme};
 use hound::{SampleFormat, WavSpec, WavWriter};
@@ -76,6 +77,7 @@ use ui::{
     layout::LayoutState,
     menu_bar::{MenuBarSnapshot, MenuBarState},
     metrics_view::MetricsHud,
+    midi::devices_panel::MidiDevicesPanel,
     mixer::MixerView,
     notifications::Notifications,
     piano_roll::PianoRollPane,
@@ -1365,6 +1367,8 @@ struct HarmoniqStudioApp {
     floating_config_path: PathBuf,
     plugin_manager: PluginManagerPanel,
     audio_settings: AudioSettingsPanel,
+    midi_devices: MidiDevicesPanel,
+    midi_settings: MidiSettings,
     sound_test: SoundTestSample,
     metrics_hud: MetricsHud,
     event_bus: EventBus,
@@ -1480,6 +1484,8 @@ impl HarmoniqStudioApp {
         let input_focus = InputFocus::default();
         let audio_settings =
             AudioSettingsPanel::new(engine_runner.config(), engine_runner.runtime_options());
+        let midi_settings = midi_config::load();
+        let midi_devices = MidiDevicesPanel::default();
         let sound_test = SoundTestSample::load().context("failed to load sound test sample")?;
         let shortcuts = ShortcutMap::load();
         let (command_sender, command_receiver) = command_channel(256);
@@ -1522,6 +1528,8 @@ impl HarmoniqStudioApp {
             floating_config_path,
             plugin_manager,
             audio_settings,
+            midi_devices,
+            midi_settings,
             sound_test,
             metrics_hud: MetricsHud::new(),
             event_bus,
@@ -2134,6 +2142,7 @@ impl CommandHandler for HarmoniqStudioApp {
                 MidiCommand::OpenInputDevicePicker => {
                     self.console
                         .log(LogLevel::Info, "Open MIDI input device picker");
+                    self.midi_devices.open(self.midi_settings.clone());
                 }
                 MidiCommand::SelectInputDevice(device) => {
                     self.selected_midi_input = Some(device.clone());
@@ -2465,6 +2474,13 @@ impl App for HarmoniqStudioApp {
                 error!("{}", message);
             }
             self.status_message = Some(message);
+        }
+
+        if let Some(updated) = self.midi_devices.show(ctx) {
+            self.midi_settings = updated;
+            midi_config::save(&self.midi_settings);
+            self.console
+                .log(LogLevel::Info, "MIDI device configuration saved");
         }
 
         let active_audio_summary =
