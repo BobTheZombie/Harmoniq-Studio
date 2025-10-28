@@ -12,7 +12,7 @@ pub fn startup_banner(ctx: &egui::Context, visible: &mut bool, progress: Option<
         }
     }
 
-    egui::Area::new("startup_banner")
+    egui::Area::new("startup_banner".into())
         .anchor(Align2::CENTER_TOP, egui::vec2(0.0, 32.0))
         .order(egui::Order::Tooltip)
         .interactable(false)
@@ -20,7 +20,7 @@ pub fn startup_banner(ctx: &egui::Context, visible: &mut bool, progress: Option<
             let visuals = ui.visuals().clone();
             let rounding = visuals.window_rounding;
             let stroke = visuals.widgets.noninteractive.bg_stroke;
-            let fill = visuals.popup_fill;
+            let fill = visuals.window_fill();
 
             egui::Frame::none()
                 .fill(fill)
