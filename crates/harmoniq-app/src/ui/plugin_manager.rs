@@ -94,6 +94,14 @@ impl PluginManagerPanel {
         }
     }
 
+    pub fn progress(&self) -> Option<&ScanStatus> {
+        self.progress.as_ref()
+    }
+
+    pub fn is_scanning(&self) -> bool {
+        self.scan_handle.is_some()
+    }
+
     pub fn show(&mut self, ctx: &egui::Context, open: &mut bool) {
         egui::Window::new("Plugin Manager")
             .open(open)
