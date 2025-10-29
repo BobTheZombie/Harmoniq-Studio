@@ -38,5 +38,7 @@ pub trait AudioBackend {
     fn stop(&mut self);
 }
 
-#[cfg(feature = "openasio")]
+pub mod safety;
+
+#[cfg(all(target_os = "linux", feature = "openasio_gpl"))]
 pub mod openasio;

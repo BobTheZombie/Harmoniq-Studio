@@ -21,7 +21,7 @@ harmoniq-dsp = { path = "../harmoniq-dsp" }
 harmoniq-rt = { path = "../harmoniq-rt" }
 arrayvec = "0.7"
 cpal = { version = "0.16", optional = true }
-openasio = { git = "https://github.com/BobTheZombie/OpenASIO-SDK", package = "openasio", optional = true }
+openasio_sdk = { git = "https://github.com/BobTheZombie/OpenASIO-SDK", package = "openasio", optional = true }
 crossbeam-queue.workspace = true
 ringbuf.workspace = true
 rtrb = "0.3"
@@ -45,11 +45,12 @@ vst2 = []
 vst3 = []
 au = []
 rtas = []
-openasio = ["dep:openasio"]
+openasio_gpl = ["dep:openasio_sdk"]
+openasio = ["openasio_gpl"]
 simd = ["harmoniq-dsp/simd"]
 fast-math = ["harmoniq-dsp/fast-math"]
 no-denormals = ["harmoniq-dsp/no-denormals"]
-ultra = ["native", "openasio", "no-denormals", "core_affinity"]
+ultra = ["native", "openasio_gpl", "no-denormals", "core_affinity"]
 fuzzing = []
 
 [dev-dependencies]
