@@ -77,7 +77,7 @@ impl Default for Sub808Params {
                 },
             )
             .with_unit(" s")
-            .with_value_to_string(formatters::v2s_f32_2),
+            .with_value_to_string(formatters::v2s_f32_rounded(2)),
             vel_sens: FloatParam::new("VelSens", 0.7, FloatRange::Linear { min: 0.0, max: 1.0 }),
 
             thump_amt_st: FloatParam::new(
@@ -99,7 +99,7 @@ impl Default for Sub808Params {
                 },
             )
             .with_unit(" s")
-            .with_value_to_string(formatters::v2s_f32_3),
+            .with_value_to_string(formatters::v2s_f32_rounded(3)),
 
             glide_ms: FloatParam::new(
                 "Glide",
@@ -130,7 +130,7 @@ impl Default for Sub808Params {
                 },
             )
             .with_unit(" Hz")
-            .with_value_to_string(formatters::v2s_f32_0),
+            .with_value_to_string(formatters::v2s_f32_rounded(0)),
 
             voices: IntParam::new(
                 "Voices",
@@ -173,7 +173,7 @@ impl Plugin for Sub808 {
     const VERSION: &'static str = env!("CARGO_PKG_VERSION");
     const AUDIO_IO_LAYOUTS: &'static [AudioIOLayout] = &[AudioIOLayout {
         main_input_channels: None,
-        main_output_channels: Some(2),
+        main_output_channels: Some(new_nonzero_u32(2)),
         ..AudioIOLayout::const_default()
     }];
 
@@ -185,8 +185,8 @@ impl Plugin for Sub808 {
     }
 
     #[cfg(feature = "editor")]
-    fn editor(&self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        Some(ui::editor(self.params.clone()))
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        ui::editor(self.params.clone())
     }
 
     fn initialize(
@@ -233,7 +233,7 @@ impl Plugin for Sub808 {
         while let Some(event) = context.next_event() {
             match event {
                 NoteEvent::NoteOn { note, velocity, .. } => {
-                    let vel = (velocity as f32).clamp(0.0, 1.0);
+                    let vel = velocity.clamp(0.0, 1.0);
                     if mono {
                         // Use voice 0, retrigger with glide
                         self.voices[0].note_on(
@@ -290,9 +290,7 @@ impl Plugin for Sub808 {
                     }
                 }
                 NoteEvent::PolyPressure { .. } => {}
-                NoteEvent::Choke {
-                    note_id: _, note, ..
-                } => {
+                NoteEvent::Choke { note, .. } => {
                     if mono {
                         if self.voices[0].current_note == Some(note) {
                             self.voices[0].kill();
@@ -307,7 +305,7 @@ impl Plugin for Sub808 {
                 }
                 NoteEvent::MidiCC { cc, value, .. } => {
                     if cc == 64 {
-                        self.sustain = value >= 64;
+                        self.sustain = value >= 0.5;
                     }
                 }
                 _ => {}
@@ -315,8 +313,9 @@ impl Plugin for Sub808 {
         }
 
         // DSP: render frames
-        let mut out = buffer.as_slice();
-        let num_samples = out.samples();
+        let num_samples = buffer.samples();
+        let num_channels = buffer.channels();
+        let out = buffer.as_slice();
 
         // simple one-pole LP after drive, per channel
         let g = (1.0 - (-2.0 * std::f32::consts::PI * tone_hz / sr).exp()).clamp(0.0, 1.0);
@@ -338,9 +337,9 @@ impl Plugin for Sub808 {
             // output gain
             let out_s = (lp_l * level).clamp(-1.0, 1.0);
             // write stereo
-            out.write(0, s, out_s);
-            if out.channels() > 1 {
-                out.write(1, s, out_s);
+            out[0][s] = out_s;
+            if num_channels > 1 {
+                out[1][s] = out_s;
             }
         }
 
@@ -358,6 +357,8 @@ fn fast_tanh(x: f32) -> f32 {
 impl ClapPlugin for Sub808 {
     const CLAP_ID: &'static str = "com.harmoniq.sub808";
     const CLAP_DESCRIPTION: Option<&'static str> = Some("808-style sub-bass synthesizer");
+    const CLAP_MANUAL_URL: Option<&'static str> = None;
+    const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[
         ClapFeature::Synthesizer,
         ClapFeature::Mono,
