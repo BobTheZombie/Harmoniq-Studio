@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Parser;
 use harmoniq_plugin_db::{PluginFormat, PluginStore};
@@ -43,8 +44,8 @@ fn default_formats() -> Vec<PluginFormat> {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let path = PluginStore::default_path()?;
-    let store = PluginStore::open(path)?;
-    let scanner = Scanner::new(store);
+    let store = Arc::new(PluginStore::open(path)?);
+    let scanner = Scanner::new(Arc::clone(&store));
     let mut options = ScanOptions::default();
     options.formats = args.formats;
     options.extra_paths = args.extra_paths;

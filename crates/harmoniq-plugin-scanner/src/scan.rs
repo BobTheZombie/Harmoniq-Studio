@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 
@@ -28,11 +29,11 @@ impl Default for ScanOptions {
 }
 
 pub struct Scanner {
-    store: PluginStore,
+    store: Arc<PluginStore>,
 }
 
 impl Scanner {
-    pub fn new(store: PluginStore) -> Self {
+    pub fn new(store: Arc<PluginStore>) -> Self {
         Self { store }
     }
 
@@ -74,8 +75,8 @@ mod tests {
         std::fs::create_dir_all(&clap_root).unwrap();
         let fake_plugin = clap_root.join("test.clap");
         std::fs::write(&fake_plugin, "").unwrap();
-        let store = PluginStore::open(dir.path().join("db.json")).unwrap();
-        let scanner = Scanner::new(store);
+        let store = Arc::new(PluginStore::open(dir.path().join("db.json")).unwrap());
+        let scanner = Scanner::new(Arc::clone(&store));
         let mut options = ScanOptions::default();
         options.formats = vec![PluginFormat::Clap];
         options.extra_paths.push(clap_root.clone());

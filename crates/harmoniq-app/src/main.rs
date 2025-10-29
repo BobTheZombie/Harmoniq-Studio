@@ -29,6 +29,8 @@ use harmoniq_engine::{
     PluginId, TransportState,
 };
 use harmoniq_midi::config::{self as midi_config, MidiSettings};
+use harmoniq_plugin_db::PluginStore;
+use harmoniq_plugin_scanner::Scanner as PluginBrowserScanner;
 use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth};
 use harmoniq_ui::{
     perf_hud::{self, PerfHudState, PerfMetrics},
@@ -88,6 +90,8 @@ use ui::{
     plugin_manager::{
         FeedbackKind as PluginFeedbackKind, PluginManagerFeedback, PluginManagerPanel,
     },
+    plugins::library_ui::{LibraryAction, PluginLibraryUi},
+    plugins::scanner_ui::ScannerUi,
     shortcuts::ShortcutMap,
     transport::{TransportBar, TransportSnapshot},
     workspace::{build_default_workspace, WorkspacePane},
@@ -1369,6 +1373,10 @@ struct HarmoniqStudioApp {
     console: ConsolePane,
     floating: FloatingWindows,
     floating_config_path: PathBuf,
+    plugin_store: Arc<PluginStore>,
+    plugin_library: PluginLibraryUi,
+    plugin_scanner_ui: ScannerUi,
+    plugin_scanner_client: PluginBrowserScanner,
     plugin_manager: PluginManagerPanel,
     audio_settings: AudioSettingsPanel,
     midi_devices: MidiDevicesPanel,
@@ -1487,6 +1495,14 @@ impl HarmoniqStudioApp {
         let playlist = PlaylistPane::default();
         let inspector = InspectorPane::new();
         let console = ConsolePane::default();
+        let plugin_store_path =
+            PluginStore::default_path().context("failed to locate plugin database path")?;
+        let plugin_store = Arc::new(
+            PluginStore::open(plugin_store_path).context("failed to open plugin database")?,
+        );
+        let plugin_library = PluginLibraryUi::new(plugin_store.as_ref());
+        let plugin_scanner_client = PluginBrowserScanner::new(Arc::clone(&plugin_store));
+        let plugin_scanner_ui = ScannerUi::default();
         let plugin_registry = PluginRegistry::load_default()
             .context("failed to load plugin registry cache")?
             .shared();
@@ -1542,6 +1558,10 @@ impl HarmoniqStudioApp {
             console,
             floating,
             floating_config_path,
+            plugin_store,
+            plugin_library,
+            plugin_scanner_ui,
+            plugin_scanner_client,
             plugin_manager,
             audio_settings,
             midi_devices,
@@ -1931,6 +1951,33 @@ impl HarmoniqStudioApp {
         ctx.cpu_usage = self.mixer.cpu_estimate();
         ctx.clock = self.transport_clock;
         ctx.master_meter = self.mixer.master_meter();
+    }
+
+    fn handle_library_action(&mut self, action: LibraryAction) {
+        match action {
+            LibraryAction::AddInstrument(entry) => {
+                let message = format!("Instrument '{}' ready to insert", entry.name);
+                self.console
+                    .log(LogLevel::Info, format!("Queued instrument {}", entry.name));
+                self.status_message = Some(message);
+            }
+            LibraryAction::AddChannelEffect(entry) => {
+                let message = format!("Effect '{}' queued for channel slot", entry.name);
+                self.console.log(
+                    LogLevel::Info,
+                    format!("Channel effect {} queued", entry.name),
+                );
+                self.status_message = Some(message);
+            }
+            LibraryAction::AddMixerInsert(entry) => {
+                let message = format!("Effect '{}' ready for mixer insert", entry.name);
+                self.console.log(
+                    LogLevel::Info,
+                    format!("Mixer insert {} queued", entry.name),
+                );
+                self.status_message = Some(message);
+            }
+        }
     }
 
     fn floating_defaults(&self, kind: &FloatingKind) -> (egui::Pos2, egui::Vec2, String) {
@@ -2583,6 +2630,46 @@ impl App for HarmoniqStudioApp {
                     .style(dock_style)
                     .show_inside(ui, &mut tab_viewer);
             });
+
+        if self.menu.plugins_menu.scanner_open {
+            let mut scanner_open = true;
+            egui::Window::new("Add Plugins")
+                .open(&mut scanner_open)
+                .resizable(true)
+                .default_width(420.0)
+                .show(ctx, |ui| {
+                    if self
+                        .plugin_scanner_ui
+                        .run_ui(ui, &self.plugin_scanner_client)
+                    {
+                        self.plugin_library.refresh(self.plugin_store.as_ref());
+                        let count = self.plugin_scanner_ui.result_count();
+                        self.status_message = Some(format!(
+                            "Plugin scan complete – indexed {} plugin(s)",
+                            count
+                        ));
+                    }
+                });
+            self.menu.plugins_menu.scanner_open = scanner_open;
+        }
+
+        if self.menu.plugins_menu.library_open {
+            let mut library_open = true;
+            let mut pending_action = None;
+            egui::Window::new("Plugin Library")
+                .open(&mut library_open)
+                .resizable(true)
+                .default_width(720.0)
+                .default_height(480.0)
+                .show(ctx, |ui| {
+                    self.plugin_library
+                        .show(ui, |action| pending_action = Some(action));
+                });
+            if let Some(action) = pending_action {
+                self.handle_library_action(action);
+            }
+            self.menu.plugins_menu.library_open = library_open;
+        }
 
         let open_manager = &mut self.menu.plugins_menu.plugin_manager_open;
         self.plugin_manager.show(ctx, open_manager);
