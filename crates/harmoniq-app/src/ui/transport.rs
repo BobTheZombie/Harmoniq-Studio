@@ -2,8 +2,38 @@ use eframe::egui::{self, RichText};
 use harmoniq_engine::TransportState;
 use harmoniq_ui::HarmoniqPalette;
 
+use crate::ui::command_dispatch::CommandSender;
+use crate::ui::commands::{Command, ViewCommand};
 use crate::ui::event_bus::{AppEvent, EventBus, TransportEvent};
 use crate::{AppIcons, TimeSignature, TransportClock};
+
+/// Push the cursor so that the *next* widget starts at the horizontal midline of the transport bar.
+/// This keeps placement stable across window resizes and regardless of what was drawn before it.
+fn push_to_toolbar_midline(ui: &mut egui::Ui) {
+    let cursor_x = ui.cursor().min.x;
+    let target_x = ui.max_rect().center().x;
+    if target_x > cursor_x {
+        ui.add_space(target_x - cursor_x);
+    }
+}
+
+/// Draw the mixer toggle button (icon) and dispatch a toggle command when activated.
+fn mixer_toggle_button(ui: &mut egui::Ui, commands: &CommandSender, mixer_visible: bool) {
+    let mut label = egui::RichText::new("🎚").size(18.0);
+    if mixer_visible {
+        label = label.strong();
+    }
+    let button = egui::Button::new(label)
+        .min_size(egui::vec2(28.0, 22.0))
+        .wrap(false);
+    if ui
+        .add(button)
+        .on_hover_text("Show/Hide Mixer (F9)")
+        .clicked()
+    {
+        let _ = commands.try_send(Command::View(ViewCommand::ToggleMixer));
+    }
+}
 
 #[derive(Default)]
 pub struct TransportBar;
@@ -19,6 +49,7 @@ impl TransportBar {
         palette: &HarmoniqPalette,
         icons: &AppIcons,
         event_bus: &EventBus,
+        commands: &CommandSender,
         snapshot: TransportSnapshot,
     ) {
         ui.horizontal(|ui| {
@@ -132,6 +163,9 @@ impl TransportBar {
                 event_bus.publish(AppEvent::TogglePatternMode);
             }
 
+            push_to_toolbar_midline(ui);
+            mixer_toggle_button(ui, commands, snapshot.mixer_visible);
+
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     RichText::new(snapshot.clock.format())
@@ -151,4 +185,5 @@ pub struct TransportSnapshot {
     pub clock: TransportClock,
     pub metronome: bool,
     pub pattern_mode: bool,
+    pub mixer_visible: bool,
 }
