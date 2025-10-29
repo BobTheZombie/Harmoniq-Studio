@@ -63,6 +63,9 @@ use audio::{
     SoundTestSample,
 };
 use config::qwerty::{QwertyConfig, VelocityCurveSetting};
+use harmoniq_pianoroll::state::PianoRollState as PianoRollWidgetState;
+use harmoniq_pianoroll::ui::{ScaleGuide as PianoRollScaleGuide, Snap as PianoRollSnap};
+use harmoniq_pianoroll::{self as pianoroll_widget, PianoRollProps as PianoRollWidgetProps};
 use harmoniq_playlist::{
     state::{Playlist as PlaylistState, Snap as PlaylistSnap},
     ui::{render as render_playlist_window, PlaylistProps as PlaylistUiProps},
@@ -426,6 +429,7 @@ pub(crate) struct AppIcons {
     settings: egui::TextureHandle,
     mixer: egui::TextureHandle,
     playlist: egui::TextureHandle,
+    piano_roll: egui::TextureHandle,
 }
 
 impl AppIcons {
@@ -505,6 +509,11 @@ impl AppIcons {
                 ctx,
                 "icon_playlist",
                 include_bytes!("../../../resources/icons/playlist.svg"),
+            )?,
+            piano_roll: load_svg(
+                ctx,
+                "icon_piano_roll",
+                include_bytes!("../../../resources/icons/pianoroll.svg"),
             )?,
         })
     }
@@ -1440,6 +1449,8 @@ struct HarmoniqStudioApp {
     playlist_view: PlaylistState,
     playlist_snap: PlaylistSnap,
     piano_roll_hidden: bool,
+    piano_roll_window_open: bool,
+    piano_roll_widget: PianoRollWidgetState,
     fullscreen: bool,
     fullscreen_dirty: bool,
     last_screen_rect: egui::Rect,
@@ -1626,6 +1637,8 @@ impl HarmoniqStudioApp {
             playlist_view: PlaylistState::new_default(960),
             playlist_snap: PlaylistSnap::N1_4,
             piano_roll_hidden: false,
+            piano_roll_window_open: false,
+            piano_roll_widget: PianoRollWidgetState::default(),
             fullscreen: false,
             fullscreen_dirty: false,
             last_screen_rect: egui::Rect::from_min_size(
@@ -2237,10 +2250,11 @@ impl CommandHandler for HarmoniqStudioApp {
                 }
                 ViewCommand::TogglePianoRoll => {
                     self.piano_roll_hidden = !self.piano_roll_hidden;
-                    let state = if self.piano_roll_hidden {
-                        "hidden"
-                    } else {
+                    self.piano_roll_window_open = !self.piano_roll_hidden;
+                    let state = if self.piano_roll_window_open {
                         "shown"
+                    } else {
+                        "hidden"
                     };
                     self.console
                         .log(LogLevel::Info, format!("Piano Roll {state}"));
@@ -2607,6 +2621,7 @@ impl App for HarmoniqStudioApp {
                     pattern_mode: self.pattern_mode,
                     mixer_visible: self.mixer_window_open,
                     playlist_visible: self.playlist_window_open,
+                    piano_roll_visible: self.piano_roll_window_open,
                 };
                 self.transport_bar.ui(
                     ui,
@@ -2720,6 +2735,46 @@ impl App for HarmoniqStudioApp {
                         import_audio_file: &mut import_audio,
                     };
                     render_playlist_window(ui, props);
+                });
+        }
+
+        if self.piano_roll_window_open {
+            let window_id = egui::Id::new("piano_roll_window");
+            let esc_pressed = ctx.input(|i| {
+                i.key_pressed(Key::Escape)
+                    && !i.modifiers.ctrl
+                    && !i.modifiers.alt
+                    && !i.modifiers.command
+                    && !i.modifiers.shift
+            });
+            let focused_roll =
+                ctx.memory(|mem| mem.focused().is_some_and(|focus| focus == window_id));
+            if esc_pressed && focused_roll {
+                self.piano_roll_window_open = false;
+            }
+
+            egui::Window::new("Piano Roll")
+                .id(window_id)
+                .open(&mut self.piano_roll_window_open)
+                .collapsible(false)
+                .resizable(true)
+                .vscroll(true)
+                .default_size(egui::vec2(980.0, 560.0))
+                .default_pos(egui::pos2(160.0, 100.0))
+                .show(ctx, |ui| {
+                    let mut props = PianoRollWidgetProps {
+                        state: &mut self.piano_roll_widget,
+                        snap: PianoRollSnap::N1_16,
+                        ghost_clip: None,
+                        scale: PianoRollScaleGuide::None,
+                        on_changed: Box::new(|_clip| {
+                            // TODO: route mutations to session persistence/engine bridge.
+                        }),
+                        on_preview: Some(Box::new(|key, velocity| {
+                            tracing::info!("Preview note key={key} velocity={velocity}");
+                        })),
+                    };
+                    pianoroll_widget::render(ui, props);
                 });
         }
 
