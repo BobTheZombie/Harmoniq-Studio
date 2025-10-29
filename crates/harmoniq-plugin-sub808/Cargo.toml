@@ -11,13 +11,12 @@ publish = false
 crate-type = ["cdylib"] # needed for CLAP/VST3 export
 
 [features]
-default = ["clap", "editor"]
-clap = ["nih_plug/clap"]
+default = ["editor"]
 editor = ["nih_plug_egui"]
 
 [dependencies]
-nih_plug = "0.13"
-nih_plug_egui = { version = "0.6", optional = true }
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug", rev = "28b149ec4d62757d0b448809148a0c3ca6e09a95" }
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug", rev = "28b149ec4d62757d0b448809148a0c3ca6e09a95", package = "nih_plug_egui", optional = true }
 
 # small math helpers; avoid std trig in realtime
 fastapprox = "0.3"
