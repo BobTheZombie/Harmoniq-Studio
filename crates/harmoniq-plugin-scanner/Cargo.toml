@@ -19,3 +19,4 @@ harmoniq-plugin-db = { path = "../harmoniq-plugin-db" }
 [dev-dependencies]
 pretty_assertions = "1.4"
 assert_cmd = "2.0"
+tempfile = "3"

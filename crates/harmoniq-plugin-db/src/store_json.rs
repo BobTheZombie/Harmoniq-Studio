@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::entry::PluginEntry;
+use crate::stock::stock_instruments;
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -29,16 +30,22 @@ pub struct PluginStore {
 impl PluginStore {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let path = path.into();
-        let data = if path.exists() {
+        let mut data = if path.exists() {
             let raw = fs::read_to_string(&path)?;
             serde_json::from_str(&raw)?
         } else {
             JsonStoreData::default()
         };
-        Ok(Self {
+        let seeded = seed_stock_instruments(&mut data.plugins);
+        let store = Self {
             path,
             data: Mutex::new(data),
-        })
+        };
+        if seeded {
+            let guard = store.data.lock();
+            store.persist_locked(&guard)?;
+        }
+        Ok(store)
     }
 
     pub fn default_path() -> Result<PathBuf, StoreError> {
@@ -102,6 +109,69 @@ impl PluginStore {
     }
 }
 
+fn seed_stock_instruments(plugins: &mut Vec<PluginEntry>) -> bool {
+    let mut modified = false;
+    for stock in stock_instruments() {
+        if let Some(existing) = plugins
+            .iter_mut()
+            .find(|plugin| plugin.reference == stock.reference)
+        {
+            let mut changed = false;
+            if existing.name != stock.name {
+                existing.name = stock.name.clone();
+                changed = true;
+            }
+            if existing.vendor != stock.vendor {
+                existing.vendor = stock.vendor.clone();
+                changed = true;
+            }
+            if existing.category != stock.category {
+                existing.category = stock.category.clone();
+                changed = true;
+            }
+            if existing.version != stock.version {
+                existing.version = stock.version.clone();
+                changed = true;
+            }
+            if existing.description != stock.description {
+                existing.description = stock.description.clone();
+                changed = true;
+            }
+            if existing.is_instrument != stock.is_instrument {
+                existing.is_instrument = stock.is_instrument;
+                changed = true;
+            }
+            if existing.has_editor != stock.has_editor {
+                existing.has_editor = stock.has_editor;
+                changed = true;
+            }
+            if existing.num_inputs != stock.num_inputs {
+                existing.num_inputs = stock.num_inputs;
+                changed = true;
+            }
+            if existing.num_outputs != stock.num_outputs {
+                existing.num_outputs = stock.num_outputs;
+                changed = true;
+            }
+            if existing.quarantined {
+                existing.quarantined = false;
+                changed = true;
+            }
+            if stock.last_seen > existing.last_seen {
+                existing.last_seen = stock.last_seen;
+                changed = true;
+            }
+            if changed {
+                modified = true;
+            }
+        } else {
+            plugins.push(stock);
+            modified = true;
+        }
+    }
+    modified
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -116,6 +186,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("plugins.json");
         let store = PluginStore::open(&path).unwrap();
+        let initial_len = store.plugins().len();
         let entry = PluginMetadata {
             id: "a".into(),
             name: "A".into(),
@@ -134,8 +205,13 @@ mod tests {
         updated.name = "Updated".into();
         store.upsert(updated.clone()).unwrap();
         let plugins = store.plugins();
-        assert_eq!(plugins.len(), 1);
-        assert_eq!(plugins[0].name, "Updated");
+        let matches: Vec<_> = plugins
+            .into_iter()
+            .filter(|plugin| plugin.reference == updated.reference)
+            .collect();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].name, "Updated");
+        assert!(store.plugins().len() >= initial_len + 1);
     }
 
     #[test]
@@ -143,6 +219,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("plugins.json");
         let store = PluginStore::open(&path).unwrap();
+        let initial_len = store.plugins().len();
         let mut first = PluginMetadata {
             id: "a".into(),
             name: "A".into(),
@@ -177,8 +254,38 @@ mod tests {
         newer.last_seen = Utc::now() + chrono::Duration::seconds(10);
         store.merge(vec![newer.clone()]).unwrap();
         let plugins = store.plugins();
-        assert_eq!(plugins.len(), 2);
-        assert_eq!(plugins[0].name, "Newer");
-        assert_eq!(plugins[1].reference, second.reference);
+        assert!(plugins.len() >= initial_len + 2);
+        let mut filtered: Vec<_> = plugins
+            .into_iter()
+            .filter(|plugin| {
+                plugin.reference == newer.reference || plugin.reference == second.reference
+            })
+            .collect();
+        filtered.sort_by(|a, b| a.reference.id.cmp(&b.reference.id));
+        assert_eq!(filtered.len(), 2);
+        let newer_entry = filtered
+            .iter()
+            .find(|entry| entry.reference == newer.reference)
+            .unwrap();
+        assert_eq!(newer_entry.name, "Newer");
+        let second_entry = filtered
+            .iter()
+            .find(|entry| entry.reference == second.reference)
+            .unwrap();
+        assert_eq!(second_entry.reference, second.reference);
+    }
+
+    #[test]
+    fn stock_instruments_seeded_on_open() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("plugins.json");
+        let store = PluginStore::open(&path).unwrap();
+        let plugins = store.plugins();
+        assert!(plugins
+            .iter()
+            .any(|plugin| plugin.reference.id == "harmoniq.analog"));
+        assert!(plugins
+            .iter()
+            .any(|plugin| plugin.reference.id == "harmoniq.grand_piano_clap"));
     }
 }

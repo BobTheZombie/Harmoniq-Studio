@@ -221,6 +221,23 @@ pub fn scan_plugins<P: PluginProber>(config: &ScanConfig, prober: &P) -> ScanRep
 
 fn classify_candidate(path: &Path) -> Option<(PluginFormat, PathBuf)> {
     if path.is_file() {
+        if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
+            if file_name.eq_ignore_ascii_case("plugin.clap") {
+                if let Some(parent) = path.parent() {
+                    if parent
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .map(|name| name.eq_ignore_ascii_case("Contents"))
+                        .unwrap_or(false)
+                    {
+                        if let Some(grandparent) = parent.parent() {
+                            return Some((PluginFormat::Clap, grandparent.to_path_buf()));
+                        }
+                    }
+                    return Some((PluginFormat::Clap, parent.to_path_buf()));
+                }
+            }
+        }
         match path.extension().and_then(|ext| ext.to_str()) {
             Some("clap") => return Some((PluginFormat::Clap, path.to_path_buf())),
             Some("hqplug") => return Some((PluginFormat::Harmoniq, path.to_path_buf())),
@@ -233,6 +250,9 @@ fn classify_candidate(path: &Path) -> Option<(PluginFormat, PathBuf)> {
         }
     } else if path.is_dir() {
         if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+            if name.starts_with('.') {
+                return None;
+            }
             if name.ends_with(".clap") {
                 return Some((PluginFormat::Clap, path.to_path_buf()));
             }

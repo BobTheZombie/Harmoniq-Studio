@@ -18,7 +18,7 @@ impl Default for ScannerUi {
 }
 
 impl ScannerUi {
-    pub fn run_ui(&mut self, ui: &mut egui::Ui, scanner: &Scanner) {
+    pub fn run_ui(&mut self, ui: &mut egui::Ui, scanner: &Scanner) -> bool {
         ui.heading("Plugin Scanner");
         ui.label("Select which plugin formats to scan for.");
         let mut clap_enabled = self.options.formats.contains(&PluginFormat::Clap);
@@ -45,15 +45,22 @@ impl ScannerUi {
                 harmoniq_enabled,
             );
         }
+        let mut updated = false;
         if ui.button("Run Scan").clicked() {
             if let Ok(entries) = scanner.scan(&self.options) {
                 self.results = entries.iter().map(|entry| entry.name.clone()).collect();
+                updated = true;
             }
         }
         ui.separator();
         for entry in &self.results {
             ui.label(RichText::new(entry).strong());
         }
+        updated
+    }
+
+    pub fn result_count(&self) -> usize {
+        self.results.len()
     }
 }
 
