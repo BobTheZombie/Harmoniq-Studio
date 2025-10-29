@@ -17,7 +17,6 @@ pub mod midi;
 pub mod mixer;
 pub mod notifications;
 pub mod piano_roll;
-pub mod playlist;
 pub mod plugin_manager;
 pub mod plugins;
 pub mod shortcuts;

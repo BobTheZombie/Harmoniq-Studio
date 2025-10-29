@@ -90,7 +90,6 @@ use ui::{
     mixer::MixerView,
     notifications::Notifications,
     piano_roll::PianoRollPane,
-    playlist::PlaylistPane,
     plugin_manager::{
         FeedbackKind as PluginFeedbackKind, PluginManagerFeedback, PluginManagerPanel,
     },
@@ -1393,7 +1392,6 @@ struct HarmoniqStudioApp {
     channel_rack: ChannelRackPane,
     piano_roll: PianoRollPane,
     mixer: MixerView,
-    playlist: PlaylistPane,
     inspector: InspectorPane,
     console: ConsolePane,
     floating: FloatingWindows,
@@ -1520,7 +1518,6 @@ impl HarmoniqStudioApp {
         let channel_rack = ChannelRackPane::default();
         let piano_roll = PianoRollPane::default();
         let mixer = MixerView::new(mixer_api);
-        let playlist = PlaylistPane::default();
         let inspector = InspectorPane::new();
         let console = ConsolePane::default();
         let plugin_store_path =
@@ -1581,7 +1578,6 @@ impl HarmoniqStudioApp {
             channel_rack,
             piano_roll,
             mixer,
-            playlist,
             inspector,
             console,
             floating,
@@ -1969,7 +1965,6 @@ impl HarmoniqStudioApp {
         let seconds = sample_pos as f64 / sample_rate as f64;
         let beats = (seconds * (self.tempo.max(1.0) as f64 / 60.0)) as f32;
         self.transport_clock = TransportClock::from_beats(beats, self.time_signature);
-        self.playlist.set_playhead(beats, is_playing);
 
         if self.last_engine_update.elapsed() < Duration::from_millis(100) {
             return;
@@ -2452,7 +2447,6 @@ struct WorkspaceTabViewer<'a> {
     browser: &'a mut BrowserPane,
     channel_rack: &'a mut ChannelRackPane,
     piano_roll: &'a mut PianoRollPane,
-    playlist: &'a mut PlaylistPane,
     inspector: &'a mut InspectorPane,
     console: &'a mut ConsolePane,
     input_focus: &'a mut InputFocus,
@@ -2484,14 +2478,6 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
                         .ui(ui, self.palette, self.event_bus, self.input_focus);
                 }
             }
-            WorkspacePane::Arrange => self.playlist.ui(
-                ui,
-                self.palette,
-                self.event_bus,
-                self.input_focus,
-                self.transport_state,
-                self.transport_clock,
-            ),
             WorkspacePane::PianoRoll => {
                 if self.piano_roll_hidden {
                     ui.centered_and_justified(|ui| {
@@ -2506,18 +2492,13 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
                 }
             }
             WorkspacePane::Inspector => {
-                let commands = self.inspector.ui(
+                self.inspector.ui(
                     ui,
                     self.palette,
                     self.input_focus,
                     self.event_bus,
                     self.channel_rack,
                 );
-                for command in commands {
-                    self.playlist.apply_inspector_command(command);
-                }
-                self.inspector
-                    .sync_selection(self.playlist.current_selection());
             }
             WorkspacePane::Console => {
                 self.console.ui(ui, self.palette, self.input_focus);
@@ -2547,8 +2528,6 @@ impl App for HarmoniqStudioApp {
         self.poll_rt_events();
         self.update_engine_context();
         self.input_focus.maybe_release_on_escape(ctx);
-        self.inspector
-            .sync_selection(self.playlist.current_selection());
         self.plugin_manager.tick();
         if let Some(status) = self.plugin_manager.progress() {
             let total = status.total.max(1);
@@ -2655,7 +2634,6 @@ impl App for HarmoniqStudioApp {
                     browser: &mut self.browser,
                     channel_rack: &mut self.channel_rack,
                     piano_roll: &mut self.piano_roll,
-                    playlist: &mut self.playlist,
                     inspector: &mut self.inspector,
                     console: &mut self.console,
                     input_focus: &mut self.input_focus,
@@ -2744,6 +2722,9 @@ impl App for HarmoniqStudioApp {
                     render_playlist_window(ui, props);
                 });
         }
+
+        self.inspector
+            .sync_playlist_selection(self.playlist_view.selected_clip(), self.playlist_view.ppq());
 
         if self.menu.plugins_menu.scanner_open {
             let mut scanner_open = true;
