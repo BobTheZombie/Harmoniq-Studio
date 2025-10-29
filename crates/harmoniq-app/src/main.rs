@@ -40,7 +40,7 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 use parking_lot::Mutex;
 use rtrb::Consumer;
 use serde::{Deserialize, Serialize};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 use winit::keyboard::{KeyCode, ModifiersState};
 
@@ -63,6 +63,10 @@ use audio::{
     SoundTestSample,
 };
 use config::qwerty::{QwertyConfig, VelocityCurveSetting};
+use harmoniq_playlist::{
+    state::{Playlist as PlaylistState, Snap as PlaylistSnap},
+    ui::{render as render_playlist_window, PlaylistProps as PlaylistUiProps},
+};
 use midi::{list_midi_inputs, MidiInputDevice, QwertyKeyboardInput};
 use ui::{
     audio_settings::{ActiveAudioSummary, AudioSettingsAction, AudioSettingsPanel},
@@ -421,6 +425,8 @@ pub(crate) struct AppIcons {
     automation: egui::TextureHandle,
     tempo: egui::TextureHandle,
     settings: egui::TextureHandle,
+    mixer: egui::TextureHandle,
+    playlist: egui::TextureHandle,
 }
 
 impl AppIcons {
@@ -490,6 +496,16 @@ impl AppIcons {
                 ctx,
                 "icon_settings",
                 include_bytes!("../../../resources/icons/harmoniq-studio.svg"),
+            )?,
+            mixer: load_svg(
+                ctx,
+                "icon_mixer",
+                include_bytes!("../../../resources/icons/mixer.svg"),
+            )?,
+            playlist: load_svg(
+                ctx,
+                "icon_playlist",
+                include_bytes!("../../../resources/icons/playlist.svg"),
             )?,
         })
     }
@@ -574,6 +590,15 @@ impl TransportClock {
 
     fn format(&self) -> String {
         format!("{:02}:{:02}:{:03}", self.bars, self.beats, self.ticks)
+    }
+
+    fn total_ticks(&self, signature: TimeSignature) -> u64 {
+        let ticks_per_beat = 960u64;
+        let beats_per_bar = signature.numerator.max(1) as u64;
+        let bars = self.bars.saturating_sub(1) as u64;
+        let beats = self.beats.saturating_sub(1) as u64;
+        let ticks = self.ticks as u64;
+        bars * beats_per_bar * ticks_per_beat + beats * ticks_per_beat + ticks
     }
 }
 
@@ -1413,6 +1438,9 @@ struct HarmoniqStudioApp {
     notices: Notifications,
     browser_hidden: bool,
     mixer_window_open: bool,
+    playlist_window_open: bool,
+    playlist_view: PlaylistState,
+    playlist_snap: PlaylistSnap,
     piano_roll_hidden: bool,
     fullscreen: bool,
     fullscreen_dirty: bool,
@@ -1598,6 +1626,9 @@ impl HarmoniqStudioApp {
             notices: Notifications::default(),
             browser_hidden: !browser_visible,
             mixer_window_open: false,
+            playlist_window_open: false,
+            playlist_view: PlaylistState::new_default(960),
+            playlist_snap: PlaylistSnap::N1_4,
             piano_roll_hidden: false,
             fullscreen: false,
             fullscreen_dirty: false,
@@ -2199,6 +2230,16 @@ impl CommandHandler for HarmoniqStudioApp {
                     };
                     self.console.log(LogLevel::Info, format!("Mixer {state}"));
                 }
+                ViewCommand::TogglePlaylist => {
+                    self.playlist_window_open = !self.playlist_window_open;
+                    let state = if self.playlist_window_open {
+                        "shown"
+                    } else {
+                        "hidden"
+                    };
+                    self.console
+                        .log(LogLevel::Info, format!("Playlist {state}"));
+                }
                 ViewCommand::TogglePianoRoll => {
                     self.piano_roll_hidden = !self.piano_roll_hidden;
                     let state = if self.piano_roll_hidden {
@@ -2543,6 +2584,7 @@ impl App for HarmoniqStudioApp {
             .show(ctx, |ui| {
                 let snapshot = MenuBarSnapshot {
                     mixer_visible: self.mixer_window_open,
+                    playlist_visible: self.playlist_window_open,
                     piano_roll_visible: !self.piano_roll_hidden,
                     browser_visible: !self.browser_hidden,
                     perf_hud_visible: self.perf_hud.visible,
@@ -2585,6 +2627,7 @@ impl App for HarmoniqStudioApp {
                     metronome: self.metronome,
                     pattern_mode: self.pattern_mode,
                     mixer_visible: self.mixer_window_open,
+                    playlist_visible: self.playlist_window_open,
                 };
                 self.transport_bar.ui(
                     ui,
@@ -2651,6 +2694,54 @@ impl App for HarmoniqStudioApp {
                 .default_pos(egui::pos2(60.0, 60.0))
                 .show(ctx, |ui| {
                     self.mixer.ui(ui, &palette);
+                });
+        }
+
+        if self.playlist_window_open {
+            let window_id = egui::Id::new("playlist_window");
+            let esc_pressed = ctx.input(|i| {
+                i.key_pressed(Key::Escape)
+                    && !i.modifiers.ctrl
+                    && !i.modifiers.alt
+                    && !i.modifiers.command
+                    && !i.modifiers.shift
+            });
+            let focused_playlist =
+                ctx.memory(|mem| mem.focused().is_some_and(|focus| focus == window_id));
+            if esc_pressed && focused_playlist {
+                self.playlist_window_open = false;
+            }
+
+            let transport_ticks = self.transport_clock.total_ticks(self.time_signature);
+            egui::Window::new("Playlist")
+                .id(window_id)
+                .open(&mut self.playlist_window_open)
+                .collapsible(false)
+                .resizable(true)
+                .vscroll(true)
+                .default_size(egui::vec2(960.0, 520.0))
+                .default_pos(egui::pos2(140.0, 80.0))
+                .show(ctx, |ui| {
+                    let mut open_piano_roll =
+                        |track: harmoniq_playlist::ui::TrackId, _pattern: Option<u32>, clip| {
+                            tracing::info!(
+                                "Playlist requested piano roll: track={:?} clip={:?}",
+                                track,
+                                clip
+                            );
+                        };
+                    let mut import_audio = |path: PathBuf| {
+                        tracing::info!("Playlist import requested: {path:?}");
+                        harmoniq_playlist::state::AudioSourceId::from_path(&path)
+                    };
+                    let mut props = PlaylistUiProps {
+                        playlist: &mut self.playlist_view,
+                        current_time_ticks: transport_ticks,
+                        snap: &mut self.playlist_snap,
+                        open_piano_roll: &mut open_piano_roll,
+                        import_audio_file: &mut import_audio,
+                    };
+                    render_playlist_window(ui, props);
                 });
         }
 

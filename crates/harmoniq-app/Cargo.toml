@@ -11,6 +11,7 @@ harmoniq-plugin-host = { path = "../harmoniq-plugin-host" }
 harmoniq-ui = { path = "../harmoniq-ui" }
 harmoniq-plugin-db = { path = "../harmoniq-plugin-db" }
 harmoniq-plugin-scanner = { path = "../harmoniq-plugin-scanner" }
+harmoniq-playlist = { path = "../harmoniq-playlist" }
 harmoniq-rt = { path = "../harmoniq-rt" }
 harmoniq-midi = { path = "../harmoniq-midi" }
 anyhow.workspace = true

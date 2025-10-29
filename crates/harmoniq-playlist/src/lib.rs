@@ -1,7 +1,4 @@
-//! Playlist data model and helper routines.
+//! Playlist data model and egui rendering helpers.
 
-mod model;
-mod ui;
-
-pub use model::*;
-pub use ui::*;
+pub mod state;
+pub mod ui;

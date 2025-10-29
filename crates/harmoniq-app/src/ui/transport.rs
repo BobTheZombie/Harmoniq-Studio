@@ -17,21 +17,71 @@ fn push_to_toolbar_midline(ui: &mut egui::Ui) {
     }
 }
 
-/// Draw the mixer toggle button (icon) and dispatch a toggle command when activated.
-fn mixer_toggle_button(ui: &mut egui::Ui, commands: &CommandSender, mixer_visible: bool) {
-    let mut label = egui::RichText::new("🎚").size(18.0);
-    if mixer_visible {
-        label = label.strong();
+fn toolbar_toggle_button(
+    ui: &mut egui::Ui,
+    icon: &egui::TextureHandle,
+    palette: &HarmoniqPalette,
+    active: bool,
+    tooltip: &str,
+) -> bool {
+    let size = egui::vec2(28.0, 28.0);
+    let tint = if active {
+        palette.accent
+    } else {
+        palette.text_muted
+    };
+    let response = ui
+        .add(
+            egui::ImageButton::new((icon.id(), size))
+                .frame(false)
+                .tint(tint),
+        )
+        .on_hover_text(tooltip);
+    if active {
+        let highlight = response.rect.expand(4.0);
+        ui.painter().rect(
+            highlight,
+            6.0,
+            palette.toolbar_highlight,
+            egui::Stroke::new(1.0, palette.accent),
+        );
     }
-    let button = egui::Button::new(label)
-        .min_size(egui::vec2(28.0, 22.0))
-        .wrap(false);
-    if ui
-        .add(button)
-        .on_hover_text("Show/Hide Mixer (F9)")
-        .clicked()
-    {
+    response.clicked()
+}
+
+fn mixer_toggle_button(
+    ui: &mut egui::Ui,
+    palette: &HarmoniqPalette,
+    icons: &AppIcons,
+    commands: &CommandSender,
+    mixer_visible: bool,
+) {
+    if toolbar_toggle_button(
+        ui,
+        &icons.mixer,
+        palette,
+        mixer_visible,
+        "Show/Hide Mixer (F9)",
+    ) {
         let _ = commands.try_send(Command::View(ViewCommand::ToggleMixer));
+    }
+}
+
+fn playlist_toggle_button(
+    ui: &mut egui::Ui,
+    palette: &HarmoniqPalette,
+    icons: &AppIcons,
+    commands: &CommandSender,
+    playlist_visible: bool,
+) {
+    if toolbar_toggle_button(
+        ui,
+        &icons.playlist,
+        palette,
+        playlist_visible,
+        "Show/Hide Playlist (F5)",
+    ) {
+        let _ = commands.try_send(Command::View(ViewCommand::TogglePlaylist));
     }
 }
 
@@ -164,7 +214,9 @@ impl TransportBar {
             }
 
             push_to_toolbar_midline(ui);
-            mixer_toggle_button(ui, commands, snapshot.mixer_visible);
+            mixer_toggle_button(ui, palette, icons, commands, snapshot.mixer_visible);
+            ui.add_space(6.0);
+            playlist_toggle_button(ui, palette, icons, commands, snapshot.playlist_visible);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
@@ -186,4 +238,5 @@ pub struct TransportSnapshot {
     pub metronome: bool,
     pub pattern_mode: bool,
     pub mixer_visible: bool,
+    pub playlist_visible: bool,
 }
