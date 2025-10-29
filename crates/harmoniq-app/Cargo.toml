@@ -37,14 +37,14 @@ serde_json = "1.0"
 flacenc = { version = "0.5", default-features = false }
 mp3lame-encoder = { version = "0.2", features = ["std"] }
 directories = "5"
-openasio = { git = "https://github.com/BobTheZombie/OpenASIO-SDK", package = "openasio", optional = true }
+openasio_sdk = { git = "https://github.com/BobTheZombie/OpenASIO-SDK", package = "openasio", optional = true }
 dirs.workspace = true
 winit = { version = "0.29", default-features = false, features = ["rwh_06", "wayland", "x11"] }
 
 [features]
 default = []
 glow = ["eframe/glow"]
-openasio = ["harmoniq-engine/openasio", "dep:openasio"]
+openasio = ["harmoniq-engine/openasio_gpl", "dep:openasio_sdk"]
 ultra = ["harmoniq-engine/ultra", "openasio"]
 x11-backend = ["eframe/x11", "winit/x11"]
 
