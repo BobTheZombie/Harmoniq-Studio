@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 pub enum WorkspacePane {
     Browser,
     Arrange,
-    Mixer,
     PianoRoll,
     Inspector,
     Console,
@@ -16,7 +15,6 @@ impl WorkspacePane {
         match self {
             WorkspacePane::Browser => "Browser",
             WorkspacePane::Arrange => "Arrange",
-            WorkspacePane::Mixer => "Mixer",
             WorkspacePane::PianoRoll => "Piano Roll",
             WorkspacePane::Inspector => "Inspector",
             WorkspacePane::Console => "Console",
@@ -34,9 +32,8 @@ pub fn build_default_workspace() -> DockState<WorkspacePane> {
             surface.split_right(arrange_node, 0.8, vec![WorkspacePane::Inspector]);
         let [_inspector, _console] =
             surface.split_below(inspector_node, 0.55, vec![WorkspacePane::Console]);
-        let [_arrange_node, piano_node] =
+        let [_arrange_node, _piano_node] =
             surface.split_below(arrange_node, 0.62, vec![WorkspacePane::PianoRoll]);
-        let [_piano, _mixer] = surface.split_below(piano_node, 0.58, vec![WorkspacePane::Mixer]);
     }
     dock
 }

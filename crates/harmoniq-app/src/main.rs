@@ -14,7 +14,7 @@ use anyhow::{anyhow, Context};
 use clap::{Parser, ValueEnum};
 use directories::ProjectDirs;
 use eframe::egui::{
-    self, Align2, CursorIcon, Id, Margin, PointerButton, RichText, Rounding, Stroke,
+    self, Align2, CursorIcon, Id, Key, Margin, PointerButton, RichText, Rounding, Stroke,
     ViewportCommand,
 };
 use eframe::{App, CreationContext, NativeOptions};
@@ -1412,7 +1412,7 @@ struct HarmoniqStudioApp {
     status_message: Option<String>,
     notices: Notifications,
     browser_hidden: bool,
-    mixer_hidden: bool,
+    mixer_window_open: bool,
     piano_roll_hidden: bool,
     fullscreen: bool,
     fullscreen_dirty: bool,
@@ -1597,7 +1597,7 @@ impl HarmoniqStudioApp {
             status_message,
             notices: Notifications::default(),
             browser_hidden: !browser_visible,
-            mixer_hidden: false,
+            mixer_window_open: false,
             piano_roll_hidden: false,
             fullscreen: false,
             fullscreen_dirty: false,
@@ -2191,8 +2191,12 @@ impl CommandHandler for HarmoniqStudioApp {
             },
             Command::View(cmd) => match cmd {
                 ViewCommand::ToggleMixer => {
-                    self.mixer_hidden = !self.mixer_hidden;
-                    let state = if self.mixer_hidden { "hidden" } else { "shown" };
+                    self.mixer_window_open = !self.mixer_window_open;
+                    let state = if self.mixer_window_open {
+                        "shown"
+                    } else {
+                        "hidden"
+                    };
                     self.console.log(LogLevel::Info, format!("Mixer {state}"));
                 }
                 ViewCommand::TogglePianoRoll => {
@@ -2407,13 +2411,11 @@ struct WorkspaceTabViewer<'a> {
     browser: &'a mut BrowserPane,
     channel_rack: &'a mut ChannelRackPane,
     piano_roll: &'a mut PianoRollPane,
-    mixer: &'a mut MixerView,
     playlist: &'a mut PlaylistPane,
     inspector: &'a mut InspectorPane,
     console: &'a mut ConsolePane,
     input_focus: &'a mut InputFocus,
     browser_hidden: bool,
-    mixer_hidden: bool,
     piano_roll_hidden: bool,
     transport_state: TransportState,
     transport_clock: TransportClock,
@@ -2449,18 +2451,6 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
                 self.transport_state,
                 self.transport_clock,
             ),
-            WorkspacePane::Mixer => {
-                if self.mixer_hidden {
-                    ui.centered_and_justified(|ui| {
-                        ui.label(
-                            RichText::new("Mixer hidden (View → Toggle Mixer)")
-                                .color(self.palette.text_muted),
-                        );
-                    });
-                } else {
-                    self.mixer.ui(ui, self.palette);
-                }
-            }
             WorkspacePane::PianoRoll => {
                 if self.piano_roll_hidden {
                     ui.centered_and_justified(|ui| {
@@ -2552,7 +2542,7 @@ impl App for HarmoniqStudioApp {
             )
             .show(ctx, |ui| {
                 let snapshot = MenuBarSnapshot {
-                    mixer_visible: !self.mixer_hidden,
+                    mixer_visible: self.mixer_window_open,
                     piano_roll_visible: !self.piano_roll_hidden,
                     browser_visible: !self.browser_hidden,
                     perf_hud_visible: self.perf_hud.visible,
@@ -2615,13 +2605,11 @@ impl App for HarmoniqStudioApp {
                     browser: &mut self.browser,
                     channel_rack: &mut self.channel_rack,
                     piano_roll: &mut self.piano_roll,
-                    mixer: &mut self.mixer,
                     playlist: &mut self.playlist,
                     inspector: &mut self.inspector,
                     console: &mut self.console,
                     input_focus: &mut self.input_focus,
                     browser_hidden: self.browser_hidden,
-                    mixer_hidden: self.mixer_hidden,
                     piano_roll_hidden: self.piano_roll_hidden,
                     transport_state: self.transport_state,
                     transport_clock: self.transport_clock,
@@ -2630,6 +2618,34 @@ impl App for HarmoniqStudioApp {
                     .style(dock_style)
                     .show_inside(ui, &mut tab_viewer);
             });
+
+        if self.mixer_window_open {
+            let window_id = egui::Id::new("mixer_window");
+            let esc_pressed = ctx.input(|i| {
+                i.key_pressed(Key::Escape)
+                    && !i.modifiers.ctrl
+                    && !i.modifiers.alt
+                    && !i.modifiers.command
+                    && !i.modifiers.shift
+            });
+            let focused_mixer =
+                ctx.memory(|mem| mem.focused().is_some_and(|focus| focus == window_id));
+            if esc_pressed && focused_mixer {
+                self.mixer_window_open = false;
+            }
+
+            egui::Window::new("Mixer")
+                .id(window_id)
+                .open(&mut self.mixer_window_open)
+                .collapsible(false)
+                .resizable(true)
+                .vscroll(true)
+                .default_size(egui::vec2(820.0, 420.0))
+                .default_pos(egui::pos2(60.0, 60.0))
+                .show(ctx, |ui| {
+                    self.mixer.ui(ui, &palette);
+                });
+        }
 
         if self.menu.plugins_menu.scanner_open {
             let mut scanner_open = true;
