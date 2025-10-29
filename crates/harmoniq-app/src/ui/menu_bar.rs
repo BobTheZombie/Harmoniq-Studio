@@ -46,7 +46,7 @@ pub struct MenuBarSnapshot<'a> {
 impl Default for MenuBarSnapshot<'_> {
     fn default() -> Self {
         Self {
-            mixer_visible: true,
+            mixer_visible: false,
             piano_roll_visible: true,
             browser_visible: true,
             perf_hud_visible: false,
@@ -82,7 +82,24 @@ impl MenuBarState {
                     .strong()
                     .size(16.0),
             );
-            ui.add_space(18.0);
+            ui.add_space(12.0);
+
+            let mut mixer_label = RichText::new("🎚").size(18.0);
+            if snapshot.mixer_visible {
+                mixer_label = mixer_label.strong();
+            }
+            let mixer_button = egui::Button::new(mixer_label).min_size(egui::vec2(28.0, 22.0));
+            if ui
+                .add(mixer_button)
+                .on_hover_text("Show/Hide Mixer (F9)")
+                .clicked()
+            {
+                let _ = commands.try_send(Command::View(ViewCommand::ToggleMixer));
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(12.0);
 
             self.file_menu(ui, shortcuts, commands, snapshot);
             self.edit_menu(ui, shortcuts, commands, snapshot);
@@ -226,7 +243,7 @@ impl MenuBarState {
             let mut mixer = snapshot.mixer_visible;
             if toggle_item(
                 ui,
-                "Toggle Mixer",
+                "Mixer",
                 CommandId::ViewToggleMixer,
                 shortcuts,
                 &mut mixer,
