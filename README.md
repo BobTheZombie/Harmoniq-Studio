@@ -25,6 +25,20 @@ professional mixing, and live performance.
 
 ## Getting started
 
+### Linux prerequisites
+
+The native UI build links against X11 libraries. Install the development
+packages before running `cargo` so `pkg-config` can discover `x11-xcb` and
+`GL`:
+
+```bash
+sudo apt update
+sudo apt install pkg-config libx11-xcb-dev libgl1-mesa-dev
+```
+
+Set `PKG_CONFIG_PATH` manually only if the packages are installed in a
+non-standard location.
+
 ```bash
 cargo run -p harmoniq-app -- --sample-rate 48000 --block-size 512
 ```
