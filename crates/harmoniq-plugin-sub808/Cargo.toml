@@ -1,12 +1,32 @@
 [package]
 name = "harmoniq-plugin-sub808"
-edition.workspace = true
-license.workspace = true
-version.workspace = true
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["Harmoniq Studio"]
+description = "808-style sub-bass synth (CLAP) for Harmoniq Studio"
+publish = false
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib"] # needed for CLAP/VST3 export
+
+[features]
+default = ["clap", "editor"]
+clap = ["nih_plug/clap"]
+editor = ["nih_plug_egui"]
 
 [dependencies]
-harmoniq-plugin-sdk = { path = "../harmoniq-plugin-sdk" }
-harmoniq-plugins = { path = "../harmoniq-plugins" }
+nih_plug = "0.13"
+nih_plug_egui = { version = "0.6", optional = true }
+
+# small math helpers; avoid std trig in realtime
+fastapprox = "0.3"
+
+[package.metadata.nih-plug]
+name = "Harmoniq Sub808"
+vendor = "Harmoniq"
+url = "https://github.com/BobTheZombie/Harmoniq-Studio"
+version = "0.1.0"
+clap_target = true
+presets = []
+
