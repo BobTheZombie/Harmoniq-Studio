@@ -82,21 +82,6 @@ impl MenuBarState {
                     .strong()
                     .size(16.0),
             );
-            ui.add_space(12.0);
-
-            let mut mixer_label = RichText::new("🎚").size(18.0);
-            if snapshot.mixer_visible {
-                mixer_label = mixer_label.strong();
-            }
-            let mixer_button = egui::Button::new(mixer_label).min_size(egui::vec2(28.0, 22.0));
-            if ui
-                .add(mixer_button)
-                .on_hover_text("Show/Hide Mixer (F9)")
-                .clicked()
-            {
-                let _ = commands.try_send(Command::View(ViewCommand::ToggleMixer));
-            }
-
             ui.add_space(6.0);
             ui.separator();
             ui.add_space(12.0);

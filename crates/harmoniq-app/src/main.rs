@@ -2584,9 +2584,16 @@ impl App for HarmoniqStudioApp {
                     clock: self.transport_clock,
                     metronome: self.metronome,
                     pattern_mode: self.pattern_mode,
+                    mixer_visible: self.mixer_window_open,
                 };
-                self.transport_bar
-                    .ui(ui, &palette, &self.icons, &self.event_bus, snapshot);
+                self.transport_bar.ui(
+                    ui,
+                    &palette,
+                    &self.icons,
+                    &self.event_bus,
+                    &self.command_sender,
+                    snapshot,
+                );
             });
 
         egui::CentralPanel::default()
