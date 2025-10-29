@@ -1,4 +1,4 @@
-use super::{grid_stroke, lane_color, ScaleGuide, Snap};
+use super::{grid_stroke, lane_color, ScaleGuide};
 use crate::state::*;
 use egui::{self, vec2, Color32, Rect, Rounding, Sense, Stroke};
 
@@ -26,10 +26,18 @@ fn key_name(key: i8) -> &'static str {
     NAMES[(key.rem_euclid(12)) as usize]
 }
 
-pub fn render(ui: &mut egui::Ui, mut props: crate::PianoRollProps) {
-    let state = props.state;
+pub fn render(ui: &mut egui::Ui, props: crate::PianoRollProps) {
+    let crate::PianoRollProps {
+        state,
+        snap,
+        ghost_clip,
+        scale,
+        mut on_changed,
+        mut on_preview,
+    } = props;
+
     let ppq = state.clip.ppq;
-    let snap_ticks = props.snap.ticks(ppq).max(1);
+    let snap_ticks = snap.ticks(ppq).max(1);
 
     let available = ui.available_size();
     let key_width = 64.0;
@@ -70,17 +78,21 @@ pub fn render(ui: &mut egui::Ui, mut props: crate::PianoRollProps) {
         snap_ticks,
     };
 
-    draw_keys(&mut ctx, &props.scale);
+    draw_keys(&mut ctx, &scale);
     draw_grid(&mut ctx);
-    if let Some(ghost) = props.ghost_clip {
+    if let Some(ghost) = ghost_clip {
         draw_notes(&mut ctx, ghost, true, &[]);
     }
     draw_notes(&mut ctx, &state.clip, false, &state.selection);
 
-    handle_mouse(&mut ctx, state, props.on_preview.as_deref_mut());
+    if let Some(preview_cb) = on_preview.as_mut() {
+        handle_mouse(&mut ctx, state, Some(preview_cb.as_mut()));
+    } else {
+        handle_mouse(&mut ctx, state, None);
+    }
     draw_velocity_lane(&mut ctx, state);
 
-    (props.on_changed)(&state.clip);
+    on_changed(&state.clip);
 }
 
 fn draw_keys(ctx: &mut PianoCtx<'_>, scale: &ScaleGuide) {
@@ -306,7 +318,7 @@ fn handle_mouse(
     if !state.selection.is_empty() {
         let selected_ids = state.selection.clone();
         if response.dragged() {
-            if let Some(pointer) = ctx.ui.input(|i| i.pointer.interact_pos()) {
+            if let Some(_pointer) = ctx.ui.input(|i| i.pointer.interact_pos()) {
                 let delta = ctx.ui.input(|i| i.pointer.delta());
                 let delta_ticks = (delta.x / ctx.px_per_tick).round() as i32;
                 let delta_keys = (delta.y / ctx.px_per_key).round() as i32;
