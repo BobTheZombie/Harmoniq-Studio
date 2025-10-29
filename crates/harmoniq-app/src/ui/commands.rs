@@ -23,6 +23,7 @@ pub enum CommandId {
     EditSelectAll,
     EditPreferences,
     ViewToggleMixer,
+    ViewTogglePlaylist,
     ViewTogglePianoRoll,
     ViewToggleBrowser,
     ViewTogglePerfHud,
@@ -83,6 +84,7 @@ impl CommandId {
             CommandId::EditSelectAll => "edit.select_all",
             CommandId::EditPreferences => "edit.preferences",
             CommandId::ViewToggleMixer => "view.toggle_mixer",
+            CommandId::ViewTogglePlaylist => "view.toggle_playlist",
             CommandId::ViewTogglePianoRoll => "view.toggle_piano_roll",
             CommandId::ViewToggleBrowser => "view.toggle_browser",
             CommandId::ViewTogglePerfHud => "view.toggle_perf_hud",
@@ -147,6 +149,7 @@ impl FromStr for CommandId {
             "edit.select_all" => Ok(CommandId::EditSelectAll),
             "edit.preferences" => Ok(CommandId::EditPreferences),
             "view.toggle_mixer" => Ok(CommandId::ViewToggleMixer),
+            "view.toggle_playlist" => Ok(CommandId::ViewTogglePlaylist),
             "view.toggle_piano_roll" => Ok(CommandId::ViewTogglePianoRoll),
             "view.toggle_browser" => Ok(CommandId::ViewToggleBrowser),
             "view.toggle_perf_hud" => Ok(CommandId::ViewTogglePerfHud),
@@ -239,6 +242,7 @@ impl Command {
             CommandId::EditSelectAll => Command::Edit(EditCommand::SelectAll),
             CommandId::EditPreferences => Command::Edit(EditCommand::Preferences),
             CommandId::ViewToggleMixer => Command::View(ViewCommand::ToggleMixer),
+            CommandId::ViewTogglePlaylist => Command::View(ViewCommand::TogglePlaylist),
             CommandId::ViewTogglePianoRoll => Command::View(ViewCommand::TogglePianoRoll),
             CommandId::ViewToggleBrowser => Command::View(ViewCommand::ToggleBrowser),
             CommandId::ViewTogglePerfHud => Command::View(ViewCommand::TogglePerfHud),
@@ -345,6 +349,7 @@ impl EditCommand {
 #[derive(Debug, Clone)]
 pub enum ViewCommand {
     ToggleMixer,
+    TogglePlaylist,
     TogglePianoRoll,
     ToggleBrowser,
     TogglePerfHud,
@@ -357,6 +362,7 @@ impl ViewCommand {
     pub fn id(&self) -> CommandId {
         match self {
             ViewCommand::ToggleMixer => CommandId::ViewToggleMixer,
+            ViewCommand::TogglePlaylist => CommandId::ViewTogglePlaylist,
             ViewCommand::TogglePianoRoll => CommandId::ViewTogglePianoRoll,
             ViewCommand::ToggleBrowser => CommandId::ViewToggleBrowser,
             ViewCommand::TogglePerfHud => CommandId::ViewTogglePerfHud,

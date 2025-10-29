@@ -28,6 +28,7 @@ impl Default for MenuBarState {
 
 pub struct MenuBarSnapshot<'a> {
     pub mixer_visible: bool,
+    pub playlist_visible: bool,
     pub piano_roll_visible: bool,
     pub browser_visible: bool,
     pub perf_hud_visible: bool,
@@ -47,6 +48,7 @@ impl Default for MenuBarSnapshot<'_> {
     fn default() -> Self {
         Self {
             mixer_visible: false,
+            playlist_visible: false,
             piano_roll_visible: true,
             browser_visible: true,
             perf_hud_visible: false,
@@ -234,6 +236,17 @@ impl MenuBarState {
                 &mut mixer,
             ) {
                 let _ = commands.try_send(Command::View(ViewCommand::ToggleMixer));
+                ui.close_menu();
+            }
+            let mut playlist = snapshot.playlist_visible;
+            if toggle_item(
+                ui,
+                "Playlist",
+                CommandId::ViewTogglePlaylist,
+                shortcuts,
+                &mut playlist,
+            ) {
+                let _ = commands.try_send(Command::View(ViewCommand::TogglePlaylist));
                 ui.close_menu();
             }
             let mut piano_roll = snapshot.piano_roll_visible;

@@ -391,6 +391,7 @@ fn default_bindings() -> Vec<(CommandId, ShortcutBinding)> {
         (EditDelete, ShortcutBinding::new_fixed(Key::Delete)),
         (EditSelectAll, ShortcutBinding::new_primary(Key::A)),
         (ViewToggleMixer, ShortcutBinding::new_fixed(Key::F9)),
+        (ViewTogglePlaylist, ShortcutBinding::new_fixed(Key::F5)),
         (ViewTogglePianoRoll, ShortcutBinding::new_fixed(Key::P)),
         (ViewToggleBrowser, ShortcutBinding::new_fixed(Key::B)),
         (ViewZoomIn, ShortcutBinding::new_primary(Key::Plus)),

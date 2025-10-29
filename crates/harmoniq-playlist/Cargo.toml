@@ -7,8 +7,8 @@ authors = ["Harmoniq Studio Contributors"]
 
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
+egui = { version = "0.27", features = ["serde"] }
+rand.workspace = true
 
 [dev-dependencies]
 pretty_assertions = "1.4"
