@@ -7,3 +7,9 @@ authors = ["Harmoniq Studio Contributors"]
 
 [dependencies]
 egui = "0.28"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[features]
+default = []
+persistence = ["serde", "serde_json"]

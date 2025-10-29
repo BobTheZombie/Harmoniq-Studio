@@ -1,3 +1,3 @@
-mod rack;
+pub mod rack;
 
-pub use rack::rack_ui;
+// (add submodules for step editors/knobs later)

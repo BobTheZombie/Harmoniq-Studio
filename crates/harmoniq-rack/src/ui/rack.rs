@@ -1,364 +1,269 @@
-use egui::{
-    self, Align, Color32, Frame, Id, Layout, Margin, PointerButton, Response, RichText, Rounding,
-    Vec2,
-};
-
+use crate::convert::steps_to_midi;
 use crate::state::{Channel, ChannelId, ChannelKind, PatternId, RackState, Step};
-use crate::{convert, RackCallbacks, RackProps};
+use crate::{RackCallbacks, RackProps};
+use egui::{self, Align2, Id, PopupCloseBehavior, RichText};
 
-#[derive(Clone, Default)]
-struct PaintSession {
-    channel: ChannelId,
-    value: bool,
-}
-
-#[derive(Clone, Default)]
-struct PaintState {
-    session: Option<PaintSession>,
-}
-
-fn paint_state_id() -> Id {
-    Id::new("harmoniq_rack_paint_state")
-}
-
-pub fn rack_ui(ui: &mut egui::Ui, mut props: RackProps<'_>) {
+pub fn render(ui: &mut egui::Ui, mut props: RackProps) {
     let RackProps { state, callbacks } = &mut props;
 
-    pattern_header(ui, state);
-    ui.add_space(8.0);
-    add_channel_row(ui, state, callbacks);
-    ui.add_space(12.0);
+    pattern_strip(ui, state);
+    ui.separator();
 
-    let mut pending_remove = Vec::new();
-    let mut pending_clone = Vec::new();
-    let mut pending_replace = Vec::new();
-    let mut pending_convert = Vec::new();
+    add_row(ui, callbacks);
+    ui.add_space(6.0);
+
+    drop_hint(ui);
 
     let pattern_id = state.current_pattern;
-    let paint_state_key = paint_state_id();
-    let mut paint_state = ui
-        .ctx()
-        .memory(|mem| mem.data.get_temp::<PaintState>(paint_state_key))
-        .unwrap_or_default();
+    let mut pending_remove: Vec<ChannelId> = Vec::new();
+    let mut pending_convert: Vec<(ChannelId, PatternId)> = Vec::new();
 
-    for index in 0..state.channels.len() {
-        let pattern_bars = state
-            .patterns
-            .iter()
-            .find(|pat| pat.id == pattern_id)
-            .map(|pat| pat.bars)
-            .unwrap_or(1);
-
-        let (_, tail) = state.channels.split_at_mut(index);
-        let channel = &mut tail[0];
-
-        let frame = Frame::none()
-            .fill(Color32::from_rgb(24, 24, 28))
-            .rounding(Rounding::same(6.0))
-            .inner_margin(Margin::symmetric(12.0, 10.0));
-
-        let response = frame.show(ui, |ui| {
-            ui.vertical(|ui| {
-                channel_header(
+    let total_channels = state.channels.len();
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            let mut index = 0usize;
+            while index < total_channels {
+                let (_, tail) = state.channels.split_at_mut(index);
+                let channel = &mut tail[0];
+                channel_row(
                     ui,
+                    pattern_id,
                     channel,
                     callbacks,
-                    pattern_id,
                     &mut pending_remove,
-                    &mut pending_clone,
-                    &mut pending_replace,
                     &mut pending_convert,
                 );
-                ui.add_space(6.0);
-                channel_controls(ui, channel);
-                ui.add_space(8.0);
-                step_grid(ui, channel, pattern_id, pattern_bars, &mut paint_state);
-            });
+                ui.separator();
+                index += 1;
+            }
         });
-
-        let row_response = response.response;
-        if row_response.secondary_clicked() {
-            callbacks.open_piano_roll.as_mut()(channel.id, state.current_pattern);
-        }
-
-        ui.add_space(10.0);
-    }
-
-    ui.ctx()
-        .memory_mut(|mem| mem.data.insert_temp(paint_state_key, paint_state));
 
     if !pending_remove.is_empty() {
         state
             .channels
-            .retain(|channel| !pending_remove.iter().any(|id| id == &channel.id));
+            .retain(|ch| !pending_remove.iter().any(|id| id == &ch.id));
     }
 
-    for channel_id in pending_clone {
-        if let Some(original) = state.channels.iter().find(|ch| ch.id == channel_id) {
-            let mut clone = original.clone();
-            let new_id = state.channels.iter().map(|ch| ch.id).max().unwrap_or(0) + 1;
-            clone.id = new_id;
-            state.channels.push(clone);
+    for (channel_id, pat) in pending_convert {
+        let _ = steps_to_midi(state, pat, channel_id);
+    }
+}
+
+fn pattern_strip(ui: &mut egui::Ui, state: &mut RackState) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Pattern:").strong());
+        for pat in &state.patterns {
+            let selected = pat.id == state.current_pattern;
+            if ui.selectable_label(selected, pat.name.as_str()).clicked() {
+                state.current_pattern = pat.id;
+            }
         }
-    }
-
-    for channel_id in pending_replace {
-        callbacks.open_plugin_browser.as_mut()(channel_id);
-    }
-
-    for channel_id in pending_convert {
-        let _ = convert::steps_to_midi(state, pattern_id, channel_id);
-    }
+        if ui.button("+").on_hover_text("Add Pattern").clicked() {
+            state.add_pattern();
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(egui::RichText::new("Channel Rack").monospace());
+        });
+    });
 }
 
-fn pattern_header(ui: &mut egui::Ui, state: &mut RackState) {
-    egui::Frame::none()
-        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
-        .show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for pattern in &state.patterns {
-                    let selected = pattern.id == state.current_pattern;
-                    if ui
-                        .add(egui::SelectableLabel::new(selected, pattern.name.clone()))
-                        .clicked()
-                    {
-                        state.current_pattern = pattern.id;
-                    }
-                }
-
-                if ui.button("+").clicked() {
-                    let id = state.add_pattern();
-                    state.current_pattern = id;
-                }
-            });
-        });
+fn add_row(ui: &mut egui::Ui, callbacks: &mut RackCallbacks) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Add:").strong());
+        if ui.button("Instrument").clicked() {
+            (callbacks.open_plugin_browser)(None);
+        }
+        if ui.button("Sample").clicked() {
+            (callbacks.import_sample_file)(None, None);
+        }
+        if ui.button("Automation").clicked() {
+            (callbacks.create_automation_for)("master");
+        }
+    });
 }
 
-fn add_channel_row(ui: &mut egui::Ui, state: &mut RackState, callbacks: &mut RackCallbacks) {
-    egui::Frame::none()
-        .inner_margin(egui::Margin::same(6.0))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button("Add Instrument").clicked() {
-                    let name = next_channel_name(state, "Instrument");
-                    let id = state.add_channel(name, ChannelKind::Instrument, None);
-                    callbacks.open_plugin_browser.as_mut()(id);
-                }
-
-                if ui.button("Add Sample").clicked() {
-                    let name = next_channel_name(state, "Sample");
-                    let id = state.add_channel(name, ChannelKind::Sample, None);
-                    callbacks.import_sample_file.as_mut()(id);
-                }
-
-                if ui.button("Add Effect").clicked() {
-                    let name = next_channel_name(state, "Effect");
-                    let id = state.add_channel(name, ChannelKind::Effect, None);
-                    callbacks.open_plugin_browser.as_mut()(id);
-                }
-            });
-        });
+fn drop_hint(ui: &mut egui::Ui) {
+    ui.scope(|ui| {
+        let rect = ui.available_rect_before_wrap();
+        let is_hover = ui.rect_contains_pointer(rect);
+        if is_hover && ui.input(|i| !i.raw.dropped_files.is_empty()) {
+            let stroke = ui.visuals().selection.stroke.color;
+            ui.painter().rect_stroke(rect, 6.0, (1.0, stroke));
+            ui.painter().text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                "Release to import",
+                egui::TextStyle::Heading.resolve(ui.style()),
+                stroke,
+            );
+        }
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
-fn channel_header(
+fn channel_row(
     ui: &mut egui::Ui,
-    channel: &mut Channel,
+    pat: PatternId,
+    ch: &mut Channel,
     callbacks: &mut RackCallbacks,
-    pattern_id: PatternId,
     pending_remove: &mut Vec<ChannelId>,
-    pending_clone: &mut Vec<ChannelId>,
-    pending_replace: &mut Vec<ChannelId>,
-    pending_convert: &mut Vec<ChannelId>,
+    pending_convert: &mut Vec<(ChannelId, PatternId)>,
 ) {
     ui.horizontal(|ui| {
-        if ui.toggle_value(&mut channel.mute, "M").clicked() && channel.mute {
-            channel.solo = false;
-        }
-        ui.toggle_value(&mut channel.solo, "S");
-
-        ui.add(
-            egui::TextEdit::singleline(&mut channel.name)
-                .desired_width(160.0)
-                .hint_text("Channel Name"),
-        );
-
-        let badge = channel
-            .plugin_uid
-            .as_deref()
-            .map(|uid| uid.to_string())
-            .unwrap_or_else(|| match channel.kind {
-                ChannelKind::Instrument => "Select Instrument".to_string(),
-                ChannelKind::Sample => "Load Sample".to_string(),
-                ChannelKind::Effect => "Select Effect".to_string(),
-            });
         if ui
-            .button(RichText::new(badge).weak())
-            .on_hover_text("Click to pick a plugin or sample")
+            .selectable_label(ch.mute, "M")
+            .on_hover_text("Mute")
             .clicked()
         {
-            pending_replace.push(channel.id);
+            ch.mute = !ch.mute;
+        }
+        if ui
+            .selectable_label(ch.solo, "S")
+            .on_hover_text("Solo")
+            .clicked()
+        {
+            ch.solo = !ch.solo;
         }
 
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.menu_button("⋮", |ui| {
-                if ui.button("Edit in Piano Roll").clicked() {
-                    callbacks.open_piano_roll.as_mut()(channel.id, pattern_id);
-                    ui.close_menu();
-                }
-                if ui.button("Convert Steps → MIDI").clicked() {
-                    pending_convert.push(channel.id);
-                    ui.close_menu();
-                }
-                ui.separator();
-                if ui.button("Replace Instrument").clicked() {
-                    pending_replace.push(channel.id);
-                    ui.close_menu();
-                }
-                if ui.button("Clone Channel").clicked() {
-                    pending_clone.push(channel.id);
-                    ui.close_menu();
-                }
-                if ui.button("Delete Channel").clicked() {
-                    pending_remove.push(channel.id);
-                    ui.close_menu();
-                }
-                ui.separator();
-                ui.add_enabled(false, egui::Button::new("Ghost notes (soon)"));
-            });
-        });
-    });
-}
+        ui.text_edit_singleline(&mut ch.name);
 
-fn channel_controls(ui: &mut egui::Ui, channel: &mut Channel) {
-    ui.horizontal(|ui| {
-        ui.add(egui::Slider::new(&mut channel.gain_db, -60.0..=12.0).text("Level (dB)"));
-        ui.add(
-            egui::Slider::new(&mut channel.swing, 0.0..=1.0)
-                .text("Swing")
-                .suffix("%"),
-        );
-
-        let mut use_32 = channel.steps_per_bar == 32;
-        if ui.toggle_value(&mut use_32, "32 Steps").changed() {
-            channel.steps_per_bar = if use_32 { 32 } else { 16 };
-        }
-    });
-}
-
-fn step_grid(
-    ui: &mut egui::Ui,
-    channel: &mut Channel,
-    pattern_id: PatternId,
-    bars: u32,
-    paint_state: &mut PaintState,
-) {
-    let steps_per_bar_value = channel.steps_per_bar;
-    let channel_id = channel.id;
-    let steps_len = (bars * steps_per_bar_value) as usize;
-    let steps = channel
-        .steps
-        .entry(pattern_id)
-        .or_insert_with(|| vec![Step::default(); steps_len]);
-    if steps.len() != steps_len {
-        steps.resize(steps_len, Step::default());
-    }
-
-    let steps_per_bar = steps_per_bar_value as usize;
-    let total_steps = steps.len();
-    let alt_pressed = ui.input(|i| i.modifiers.alt);
-
-    let spacing = Vec2::splat(4.0);
-    let step_size = Vec2::new(22.0, 22.0);
-
-    let pointer_down = ui.input(|i| i.pointer.button_down(PointerButton::Primary));
-    if !pointer_down {
-        paint_state.session = None;
-    }
-
-    egui::Grid::new(Id::new((channel_id, "step_grid")))
-        .spacing(spacing)
-        .min_col_width(step_size.x)
-        .show(ui, |ui| {
-            for bar in 0..bars {
-                for step_in_bar in 0..steps_per_bar {
-                    let step_index = bar as usize * steps_per_bar + step_in_bar;
-                    if step_index >= total_steps {
-                        break;
-                    }
-                    let step = &mut steps[step_index];
-                    let text = if step.on { "●" } else { "○" };
-                    let response = ui.add_sized(step_size, egui::Button::new(text));
-                    handle_step_interaction(
-                        ui,
-                        channel_id,
-                        step,
-                        step_index,
-                        response,
-                        alt_pressed,
-                        paint_state,
-                    );
-
-                    if (step_in_bar + 1) % 4 == 0 && step_in_bar + 1 != steps_per_bar {
-                        ui.add_space(6.0);
-                    }
-                }
-                ui.end_row();
-            }
-        });
-}
-
-fn handle_step_interaction(
-    ui: &mut egui::Ui,
-    channel_id: ChannelId,
-    step: &mut Step,
-    step_index: usize,
-    response: Response,
-    alt_pressed: bool,
-    paint_state: &mut PaintState,
-) {
-    if response.clicked() {
-        if alt_pressed {
-            let new_value = !step.on;
-            step.on = new_value;
-            paint_state.session = Some(PaintSession {
-                channel: channel_id,
-                value: new_value,
-            });
-        } else {
-            step.on = !step.on;
-        }
-    }
-
-    if alt_pressed && response.hovered() {
-        if let Some(session) = &paint_state.session {
-            if session.channel == channel_id
-                && ui.input(|i| i.pointer.button_down(PointerButton::Primary))
-            {
-                step.on = session.value;
-            }
-        }
-    }
-
-    response.context_menu(|ui| {
-        ui.label(format!("Step {}", step_index + 1));
         ui.separator();
-        ui.add(egui::Slider::new(&mut step.velocity, 0..=127).text("Velocity"));
-        ui.add(egui::Slider::new(&mut step.pan, -64..=63).text("Pan"));
-        ui.add(egui::Slider::new(&mut step.shift_ticks, -120..=120).text("Shift"));
-        if ui.button("Clear Step").clicked() {
-            *step = Step::default();
-            ui.close_menu();
+        ui.label(egui::RichText::new(kind_badge(ch)).weak());
+
+        ui.separator();
+        ui.add(
+            egui::Slider::new(&mut ch.gain_db, -24.0..=12.0)
+                .text("Vol (dB)")
+                .clamp_to_range(true),
+        );
+        ui.add(egui::Slider::new(&mut ch.pan, -1.0..=1.0).text("Pan"));
+
+        let mut use_32 = ch.steps_per_bar == 32;
+        if ui.toggle_value(&mut use_32, "32").clicked() {
+            ch.steps_per_bar = if use_32 { 32 } else { 16 };
         }
+
+        ui.menu_button("⋮", |ui| {
+            if matches!(ch.kind, ChannelKind::Instrument | ChannelKind::Sample) {
+                if ui.button("Edit in Piano Roll").clicked() {
+                    (callbacks.open_piano_roll)(ch.id, pat);
+                    ui.close_menu();
+                }
+                if ui.button("Convert Steps → MIDI Clip").clicked() {
+                    pending_convert.push((ch.id, pat));
+                    ui.close_menu();
+                }
+            }
+            if matches!(ch.kind, ChannelKind::Instrument)
+                && ui.button("Replace Instrument…").clicked()
+            {
+                (callbacks.open_plugin_browser)(Some(ch.id));
+                ui.close_menu();
+            }
+            if matches!(ch.kind, ChannelKind::Sample) && ui.button("Replace Sample…").clicked() {
+                (callbacks.import_sample_file)(Some(ch.id), None);
+                ui.close_menu();
+            }
+            if ui.button("Delete Channel").clicked() {
+                pending_remove.push(ch.id);
+                ui.close_menu();
+            }
+        });
     });
+
+    ui.add_space(4.0);
+    step_grid(ui, pat, ch);
 }
 
-fn next_channel_name(state: &RackState, prefix: &str) -> String {
-    let count = state
-        .channels
-        .iter()
-        .filter(|ch| ch.name.starts_with(prefix))
-        .count()
-        + 1;
-    format!("{} {}", prefix, count)
+fn step_grid(ui: &mut egui::Ui, pat: PatternId, ch: &mut Channel) {
+    let steps_per_bar = ch.steps_per_bar.max(1) as usize;
+    let steps = ch
+        .steps
+        .entry(pat)
+        .or_insert_with(|| vec![Step::default(); steps_per_bar]);
+    if steps.len() != steps_per_bar {
+        steps.resize(steps_per_bar, Step::default());
+    }
+
+    let id_base = Id::new(("rack_step_drag", ch.id, pat));
+    let mut painting = ui.memory(|m| m.data.get_temp::<bool>(id_base));
+
+    ui.horizontal_wrapped(|ui| {
+        for (i, st) in steps.iter_mut().enumerate() {
+            let label = if st.on { "●" } else { "○" };
+            let mut button = egui::Button::new(label).min_size(egui::vec2(18.0, 18.0));
+            if (i % 4) == 0 {
+                button = button.fill(ui.visuals().extreme_bg_color);
+            }
+            let resp = ui.add(button);
+            if resp.clicked() {
+                st.on = !st.on;
+            }
+            if resp.hovered() && ui.input(|i| i.pointer.primary_down()) {
+                if painting.is_none() {
+                    painting = Some(!st.on);
+                }
+                if let Some(value) = painting {
+                    st.on = value;
+                }
+            }
+            if resp.hovered() && ui.input(|i| i.pointer.secondary_clicked()) {
+                ui.memory_mut(|m| m.toggle_popup(resp.id));
+            }
+            egui::popup_below_widget(
+                ui,
+                resp.id,
+                &resp,
+                PopupCloseBehavior::CloseOnClickOutside,
+                |ui: &mut egui::Ui| {
+                    ui.set_min_width(160.0);
+                    ui.label("Step params");
+                    ui.add(egui::Slider::new(&mut st.velocity, 1..=127).text("Velocity"));
+                    let mut pan = st.pan as i32;
+                    if ui
+                        .add(egui::Slider::new(&mut pan, -64..=63).text("Pan"))
+                        .changed()
+                    {
+                        st.pan = pan as i8;
+                    }
+                    let mut shift = st.shift_ticks as i32;
+                    if ui
+                        .add(egui::Slider::new(&mut shift, -48..=48).text("Shift"))
+                        .changed()
+                    {
+                        st.shift_ticks = shift as i16;
+                    }
+                },
+            );
+        }
+    });
+
+    if ui.input(|i| !i.pointer.primary_down()) {
+        if painting.is_some() {
+            ui.memory_mut(|m| m.data.remove::<bool>(id_base));
+        }
+    } else if let Some(value) = painting {
+        ui.memory_mut(|m| m.data.insert_temp::<bool>(id_base, value));
+    }
+}
+
+fn kind_badge(ch: &Channel) -> String {
+    match ch.kind {
+        ChannelKind::Instrument => ch
+            .plugin_uid
+            .as_deref()
+            .map(short_uid)
+            .unwrap_or_else(|| "Instrument".into()),
+        ChannelKind::Sample => "Sample".into(),
+        ChannelKind::Automation => "Automation".into(),
+    }
+}
+
+fn short_uid(uid: &str) -> String {
+    if let Some((_, tail)) = uid.rsplit_once("::") {
+        tail.to_string()
+    } else {
+        uid.to_string()
+    }
 }

@@ -2,13 +2,12 @@ use std::collections::HashMap;
 
 pub type ChannelId = u32;
 pub type PatternId = u32;
-pub type StepIndex = u16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChannelKind {
     Instrument,
     Sample,
-    Effect,
+    Automation,
 }
 
 #[derive(Clone, Debug)]
@@ -36,10 +35,10 @@ pub struct Channel {
     pub name: String,
     pub kind: ChannelKind,
     pub plugin_uid: Option<String>,
+    pub gain_db: f32,
+    pub pan: f32,
     pub mute: bool,
     pub solo: bool,
-    pub gain_db: f32,
-    pub swing: f32,
     pub steps_per_bar: u32,
     pub steps: HashMap<PatternId, Vec<Step>>,
 }
@@ -51,10 +50,10 @@ impl Channel {
             name,
             kind,
             plugin_uid,
+            gain_db: 0.0,
+            pan: 0.0,
             mute: false,
             solo: false,
-            gain_db: 0.0,
-            swing: 0.0,
             steps_per_bar: 16,
             steps: HashMap::new(),
         }
@@ -88,14 +87,14 @@ impl RackState {
     }
 
     pub fn add_pattern(&mut self) -> PatternId {
-        let next_id = self.patterns.iter().map(|pat| pat.id).max().unwrap_or(0) + 1;
-        let name = format!("Pattern {}", next_id);
+        let id = self.patterns.iter().map(|p| p.id).max().unwrap_or(0) + 1;
         self.patterns.push(PatternMeta {
-            id: next_id,
-            name,
+            id,
+            name: format!("Pattern {id}"),
             bars: 1,
         });
-        next_id
+        self.current_pattern = id;
+        id
     }
 
     pub fn add_channel(
@@ -104,50 +103,38 @@ impl RackState {
         kind: ChannelKind,
         plugin_uid: Option<String>,
     ) -> ChannelId {
-        let next_id = self.channels.iter().map(|ch| ch.id).max().unwrap_or(0) + 1;
-        let channel = Channel::new(next_id, name, kind, plugin_uid);
-        self.channels.push(channel);
-        next_id
+        let id = self.channels.iter().map(|ch| ch.id).max().unwrap_or(0) + 1;
+        self.channels.push(Channel::new(id, name, kind, plugin_uid));
+        id
+    }
+
+    pub fn remove_channel(&mut self, id: ChannelId) {
+        self.channels.retain(|c| c.id != id);
     }
 
     pub fn steps_mut(&mut self, pat: PatternId, ch: ChannelId) -> &mut Vec<Step> {
-        let pattern_bars = self
-            .patterns
+        let steps_per_bar = self
+            .channels
             .iter()
-            .find(|pattern| pattern.id == pat)
-            .map(|pattern| pattern.bars)
-            .unwrap_or_else(|| {
-                self.patterns.push(PatternMeta {
-                    id: pat,
-                    name: format!("Pattern {}", pat),
-                    bars: 1,
-                });
-                1
-            });
-
-        let total_steps = {
-            let steps_per_bar = self
-                .channels
-                .iter()
-                .find(|channel| channel.id == ch)
-                .map(|channel| channel.steps_per_bar)
-                .unwrap_or(16);
-            (pattern_bars * steps_per_bar) as usize
-        };
+            .find(|c| c.id == ch)
+            .map(|c| c.steps_per_bar as usize)
+            .expect("channel must exist");
 
         let channel = self
             .channels
             .iter_mut()
-            .find(|channel| channel.id == ch)
+            .find(|c| c.id == ch)
             .expect("channel must exist");
 
         let steps = channel
             .steps
             .entry(pat)
-            .or_insert_with(|| vec![Step::default(); total_steps]);
-        if steps.len() != total_steps {
-            steps.resize(total_steps, Step::default());
+            .or_insert_with(|| vec![Step::default(); steps_per_bar]);
+
+        if steps.len() != steps_per_bar {
+            steps.resize(steps_per_bar, Step::default());
         }
+
         steps
     }
 }
