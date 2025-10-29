@@ -1,0 +1,16 @@
+[package]
+name = "harmoniq-mixer"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Mixer state + egui UI for Harmoniq Studio"
+publish = false
+
+[dependencies]
+egui = "0.27"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[features]
+default = []
+persistence = ["serde", "serde_json"]
