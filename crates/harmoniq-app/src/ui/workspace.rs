@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WorkspacePane {
     Browser,
-    Arrange,
     PianoRoll,
     Inspector,
     Console,
@@ -14,7 +13,6 @@ impl WorkspacePane {
     pub fn title(&self) -> &'static str {
         match self {
             WorkspacePane::Browser => "Browser",
-            WorkspacePane::Arrange => "Arrange",
             WorkspacePane::PianoRoll => "Piano Roll",
             WorkspacePane::Inspector => "Inspector",
             WorkspacePane::Console => "Console",
@@ -23,17 +21,15 @@ impl WorkspacePane {
 }
 
 pub fn build_default_workspace() -> DockState<WorkspacePane> {
-    let mut dock = DockState::new(vec![WorkspacePane::Arrange]);
+    let mut dock = DockState::new(vec![WorkspacePane::PianoRoll]);
     {
         let surface = dock.main_surface_mut();
-        let [arrange_node, _browser] =
-            surface.split_left(NodeIndex::root(), 0.8, vec![WorkspacePane::Browser]);
-        let [arrange_node, inspector_node] =
-            surface.split_right(arrange_node, 0.8, vec![WorkspacePane::Inspector]);
+        let [_browser_node, center_node] =
+            surface.split_left(NodeIndex::root(), 0.26, vec![WorkspacePane::Browser]);
+        let [center_node, inspector_node] =
+            surface.split_right(center_node, 0.78, vec![WorkspacePane::Inspector]);
         let [_inspector, _console] =
-            surface.split_below(inspector_node, 0.55, vec![WorkspacePane::Console]);
-        let [_arrange_node, _piano_node] =
-            surface.split_below(arrange_node, 0.62, vec![WorkspacePane::PianoRoll]);
+            surface.split_below(inspector_node, 0.56, vec![WorkspacePane::Console]);
     }
     dock
 }
