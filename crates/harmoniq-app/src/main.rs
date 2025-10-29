@@ -137,7 +137,7 @@ struct Cli {
     ultra: bool,
 
     /// Preferred realtime audio backend
-    #[cfg_attr(target_os = "linux", arg(long, default_value_t = AudioBackend::Asio))]
+    #[cfg_attr(target_os = "linux", arg(long, default_value = "asio"))]
     #[cfg_attr(not(target_os = "linux"), arg(long, default_value_t = AudioBackend::Auto))]
     audio_backend: AudioBackend,
 
