@@ -55,7 +55,7 @@ fn header(ui: &mut egui::Ui, state: &mut MixerState) {
 fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, callbacks: &mut crate::MixerCallbacks) {
     let metrics = StripMetrics::default();
     egui::Frame::group(ui.style())
-        .inner_margin(egui::style::Margin::same(6.0))
+        .inner_margin(egui::Margin::same(6.0))
         .rounding(egui::Rounding::same(4.0))
         .show(ui, |ui| {
             ui.set_width(metrics.strip_w);
