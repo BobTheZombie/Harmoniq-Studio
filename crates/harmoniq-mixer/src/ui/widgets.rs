@@ -39,7 +39,7 @@ pub fn small_knob(
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 40.0), Sense::click_and_drag());
     let center = rect.center();
     let radius = rect.width().min(rect.height()) * 0.45;
-    let angle = egui::remap_clamp(*v, *range.start(), *range.end(), -2.5, 2.5);
+    let angle = egui::remap_clamp(*v, range.clone(), -2.5..=2.5);
     let changed = resp.dragged() || resp.clicked();
     if resp.dragged() {
         let delta = ui.input(|i| i.pointer.delta().y);
@@ -61,6 +61,7 @@ pub fn small_knob(
     p.galley(
         egui::pos2(rect.center().x - galley.size().x * 0.5, rect.bottom() + 2.0),
         galley,
+        ui.visuals().text_color(),
     );
     changed
 }

@@ -16,16 +16,17 @@ impl Default for StripMetrics {
     }
 }
 
-pub fn render(ui: &mut egui::Ui, mut props: crate::MixerProps) {
+pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
+    let crate::MixerProps { state, callbacks } = props;
     ui.vertical(|ui| {
-        header(ui, props.state);
+        header(ui, &mut *state);
         ui.separator();
         egui::ScrollArea::horizontal()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.horizontal_top(|ui| {
-                    for ch in &mut props.state.channels {
-                        channel_strip(ui, ch, &mut props);
+                    for ch in &mut state.channels {
+                        channel_strip(ui, ch, &mut *callbacks);
                     }
                 });
             });
@@ -47,7 +48,7 @@ fn header(ui: &mut egui::Ui, state: &mut MixerState) {
     });
 }
 
-fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, props: &mut crate::MixerProps) {
+fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, callbacks: &mut crate::MixerCallbacks) {
     let metrics = StripMetrics::default();
     egui::Frame::group(ui.style())
         .show(ui, |ui| {
@@ -88,7 +89,7 @@ fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, props: &mut crate::MixerPr
                 let mut db = ch.gain_db;
                 if fader_db(ui, &mut db, -60.0..=12.0, metrics.fader_h) {
                     ch.gain_db = db;
-                    (props.callbacks.set_gain_pan)(ch.id, ch.gain_db, ch.pan);
+                    (callbacks.set_gain_pan)(ch.id, ch.gain_db, ch.pan);
                 }
             });
             ui.add_space(6.0);
@@ -98,7 +99,7 @@ fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, props: &mut crate::MixerPr
                 let mut pan = ch.pan;
                 if small_knob(ui, &mut pan, -1.0..=1.0, "") {
                     ch.pan = pan;
-                    (props.callbacks.set_gain_pan)(ch.id, ch.gain_db, ch.pan);
+                    (callbacks.set_gain_pan)(ch.id, ch.gain_db, ch.pan);
                 }
                 ui.separator();
                 if ui
@@ -107,7 +108,7 @@ fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, props: &mut crate::MixerPr
                     .clicked()
                 {
                     ch.mute = !ch.mute;
-                    (props.callbacks.set_mute)(ch.id, ch.mute);
+                    (callbacks.set_mute)(ch.id, ch.mute);
                 }
                 if ui
                     .selectable_label(ch.solo, "S")
@@ -115,7 +116,7 @@ fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, props: &mut crate::MixerPr
                     .clicked()
                 {
                     ch.solo = !ch.solo;
-                    (props.callbacks.set_solo)(ch.id, ch.solo);
+                    (callbacks.set_solo)(ch.id, ch.solo);
                 }
             });
             ui.add_space(6.0);
@@ -131,19 +132,19 @@ fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, props: &mut crate::MixerPr
                         {
                             bypass = !bypass;
                             ins.bypass = bypass;
-                            (props.callbacks.set_insert_bypass)(ch.id, idx, bypass);
+                            (callbacks.set_insert_bypass)(ch.id, idx, bypass);
                         }
                         ui.label(egui::RichText::new(ins.name.as_str()).strong());
                         if ui.button("UI").on_hover_text("Open plugin UI").clicked() {
-                            (props.callbacks.open_insert_ui)(ch.id, idx);
+                            (callbacks.open_insert_ui)(ch.id, idx);
                         }
                         if ui.button("✕").on_hover_text("Remove").clicked() {
-                            (props.callbacks.remove_insert)(ch.id, idx);
+                            (callbacks.remove_insert)(ch.id, idx);
                         }
                     });
                 }
                 if ui.button("➕ Add Insert").clicked() {
-                    (props.callbacks.open_insert_browser)(ch.id, None);
+                    (callbacks.open_insert_browser)(ch.id, None);
                 }
             });
             // SENDS
@@ -156,7 +157,7 @@ fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, props: &mut crate::MixerPr
                             let mut lvl = s.level;
                             if small_knob(ui, &mut lvl, 0.0..=1.0, "") {
                                 s.level = lvl;
-                                (props.callbacks.configure_send)(ch.id, s.id, s.level);
+                                (callbacks.configure_send)(ch.id, s.id, s.level);
                             }
                         });
                     }
@@ -171,7 +172,7 @@ fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, props: &mut crate::MixerPr
         .response
         .context_menu(|ui| {
             if ui.button("Add Insert…").clicked() {
-                (props.callbacks.open_insert_browser)(ch.id, None);
+                (callbacks.open_insert_browser)(ch.id, None);
                 ui.close_menu();
             }
         });
