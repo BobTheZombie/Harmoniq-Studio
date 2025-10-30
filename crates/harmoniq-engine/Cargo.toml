@@ -55,6 +55,7 @@ no-denormals = ["harmoniq-dsp/no-denormals"]
 ultra = ["native", "openasio_gpl", "no-denormals", "core_affinity"]
 fuzzing = []
 mixer_api = []
+clap_host = []
 
 [dev-dependencies]
 serde_json.workspace = true
