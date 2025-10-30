@@ -1,16 +1,23 @@
 [package]
 name = "harmoniq-mixer"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Mixer state + egui UI for Harmoniq Studio"
+description = "RT-safe, lock-free stereo mixer + egui UI for Harmoniq Studio"
 publish = false
-
-[dependencies]
-egui = "0.27"
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
 
 [features]
 default = []
+egui = ["dep:egui"]
 persistence = ["serde", "serde_json"]
+
+[dependencies]
+atomic_float = "1.1"
+arc-swap = "1.7"
+ringbuf = "0.3"
+egui = { version = "0.27", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[package.metadata.docs.rs]
+features = ["egui"]
