@@ -2,6 +2,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 pub mod api;
+#[cfg(feature = "mixer_api")]
+pub mod control;
 pub mod levels;
 
 use harmoniq_dsp::gain::db_to_linear;

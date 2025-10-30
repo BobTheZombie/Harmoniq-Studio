@@ -23,6 +23,7 @@ arrayvec = "0.7"
 cpal = { version = "0.16", optional = true }
 openasio_sdk = { git = "https://github.com/BobTheZombie/OpenASIO-SDK", package = "openasio", optional = true }
 crossbeam-queue.workspace = true
+crossbeam-channel.workspace = true
 ringbuf.workspace = true
 rtrb = "0.3"
 heapless = "0.8"
@@ -33,6 +34,7 @@ hound = "3.5"
 flacenc = "0.5"
 clap-host = { path = "../clap-host" }
 num_cpus = "1.17"
+log.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
@@ -52,6 +54,7 @@ fast-math = ["harmoniq-dsp/fast-math"]
 no-denormals = ["harmoniq-dsp/no-denormals"]
 ultra = ["native", "openasio_gpl", "no-denormals", "core_affinity"]
 fuzzing = []
+mixer_api = []
 
 [dev-dependencies]
 serde_json.workspace = true
