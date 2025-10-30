@@ -209,20 +209,15 @@ impl MixerView {
         });
 
         callbacks.open_insert_browser = Box::new(|channel_id, slot| {
-            info!("open_insert_browser", channel_id, slot);
+            info!(?channel_id, slot, "open_insert_browser");
         });
 
         callbacks.open_insert_ui = Box::new(|channel_id, slot| {
-            info!("open_insert_ui", channel_id, slot);
+            info!(?channel_id, slot, "open_insert_ui");
         });
 
         callbacks.remove_insert = Box::new(|channel_id, slot| {
-            warn!(
-                "remove_insert_unimplemented",
-                ?channel_id,
-                slot,
-                "remove insert not yet wired"
-            );
+            warn!(?channel_id, slot, "remove_insert_unimplemented");
         });
 
         callbacks
