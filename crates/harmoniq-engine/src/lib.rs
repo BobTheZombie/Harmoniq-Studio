@@ -15,12 +15,14 @@ pub mod cpu_pinning;
 pub mod dsp;
 pub mod engine;
 pub mod graph;
+#[cfg(feature = "clap_host")]
+pub mod host;
 pub mod ipc;
 pub mod media;
 pub mod mixer;
+pub mod nodes;
 #[cfg(feature = "mixer_api")]
 pub mod panlaw;
-pub mod nodes;
 pub mod plugin;
 pub mod project;
 pub mod render;
@@ -56,6 +58,8 @@ pub use core::CommandError;
 pub use dsp::RealtimeDspEngine;
 pub use engine::{EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
 pub use graph::{GraphBuilder, GraphHandle, NodeHandle};
+#[cfg(feature = "clap_host")]
+pub use host::clap_hosting::ClapSlot;
 #[cfg(feature = "mixer_api")]
 pub use mixer::control::{
     ChannelId, EngineMixerHandle, GuiMeterReceiver, MeterEvent, MixerBackend, MixerCommand, SendId,
