@@ -358,42 +358,51 @@ fn routing_matrix_window(
 
             egui::Grid::new("routing_matrix_grid")
                 .striped(true)
-                .show(ui, |grid| {
-                    grid.label(RichText::new("Source").strong());
+                .show(ui, |grid_ui| {
+                    grid_ui.label(RichText::new("Source").strong());
                     for bus in &buses {
-                        grid.label(RichText::new(bus).strong());
+                        grid_ui.label(RichText::new(bus).strong());
                     }
-                    grid.end_row();
+                    grid_ui.end_row();
 
                     let mut delta = RoutingDelta::default();
                     for ch in state.channels.iter().filter(|c| !c.is_master) {
-                        grid.label(ch.name.clone());
+                        grid_ui.label(ch.name.clone());
                         for bus in &buses {
                             let current = state.routing.level(ch.id, bus).unwrap_or(0.0);
-                            let cell_id = ui.make_persistent_id(("route", ch.id, bus));
+                            let cell_id = grid_ui.make_persistent_id(("route", ch.id, bus));
                             let (rect, _) =
-                                ui.allocate_exact_size(egui::vec2(80.0, 22.0), egui::Sense::click_and_drag());
-                            let painter = ui.painter_at(rect);
+                                grid_ui.allocate_exact_size(egui::vec2(80.0, 22.0), egui::Sense::click_and_drag());
+                            let painter = grid_ui.painter_at(rect);
                             let bg = if current > 0.0 {
-                                ui.visuals().selection.bg_fill
+                                grid_ui.visuals().selection.bg_fill
                             } else {
-                                ui.visuals().faint_bg_color
+                                grid_ui.visuals().faint_bg_color
                             };
                             painter.rect_filled(rect, 3.0, bg);
                             painter.rect_stroke(
                                 rect,
                                 3.0,
-                                egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color),
+                                egui::Stroke::new(
+                                    1.0,
+                                    grid_ui
+                                        .visuals()
+                                        .widgets
+                                        .noninteractive
+                                        .fg_stroke
+                                        .color,
+                                ),
                             );
                             painter.text(
                                 rect.center(),
                                 egui::Align2::CENTER_CENTER,
                                 format!("{current:.2}"),
-                                egui::TextStyle::Small.resolve(ui.style()),
-                                ui.visuals().text_color(),
+                                egui::TextStyle::Small.resolve(grid_ui.style()),
+                                grid_ui.visuals().text_color(),
                             );
 
-                            let response = ui.interact(rect, cell_id, egui::Sense::click_and_drag());
+                            let response =
+                                grid_ui.interact(rect, cell_id, egui::Sense::click_and_drag());
                             let mut level = current;
                             if response.clicked() {
                                 if level == 0.0 {
@@ -412,7 +421,7 @@ fn routing_matrix_window(
                                 }
                             }
                         }
-                        grid.end_row();
+                        grid_ui.end_row();
                     }
 
                     if !delta.set.is_empty() || !delta.remove.is_empty() {
