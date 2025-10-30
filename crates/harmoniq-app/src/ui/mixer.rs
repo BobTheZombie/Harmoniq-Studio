@@ -50,6 +50,8 @@ impl MixerEngineBridge {
                 event.peak_r,
                 event.rms_l,
                 event.rms_r,
+                event.clip_l,
+                event.clip_r,
             );
             updated = true;
         });
@@ -207,13 +209,15 @@ impl MixerView {
         let use_engine_meters = false;
         let mut master_peak_db = (f32::NEG_INFINITY, f32::NEG_INFINITY);
         if !use_engine_meters {
-            let (peak_l_db, peak_r_db, rms_l_db, rms_r_db, _clipped) = self.api.level_fetch(idx);
+            let (peak_l_db, peak_r_db, rms_l_db, rms_r_db, clipped) = self.api.level_fetch(idx);
             meter.peak_l = db_to_linear(peak_l_db);
             meter.peak_r = db_to_linear(peak_r_db);
             meter.rms_l = db_to_linear(rms_l_db);
             meter.rms_r = db_to_linear(rms_r_db);
             meter.peak_hold_l = meter.peak_l;
             meter.peak_hold_r = meter.peak_r;
+            meter.clip_l = clipped;
+            meter.clip_r = clipped;
             meter.last_update = Instant::now();
             master_peak_db = (peak_l_db, peak_r_db);
         } else if info.is_master {
@@ -323,6 +327,24 @@ impl MixerView {
             }
         });
 
+        let api_reorder = Arc::clone(&self.api);
+        let map_reorder = snapshots.clone();
+        #[cfg(feature = "mixer_api")]
+        let tx_reorder = engine_sender.clone();
+        callbacks.reorder_insert = Box::new(move |channel_id, from, to| {
+            if let Some(snapshot) = map_reorder.get(&channel_id) {
+                api_reorder.insert_move(snapshot.index, from, to);
+            }
+            #[cfg(feature = "mixer_api")]
+            if let Some(tx) = &tx_reorder {
+                let _ = tx.send(MixerCommand::ReorderInsert {
+                    ch: channel_id,
+                    from,
+                    to,
+                });
+            }
+        });
+
         let api_send = Arc::clone(&self.api);
         let map_send = snapshots.clone();
         #[cfg(feature = "mixer_api")]
@@ -385,6 +407,19 @@ impl MixerView {
                     ch: channel_id,
                     slot,
                 });
+            }
+        });
+
+        #[cfg(feature = "mixer_api")]
+        let tx_routing = engine_sender;
+        callbacks.apply_routing = Box::new(move |delta| {
+            #[cfg(feature = "mixer_api")]
+            if let Some(tx) = &tx_routing {
+                let cmd = MixerCommand::ApplyRouting {
+                    set: delta.set.clone(),
+                    remove: delta.remove.clone(),
+                };
+                let _ = tx.send(cmd);
             }
         });
 

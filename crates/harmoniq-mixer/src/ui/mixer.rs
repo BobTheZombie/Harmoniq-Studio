@@ -1,6 +1,14 @@
 use super::widgets::*;
 use crate::state::*;
+use std::collections::BTreeSet;
+
 use egui::{self, RichText};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResetRequest {
+    Channel(ChannelId),
+    All,
+}
 
 pub struct StripMetrics {
     pub fader_h: f32,
@@ -25,15 +33,46 @@ pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
     ui.vertical(|ui| {
         header(ui, &mut *state);
         ui.separator();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Routing Matrix").clicked() {
+                state.routing_visible = !state.routing_visible;
+            }
+        });
         egui::ScrollArea::horizontal()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.horizontal_top(|ui| {
-                    for ch in &mut state.channels {
-                        channel_strip(ui, ch, &mut *callbacks);
+                    let mut reset_requests: Vec<ResetRequest> = Vec::new();
+                    for idx in 0..state.channels.len() {
+                        let request = {
+                            let ch = &mut state.channels[idx];
+                            channel_strip(ui, ch, &mut *callbacks)
+                        };
+                        if let Some(req) = request {
+                            reset_requests.push(req);
+                        }
+                    }
+                    let mut reset_all = false;
+                    for req in &reset_requests {
+                        if matches!(req, ResetRequest::All) {
+                            reset_all = true;
+                            break;
+                        }
+                    }
+                    if reset_all {
+                        state.reset_peaks_all();
+                    } else {
+                        for req in reset_requests {
+                            if let ResetRequest::Channel(id) = req {
+                                state.reset_peaks_for(id);
+                            }
+                        }
                     }
                 });
             });
+        if state.routing_visible {
+            routing_matrix_window(ui, callbacks, &mut *state);
+        }
     });
 }
 
@@ -52,8 +91,13 @@ fn header(ui: &mut egui::Ui, state: &mut MixerState) {
     });
 }
 
-fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, callbacks: &mut crate::MixerCallbacks) {
+fn channel_strip(
+    ui: &mut egui::Ui,
+    ch: &mut Channel,
+    callbacks: &mut crate::MixerCallbacks,
+) -> Option<ResetRequest> {
     let metrics = StripMetrics::default();
+    let mut reset = None;
     egui::Frame::group(ui.style())
         .inner_margin(egui::Margin::same(6.0))
         .rounding(egui::Rounding::same(4.0))
@@ -79,20 +123,30 @@ fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, callbacks: &mut crate::Mix
                 ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
                 ui.vertical(|ui| {
                     let m = &ch.meter;
-                    meter_vertical(
+                    let resp_l = meter_vertical(
                         ui,
                         m.peak_l,
                         m.rms_l,
                         m.peak_hold_l,
+                        m.clip_l,
                         egui::vec2(metrics.meter_w, metrics.fader_h),
                     );
-                    meter_vertical(
+                    let resp_r = meter_vertical(
                         ui,
                         m.peak_r,
                         m.rms_r,
                         m.peak_hold_r,
+                        m.clip_r,
                         egui::vec2(metrics.meter_w, metrics.fader_h),
                     );
+                    if resp_l.double_clicked() || resp_r.double_clicked() {
+                        let all = ui.input(|i| i.modifiers.shift);
+                        reset = Some(if all {
+                            ResetRequest::All
+                        } else {
+                            ResetRequest::Channel(ch.id)
+                        });
+                    }
                 });
                 // fader
                 let mut db = ch.gain_db;
@@ -129,54 +183,7 @@ fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, callbacks: &mut crate::Mix
             });
             ui.separator();
             // INSERTS
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
-                ui.label(RichText::new("INSERTS").small());
-                for (idx, ins) in ch.inserts.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        let mut bypass = ins.bypass;
-                        if ui
-                            .add_sized([18.0, 18.0], egui::SelectableLabel::new(bypass, "⏸"))
-                            .on_hover_text("Bypass")
-                            .clicked()
-                        {
-                            bypass = !bypass;
-                            ins.bypass = bypass;
-                            (callbacks.set_insert_bypass)(ch.id, idx, bypass);
-                        }
-                        let insert_label = if ins.name.is_empty() {
-                            "Empty".to_string()
-                        } else {
-                            ins.name.clone()
-                        };
-                        if ui
-                            .add_sized(
-                                [metrics.strip_w - 40.0, 18.0],
-                                egui::Button::new(RichText::new(insert_label).small()),
-                            )
-                            .clicked()
-                        {
-                            (callbacks.open_insert_ui)(ch.id, idx);
-                        }
-                        if ui
-                            .add_sized([18.0, 18.0], egui::Button::new("✕"))
-                            .on_hover_text("Remove")
-                            .clicked()
-                        {
-                            (callbacks.remove_insert)(ch.id, idx);
-                        }
-                    });
-                }
-                if ui
-                    .add_sized(
-                        [metrics.strip_w - 12.0, 18.0],
-                        egui::Button::new(RichText::new("+ Add Insert").small()),
-                    )
-                    .clicked()
-                {
-                    (callbacks.open_insert_browser)(ch.id, None);
-                }
-            });
+            inserts_panel(ui, ch, callbacks, &metrics);
             if !ch.is_master {
                 ui.separator();
                 // SENDS
@@ -196,6 +203,10 @@ fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, callbacks: &mut crate::Mix
                     }
                 });
             }
+            ui.add_space(6.0);
+            if ui.button("Select").clicked() {
+                // selection is stored on MixerState outside; handled by caller if needed
+            }
         })
         .response
         .context_menu(|ui| {
@@ -204,4 +215,211 @@ fn channel_strip(ui: &mut egui::Ui, ch: &mut Channel, callbacks: &mut crate::Mix
                 ui.close_menu();
             }
         });
+    reset
+}
+
+fn inserts_panel(
+    ui: &mut egui::Ui,
+    ch: &mut Channel,
+    callbacks: &mut crate::MixerCallbacks,
+    metrics: &StripMetrics,
+) {
+    let drag_id = egui::Id::new(("mixer_insert_drag", ch.id));
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(2.0, 2.0);
+        ui.label(RichText::new("INSERTS").small());
+
+        let pointer_pos = ui.ctx().pointer_interact_pos();
+        let mut drop_target: Option<usize> = None;
+        let mut pending_move: Option<(usize, usize)> = None;
+
+        for idx in 0..ch.inserts.len() {
+            let insert_label = if ch.inserts[idx].name.is_empty() {
+                "Empty".to_string()
+            } else {
+                ch.inserts[idx].name.clone()
+            };
+            let mut row_rect = egui::Rect::NOTHING;
+            let mut drop_request = None;
+            let response = ui
+                .horizontal(|ui| {
+                    let handle = ui
+                        .add_sized([18.0, 18.0], egui::Label::new("≡").sense(egui::Sense::drag()))
+                        .on_hover_text("Drag to reorder");
+                    if handle.drag_started() {
+                        ui.ctx().data_mut(|data| data.insert_temp(drag_id, idx));
+                    }
+                    if handle.drag_released() {
+                        if let Some(from) = ui.ctx().data(|data| data.get_temp::<usize>(drag_id)) {
+                            drop_request = Some((from, drop_target.unwrap_or(idx)));
+                        }
+                        ui.ctx().data_mut(|data| data.remove::<usize>(drag_id));
+                    }
+
+                    let mut bypass = ch.inserts[idx].bypass;
+                    if ui
+                        .add_sized([18.0, 18.0], egui::SelectableLabel::new(bypass, "⏸"))
+                        .on_hover_text("Bypass")
+                        .clicked()
+                    {
+                        bypass = !bypass;
+                        ch.inserts[idx].bypass = bypass;
+                        (callbacks.set_insert_bypass)(ch.id, idx, bypass);
+                    }
+                    if ui
+                        .add_sized(
+                            [metrics.strip_w - 64.0, 18.0],
+                            egui::Button::new(RichText::new(insert_label).small()),
+                        )
+                        .clicked()
+                    {
+                        (callbacks.open_insert_ui)(ch.id, idx);
+                    }
+                    if ui
+                        .add_sized([18.0, 18.0], egui::Button::new("✕"))
+                        .on_hover_text("Remove")
+                        .clicked()
+                    {
+                        (callbacks.remove_insert)(ch.id, idx);
+                    }
+                })
+                .response;
+            row_rect = response.rect;
+            if let Some((from, target)) = drop_request {
+                pending_move = Some((from, target));
+            }
+
+            if let Some(pos) = pointer_pos {
+                if row_rect.contains(pos) {
+                    drop_target = Some(idx);
+                    let stroke = egui::Stroke::new(1.0, ui.visuals().selection.stroke.color);
+                    ui.painter().rect_stroke(row_rect.shrink(1.0), 2.0, stroke);
+                }
+            }
+        }
+
+        if ui.ctx().data(|data| data.get_temp::<usize>(drag_id)).is_some()
+            && drop_target.is_none()
+        {
+            drop_target = Some(ch.inserts.len());
+        }
+
+        if let Some((from, to)) = pending_move {
+            if from != to && from < ch.inserts.len() {
+                let mut destination = to.min(ch.inserts.len());
+                let slot = ch.inserts.remove(from);
+                if destination > from {
+                    destination = destination.saturating_sub(1);
+                }
+                destination = destination.min(ch.inserts.len());
+                ch.inserts.insert(destination, slot);
+                (callbacks.reorder_insert)(ch.id, from, destination);
+            }
+        }
+
+        if ui
+            .add_sized(
+                [metrics.strip_w - 12.0, 18.0],
+                egui::Button::new(RichText::new("+ Add Insert").small()),
+            )
+            .clicked()
+        {
+            (callbacks.open_insert_browser)(ch.id, None);
+        }
+    });
+}
+
+fn routing_matrix_window(
+    ui: &mut egui::Ui,
+    callbacks: &mut crate::MixerCallbacks,
+    state: &mut MixerState,
+) {
+    let mut open = state.routing_visible;
+    egui::Window::new("Routing Matrix")
+        .open(&mut open)
+        .collapsible(false)
+        .default_size(egui::vec2(720.0, 420.0))
+        .show(ui.ctx(), |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Level 0..1. Click cell to toggle; drag to adjust.");
+                if ui.button("Close").clicked() {
+                    state.routing_visible = false;
+                }
+            });
+            ui.separator();
+
+            let mut buses: BTreeSet<String> = BTreeSet::new();
+            buses.insert("MASTER".to_string());
+            for map in state.routing.routes.values() {
+                for bus in map.keys() {
+                    buses.insert(bus.clone());
+                }
+            }
+
+            egui::Grid::new("routing_matrix_grid")
+                .striped(true)
+                .show(ui, |grid| {
+                    grid.label(RichText::new("Source").strong());
+                    for bus in &buses {
+                        grid.label(RichText::new(bus).strong());
+                    }
+                    grid.end_row();
+
+                    let mut delta = RoutingDelta::default();
+                    for ch in state.channels.iter().filter(|c| !c.is_master) {
+                        grid.label(ch.name.clone());
+                        for bus in &buses {
+                            let current = state.routing.level(ch.id, bus).unwrap_or(0.0);
+                            let cell_id = ui.make_persistent_id(("route", ch.id, bus));
+                            let (rect, _) =
+                                ui.allocate_exact_size(egui::vec2(80.0, 22.0), egui::Sense::click_and_drag());
+                            let painter = ui.painter_at(rect);
+                            let bg = if current > 0.0 {
+                                ui.visuals().selection.bg_fill
+                            } else {
+                                ui.visuals().faint_bg_color
+                            };
+                            painter.rect_filled(rect, 3.0, bg);
+                            painter.rect_stroke(
+                                rect,
+                                3.0,
+                                egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color),
+                            );
+                            painter.text(
+                                rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                format!("{current:.2}"),
+                                egui::TextStyle::Small.resolve(ui.style()),
+                                ui.visuals().text_color(),
+                            );
+
+                            let response = ui.interact(rect, cell_id, egui::Sense::click_and_drag());
+                            let mut level = current;
+                            if response.clicked() {
+                                if level == 0.0 {
+                                    level = 1.0;
+                                    delta.set.push((ch.id, bus.clone(), level));
+                                } else {
+                                    delta.remove.push((ch.id, bus.clone()));
+                                    level = 0.0;
+                                }
+                            }
+                            if response.dragged() {
+                                let dy = response.drag_delta().y;
+                                if dy.abs() > f32::EPSILON {
+                                    level = (level - dy * 0.01).clamp(0.0, 1.0);
+                                    delta.set.push((ch.id, bus.clone(), level));
+                                }
+                            }
+                        }
+                        grid.end_row();
+                    }
+
+                    if !delta.set.is_empty() || !delta.remove.is_empty() {
+                        state.routing.apply_delta(&delta);
+                        (callbacks.apply_routing)(delta);
+                    }
+                });
+        });
+    state.routing_visible = open;
 }
