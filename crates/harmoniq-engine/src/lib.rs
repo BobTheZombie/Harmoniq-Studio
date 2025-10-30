@@ -54,6 +54,10 @@ pub use core::CommandError;
 pub use dsp::RealtimeDspEngine;
 pub use engine::{EngineCommand, EngineCommandQueue, HarmoniqEngine, TransportState};
 pub use graph::{GraphBuilder, GraphHandle, NodeHandle};
+#[cfg(feature = "mixer_api")]
+pub use mixer::control::{
+    ChannelId, EngineMixerHandle, GuiMeterReceiver, MeterEvent, MixerBackend, MixerCommand, SendId,
+};
 pub use mixer::{
     MixerAuxSendState, MixerAuxState, MixerBusState, MixerEngine, MixerInsertProcessor,
     MixerInsertState, MixerMasterState, MixerModel, MixerState, MixerTargetState, MixerTrackState,

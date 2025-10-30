@@ -49,6 +49,7 @@ default = []
 glow = ["eframe/glow"]
 openasio = ["harmoniq-engine/openasio_gpl", "dep:openasio_sdk"]
 ultra = ["harmoniq-engine/ultra", "openasio"]
+mixer_api = ["harmoniq-engine/mixer_api"]
 x11-backend = ["eframe/x11", "winit/x11"]
 
 [target.'cfg(target_os = "linux")'.dependencies]

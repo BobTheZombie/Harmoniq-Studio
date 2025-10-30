@@ -8,6 +8,8 @@ use parking_lot::{Mutex, RwLock};
 use rayon::prelude::*;
 
 use crate::mixer::api::{MixerUiApi, MixerUiState};
+#[cfg(feature = "mixer_api")]
+use crate::mixer::control::{ChannelId, EngineMixerHandle, MeterEvent, MixerBackend, SendId};
 use crate::{
     automation::{AutomationEvent, AutomationLane, AutomationSender, ParameterSpec},
     graph::{self, GraphBuilder, GraphHandle},
@@ -21,9 +23,13 @@ use crate::{
     AudioBuffer, AudioClip, AudioProcessor, BufferConfig,
 };
 use harmoniq_rt::RtEvent;
+#[cfg(feature = "mixer_api")]
+use log::{debug, warn};
 
 const COMMAND_QUEUE_CAPACITY: usize = 1024;
 const METRICS_HISTORY_CAPACITY: usize = 512;
+#[cfg(feature = "mixer_api")]
+const MASTER_CHANNEL_ID: ChannelId = 10_000;
 
 /// Transport state shared with UI and sequencing components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +107,8 @@ pub struct HarmoniqEngine {
     block_period_ns: u64,
     automation_cursor: u64,
     mixer_ui: Arc<MixerUiState>,
+    #[cfg(feature = "mixer_api")]
+    mixer_handle: EngineMixerHandle,
     rt_bridge: Option<RtBridge>,
     last_reported_xruns: u64,
     last_reported_engine_load: u16,
@@ -119,6 +127,8 @@ impl HarmoniqEngine {
             .store(config.sample_rate.round() as u32, Ordering::Relaxed);
 
         let mixer_ui = MixerUiState::demo();
+        #[cfg(feature = "mixer_api")]
+        let mixer_handle = EngineMixerHandle::new(4096);
         let mut engine = Self {
             master_buffer: Mutex::new(AudioBuffer::from_config(&config)),
             processors: RwLock::new(HashMap::new()),
@@ -139,6 +149,8 @@ impl HarmoniqEngine {
             block_period_ns,
             automation_cursor: 0,
             mixer_ui,
+            #[cfg(feature = "mixer_api")]
+            mixer_handle,
             rt_bridge: None,
             last_reported_xruns: 0,
             last_reported_engine_load: 0,
@@ -213,6 +225,11 @@ impl HarmoniqEngine {
 
     pub fn mixer_ui_api(&self) -> Arc<dyn MixerUiApi> {
         Arc::clone(&self.mixer_ui) as Arc<dyn MixerUiApi>
+    }
+
+    #[cfg(feature = "mixer_api")]
+    pub fn mixer_handle(&self) -> &EngineMixerHandle {
+        &self.mixer_handle
     }
 
     fn block_period_from_config(config: &BufferConfig) -> u64 {
@@ -408,6 +425,11 @@ impl HarmoniqEngine {
                     std::mem::take(&mut *queue)
                 }
             };
+            #[cfg(feature = "mixer_api")]
+            {
+                let mut adapter = MixerUiBridge::new(Arc::clone(&self.mixer_ui));
+                self.mixer_handle.drain_commands_and_apply(&mut adapter);
+            }
             let graph = match self.graph.read().clone() {
                 Some(graph) => graph,
                 None => {
@@ -495,6 +517,9 @@ impl HarmoniqEngine {
                     }
                 }
 
+                #[cfg(feature = "mixer_api")]
+                self.publish_master_meter(&master);
+
                 visitor(&master, scratch_buffers)
             };
 
@@ -545,6 +570,50 @@ impl HarmoniqEngine {
             bridge.push(RtEvent::MaxBlockMicros { us: max_block_us });
             self.last_reported_max_block_us = max_block_us;
         }
+    }
+
+    #[cfg(feature = "mixer_api")]
+    fn publish_master_meter(&mut self, buffer: &AudioBuffer) {
+        let channels = buffer.channel_count();
+        let frames = buffer.len();
+        if channels == 0 || frames == 0 {
+            return;
+        }
+
+        let left = buffer.channel(0);
+        let right = if channels > 1 {
+            buffer.channel(1)
+        } else {
+            left
+        };
+
+        let mut peak_l = 0.0f32;
+        let mut peak_r = 0.0f32;
+        let mut sum_sq_l = 0.0f32;
+        let mut sum_sq_r = 0.0f32;
+
+        for frame in 0..frames {
+            let l = left[frame];
+            let r = right[frame];
+            peak_l = peak_l.max(l.abs());
+            peak_r = peak_r.max(r.abs());
+            sum_sq_l += l * l;
+            sum_sq_r += r * r;
+        }
+
+        let inv_frames = 1.0 / frames as f32;
+        let rms_l = (sum_sq_l * inv_frames).sqrt();
+        let rms_r = (sum_sq_r * inv_frames).sqrt();
+
+        let event = MeterEvent {
+            ch: MASTER_CHANNEL_ID,
+            peak_l,
+            peak_r,
+            rms_l,
+            rms_r,
+        };
+
+        self.mixer_handle.push_meter(event);
     }
 
     fn drain_command_queue(&mut self) -> anyhow::Result<()> {
@@ -625,6 +694,99 @@ impl HarmoniqEngine {
                 .or_insert_with(DelayCompensator::new);
             delay.configure(channels, additional_delay, self.config.block_size);
             delay.process(&mut buffers[index]);
+        }
+    }
+}
+
+#[cfg(feature = "mixer_api")]
+struct MixerUiBridge {
+    state: Arc<MixerUiState>,
+}
+
+#[cfg(feature = "mixer_api")]
+impl MixerUiBridge {
+    fn new(state: Arc<MixerUiState>) -> Self {
+        Self { state }
+    }
+
+    fn strip_index(&self, channel: ChannelId) -> Option<usize> {
+        let len = self.state.strips_len();
+        (0..len).find(|&idx| self.state.strip_info(idx).id == channel)
+    }
+
+    fn set_fader_and_pan(&self, idx: usize, gain_db: f32, pan: f32) {
+        self.state.set_fader_db(idx, gain_db);
+        self.state.set_pan(idx, pan);
+    }
+
+    fn set_mute_state(&self, idx: usize, mute: bool) {
+        let current = self.state.strip_info(idx).muted;
+        if current != mute {
+            self.state.toggle_mute(idx);
+        }
+    }
+
+    fn set_solo_state(&self, idx: usize, solo: bool) {
+        let current = self.state.strip_info(idx).soloed;
+        if current != solo {
+            self.state.toggle_solo(idx);
+        }
+    }
+
+    fn set_insert_bypass(&self, idx: usize, slot: usize, bypass: bool) {
+        if self.state.insert_is_bypassed(idx, slot) != bypass {
+            self.state.insert_toggle_bypass(idx, slot);
+        }
+    }
+
+    fn set_send_level(&self, idx: usize, slot: usize, level: f32) {
+        let level = level.max(1e-6);
+        let db = 20.0 * level.log10();
+        self.state.send_set_level(idx, slot, db);
+    }
+}
+
+#[cfg(feature = "mixer_api")]
+impl MixerBackend for MixerUiBridge {
+    fn set_gain_pan(&mut self, ch: ChannelId, gain_db: f32, pan: f32) {
+        if let Some(idx) = self.strip_index(ch) {
+            self.set_fader_and_pan(idx, gain_db, pan);
+        }
+    }
+
+    fn set_mute(&mut self, ch: ChannelId, mute: bool) {
+        if let Some(idx) = self.strip_index(ch) {
+            self.set_mute_state(idx, mute);
+        }
+    }
+
+    fn set_solo(&mut self, ch: ChannelId, solo: bool) {
+        if let Some(idx) = self.strip_index(ch) {
+            self.set_solo_state(idx, solo);
+        }
+    }
+
+    fn open_insert_browser(&mut self, ch: ChannelId, slot: Option<usize>) {
+        debug!(channel = ch, ?slot, "open_insert_browser request");
+    }
+
+    fn open_insert_ui(&mut self, ch: ChannelId, slot: usize) {
+        debug!(channel = ch, slot, "open_insert_ui request");
+    }
+
+    fn set_insert_bypass(&mut self, ch: ChannelId, slot: usize, bypass: bool) {
+        if let Some(idx) = self.strip_index(ch) {
+            self.set_insert_bypass(idx, slot, bypass);
+        }
+    }
+
+    fn remove_insert(&mut self, ch: ChannelId, slot: usize) {
+        warn!(channel = ch, slot, "remove_insert not implemented");
+    }
+
+    fn configure_send(&mut self, ch: ChannelId, id: SendId, level: f32) {
+        if let Some(idx) = self.strip_index(ch) {
+            self.set_send_level(idx, id as usize, level);
         }
     }
 }

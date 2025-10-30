@@ -71,6 +71,8 @@ use harmoniq_playlist::{
     ui::{render as render_playlist_window, PlaylistProps as PlaylistUiProps},
 };
 use midi::{list_midi_inputs, MidiInputDevice, QwertyKeyboardInput};
+#[cfg(feature = "mixer_api")]
+use ui::mixer::MixerEngineBridge;
 use ui::{
     audio_settings::{ActiveAudioSummary, AudioSettingsAction, AudioSettingsPanel},
     browser::BrowserPane,
@@ -1488,6 +1490,14 @@ impl HarmoniqStudioApp {
         engine.install_rt_bridge(RtBridge::new(rt_prod));
 
         let mixer_api = engine.mixer_ui_api();
+        #[cfg(feature = "mixer_api")]
+        let mixer_engine_bridge = {
+            let handle = engine.mixer_handle();
+            Some(MixerEngineBridge::new(
+                handle.ui_sender(),
+                handle.ui_meter_receiver(),
+            ))
+        };
 
         let command_queue = engine.command_queue();
         let transport = engine.transport_metrics();
@@ -1528,6 +1538,9 @@ impl HarmoniqStudioApp {
         let browser = BrowserPane::new(resources_root, browser_visible, browser_width);
         let channel_rack = ChannelRackPane::default();
         let piano_roll = PianoRollPane::default();
+        #[cfg(feature = "mixer_api")]
+        let mixer = MixerView::new(mixer_api, mixer_engine_bridge);
+        #[cfg(not(feature = "mixer_api"))]
         let mixer = MixerView::new(mixer_api);
         let inspector = InspectorPane::new();
         let console = ConsolePane::default();
@@ -2524,6 +2537,10 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
 impl App for HarmoniqStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint_after(Duration::from_millis(16));
+        #[cfg(feature = "mixer_api")]
+        if self.mixer.poll_engine() {
+            ctx.request_repaint();
+        }
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame_instant);
         self.last_frame_instant = now;
