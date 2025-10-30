@@ -1,4 +1,12 @@
 pub mod state;
+
+mod rt;
+pub use rt::{
+    AutoRx, AutoTx, AutomationEvent, AuxBusId, Command, CommandRx, CommandTx, Group, GroupId,
+    Mixer, MixerConfig, RoutingBuilder, RoutingTable, TrackId,
+};
+
+#[cfg(feature = "egui")]
 pub mod ui;
 
 use state::{ChannelId, MixerState, SendId};
@@ -43,6 +51,17 @@ pub struct MixerProps<'a> {
 }
 
 /// Render the mixer as a horizontal strip layout.
+#[cfg(feature = "egui")]
 pub fn render(ui: &mut egui::Ui, props: MixerProps) {
     ui::mixer::render(ui, props);
+}
+
+/// Simple helper to pan a mono sample into stereo (constant-power).
+#[inline]
+pub fn pan_mono(sample: f32, pan: f32) -> (f32, f32) {
+    let p = (pan.clamp(-1.0, 1.0) + 1.0) * 0.5; // [0..1]
+    let angle = core::f32::consts::FRAC_PI_2 * p;
+    let l = angle.cos();
+    let r = angle.sin();
+    (sample * l, sample * r)
 }
