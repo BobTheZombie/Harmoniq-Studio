@@ -1,7 +1,14 @@
 use egui::{self, Color32, Pos2, Rect, Sense, Stroke, Vec2};
 
-pub fn meter_vertical(ui: &mut egui::Ui, peak: f32, rms: f32, peak_hold: f32, size: Vec2) {
-    let (rect, _resp) = ui.allocate_exact_size(size, Sense::hover());
+pub fn meter_vertical(
+    ui: &mut egui::Ui,
+    peak: f32,
+    rms: f32,
+    peak_hold: f32,
+    clip: bool,
+    size: Vec2,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let p = ui.painter_at(rect);
     let bg = ui.visuals().extreme_bg_color;
     p.rect_filled(rect, 2.0, bg);
@@ -28,6 +35,15 @@ pub fn meter_vertical(ui: &mut egui::Ui, peak: f32, rms: f32, peak_hold: f32, si
         ],
         Stroke::new(1.0, Color32::WHITE),
     );
+    let led_radius = 3.5;
+    let led_center = Pos2::new(rect.center().x, rect.top() + led_radius + 2.0);
+    let led_color = if clip {
+        Color32::from_rgb(250, 60, 60)
+    } else {
+        Color32::from_rgb(80, 80, 80)
+    };
+    p.circle_filled(led_center, led_radius, led_color);
+    resp
 }
 
 pub fn small_knob(

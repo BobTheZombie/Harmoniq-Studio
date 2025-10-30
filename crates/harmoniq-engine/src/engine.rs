@@ -611,6 +611,8 @@ impl HarmoniqEngine {
             peak_r,
             rms_l,
             rms_r,
+            clip_l: peak_l >= 1.0,
+            clip_r: peak_r >= 1.0,
         };
 
         self.mixer_handle.push_meter(event);
@@ -750,6 +752,8 @@ impl MixerUiBridge {
 impl MixerBackend for MixerUiBridge {
     fn set_gain_pan(&mut self, ch: ChannelId, gain_db: f32, pan: f32) {
         if let Some(idx) = self.strip_index(ch) {
+            let (gain_l, gain_r) = crate::panlaw::constant_power_pan_gains(pan);
+            debug!(channel = ch, gain_l, gain_r, "constant-power pan gains");
             self.set_fader_and_pan(idx, gain_db, pan);
         }
     }
@@ -787,6 +791,25 @@ impl MixerBackend for MixerUiBridge {
     fn configure_send(&mut self, ch: ChannelId, id: SendId, level: f32) {
         if let Some(idx) = self.strip_index(ch) {
             self.set_send_level(idx, id as usize, level);
+        }
+    }
+
+    fn reorder_insert(&mut self, ch: ChannelId, from: usize, to: usize) {
+        if let Some(idx) = self.strip_index(ch) {
+            self.state.insert_move(idx, from, to);
+        }
+    }
+
+    fn apply_routing(
+        &mut self,
+        set: &[(ChannelId, String, f32)],
+        remove: &[(ChannelId, String)],
+    ) {
+        if !set.is_empty() {
+            debug!(?set, "apply_routing set requests (UI bridge placeholder)");
+        }
+        if !remove.is_empty() {
+            debug!(?remove, "apply_routing remove requests (UI bridge placeholder)");
         }
     }
 }

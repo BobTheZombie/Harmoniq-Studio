@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Instant;
 
 pub type ChannelId = u32;
@@ -27,6 +28,9 @@ pub struct Meter {
     /// hold for peak display
     pub peak_hold_l: f32,
     pub peak_hold_r: f32,
+    /// latched clip flags
+    pub clip_l: bool,
+    pub clip_r: bool,
     pub last_update: Instant,
 }
 impl Default for Meter {
@@ -38,6 +42,8 @@ impl Default for Meter {
             rms_r: 0.0,
             peak_hold_l: 0.0,
             peak_hold_r: 0.0,
+            clip_l: false,
+            clip_r: false,
             last_update: Instant::now(),
         }
     }
@@ -57,10 +63,66 @@ pub struct Channel {
     pub is_master: bool,
 }
 
-#[derive(Default)]
 pub struct MixerState {
     pub channels: Vec<Channel>,
     pub selected: Option<ChannelId>,
+    pub routing_visible: bool,
+    pub routing: RoutingMatrix,
+}
+
+impl Default for MixerState {
+    fn default() -> Self {
+        Self {
+            channels: Vec::new(),
+            selected: None,
+            routing_visible: false,
+            routing: RoutingMatrix::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RoutingMatrix {
+    pub routes: HashMap<ChannelId, HashMap<String, f32>>,
+}
+
+impl RoutingMatrix {
+    pub fn level(&self, channel: ChannelId, bus: &str) -> Option<f32> {
+        self.routes
+            .get(&channel)
+            .and_then(|buses| buses.get(bus).copied())
+    }
+
+    pub fn set(&mut self, channel: ChannelId, bus: String, level: f32) {
+        self.routes
+            .entry(channel)
+            .or_default()
+            .insert(bus, level.clamp(0.0, 1.0));
+    }
+
+    pub fn remove(&mut self, channel: ChannelId, bus: &str) {
+        if let Some(buses) = self.routes.get_mut(&channel) {
+            buses.remove(bus);
+            if buses.is_empty() {
+                self.routes.remove(&channel);
+            }
+        }
+    }
+
+    pub fn apply_delta(&mut self, delta: &RoutingDelta) {
+        for (channel, bus, level) in &delta.set {
+            self.set(*channel, bus.clone(), *level);
+        }
+        for (channel, bus) in &delta.remove {
+            self.remove(*channel, bus);
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct RoutingDelta {
+    pub set: Vec<(ChannelId, String, f32)>,
+    pub remove: Vec<(ChannelId, String)>,
 }
 
 impl MixerState {
@@ -108,6 +170,8 @@ impl MixerState {
         peak_r: f32,
         rms_l: f32,
         rms_r: f32,
+        clip_l: bool,
+        clip_r: bool,
     ) {
         if let Some(c) = self.channels.iter_mut().find(|c| c.id == ch) {
             let (pl, pr, rl, rr) = (
@@ -124,7 +188,27 @@ impl MixerState {
             c.meter.rms_r = c.meter.rms_r * (1.0 - a) + rr * a;
             c.meter.peak_hold_l = c.meter.peak_hold_l.max(pl).clamp(0.0, 1.5);
             c.meter.peak_hold_r = c.meter.peak_hold_r.max(pr).clamp(0.0, 1.5);
+            c.meter.clip_l |= clip_l;
+            c.meter.clip_r |= clip_r;
             c.meter.last_update = Instant::now();
+        }
+    }
+
+    pub fn reset_peaks_for(&mut self, channel: ChannelId) {
+        if let Some(ch) = self.channels.iter_mut().find(|c| c.id == channel) {
+            ch.meter.peak_hold_l = 0.0;
+            ch.meter.peak_hold_r = 0.0;
+            ch.meter.clip_l = false;
+            ch.meter.clip_r = false;
+        }
+    }
+
+    pub fn reset_peaks_all(&mut self) {
+        for ch in &mut self.channels {
+            ch.meter.peak_hold_l = 0.0;
+            ch.meter.peak_hold_r = 0.0;
+            ch.meter.clip_l = false;
+            ch.meter.clip_r = false;
         }
     }
 }

@@ -18,6 +18,8 @@ pub mod graph;
 pub mod ipc;
 pub mod media;
 pub mod mixer;
+#[cfg(feature = "mixer_api")]
+pub mod panlaw;
 pub mod nodes;
 pub mod plugin;
 pub mod project;

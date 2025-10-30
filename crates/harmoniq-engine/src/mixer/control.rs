@@ -44,6 +44,15 @@ pub enum MixerCommand {
         id: SendId,
         level: f32,
     },
+    ReorderInsert {
+        ch: ChannelId,
+        from: usize,
+        to: usize,
+    },
+    ApplyRouting {
+        set: Vec<(ChannelId, String, f32)>,
+        remove: Vec<(ChannelId, String)>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -53,6 +62,8 @@ pub struct MeterEvent {
     pub peak_r: f32,
     pub rms_l: f32,
     pub rms_r: f32,
+    pub clip_l: bool,
+    pub clip_r: bool,
 }
 
 pub trait MixerBackend {
@@ -64,6 +75,8 @@ pub trait MixerBackend {
     fn set_insert_bypass(&mut self, ch: ChannelId, slot: usize, bypass: bool);
     fn remove_insert(&mut self, ch: ChannelId, slot: usize);
     fn configure_send(&mut self, ch: ChannelId, id: SendId, level: f32);
+    fn reorder_insert(&mut self, ch: ChannelId, from: usize, to: usize);
+    fn apply_routing(&mut self, set: &[(ChannelId, String, f32)], remove: &[(ChannelId, String)]);
 }
 
 #[derive(Debug)]
@@ -136,6 +149,12 @@ impl EngineMixerHandle {
                 }
                 MixerCommand::ConfigureSend { ch, id, level } => {
                     backend.configure_send(ch, id, level);
+                }
+                MixerCommand::ReorderInsert { ch, from, to } => {
+                    backend.reorder_insert(ch, from, to);
+                }
+                MixerCommand::ApplyRouting { set, remove } => {
+                    backend.apply_routing(&set, &remove);
                 }
             }
         }

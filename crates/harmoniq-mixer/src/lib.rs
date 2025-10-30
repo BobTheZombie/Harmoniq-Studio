@@ -21,6 +21,10 @@ pub struct MixerCallbacks {
     pub set_insert_bypass: Box<dyn FnMut(ChannelId, usize, bool) + Send>,
     /// Remove an insert slot (host should disconnect/remove from engine)
     pub remove_insert: Box<dyn FnMut(ChannelId, usize) + Send>,
+    /// Reorder an insert slot (drag & drop)
+    pub reorder_insert: Box<dyn FnMut(ChannelId, usize, usize) + Send>,
+    /// Apply routing matrix changes
+    pub apply_routing: Box<dyn FnMut(RoutingDelta) + Send>,
     /// Create/route a send target (A/B/C…) — host decides exact routing object
     pub configure_send: Box<dyn FnMut(ChannelId, SendId, f32) + Send>,
     /// Set channel gain (dB) and pan (-1..1) in engine
@@ -37,6 +41,8 @@ impl MixerCallbacks {
             open_insert_ui: Box::new(|_, _| {}),
             set_insert_bypass: Box::new(|_, _, _| {}),
             remove_insert: Box::new(|_, _| {}),
+            reorder_insert: Box::new(|_, _, _| {}),
+            apply_routing: Box::new(|_| {}),
             configure_send: Box::new(|_, _, _| {}),
             set_gain_pan: Box::new(|_, _, _| {}),
             set_mute: Box::new(|_, _| {}),
@@ -49,6 +55,8 @@ pub struct MixerProps<'a> {
     pub state: &'a mut MixerState,
     pub callbacks: &'a mut MixerCallbacks,
 }
+
+pub use state::{RoutingDelta, RoutingMatrix};
 
 /// Render the mixer as a horizontal strip layout.
 #[cfg(feature = "egui")]
