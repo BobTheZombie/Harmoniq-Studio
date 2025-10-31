@@ -185,6 +185,9 @@ pub struct LevelMeter<'a> {
     left: f32,
     right: f32,
     rms: f32,
+    clip_left: bool,
+    clip_right: bool,
+    interactive: bool,
 }
 
 impl<'a> LevelMeter<'a> {
@@ -195,6 +198,9 @@ impl<'a> LevelMeter<'a> {
             left: 0.0,
             right: 0.0,
             rms: 0.0,
+            clip_left: false,
+            clip_right: false,
+            interactive: false,
         }
     }
 
@@ -209,11 +215,27 @@ impl<'a> LevelMeter<'a> {
         self.size = size;
         self
     }
+
+    pub fn with_clip(mut self, left: bool, right: bool) -> Self {
+        self.clip_left = left;
+        self.clip_right = right;
+        self
+    }
+
+    pub fn interactive(mut self, interactive: bool) -> Self {
+        self.interactive = interactive;
+        self
+    }
 }
 
 impl<'a> egui::Widget for LevelMeter<'a> {
     fn ui(self, ui: &mut egui::Ui) -> Response {
-        let (rect, response) = ui.allocate_exact_size(self.size, Sense::hover());
+        let sense = if self.interactive {
+            Sense::click()
+        } else {
+            Sense::hover()
+        };
+        let (rect, response) = ui.allocate_exact_size(self.size, sense);
         let painter = ui.painter_at(rect);
         let mut mesh = egui::Mesh::default();
         let push_rect = |mesh: &mut egui::Mesh, rect: egui::Rect, color: Color32| {
@@ -306,6 +328,23 @@ impl<'a> egui::Widget for LevelMeter<'a> {
             ],
             egui::Stroke::new(1.0, self.palette.meter_rms),
         );
+
+        let clip_radius = 4.0;
+        let left_led = egui::pos2(rect.left() + gutter + clip_radius, rect.top() + gutter);
+        let right_led = egui::pos2(rect.right() - gutter - clip_radius, rect.top() + gutter);
+        let inactive = self.palette.meter_border.gamma_multiply(0.6);
+        let clip_color_left = if self.clip_left {
+            self.palette.warning
+        } else {
+            inactive
+        };
+        let clip_color_right = if self.clip_right {
+            self.palette.warning
+        } else {
+            inactive
+        };
+        painter.circle_filled(left_led, clip_radius, clip_color_left);
+        painter.circle_filled(right_led, clip_radius, clip_color_right);
 
         response
     }
