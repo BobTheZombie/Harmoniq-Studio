@@ -1,6 +1,8 @@
-use egui::{self, Align};
-
-use crate::{Fader, HarmoniqPalette, Knob};
+use crate::widget_framework::{
+    MeterLevels, ScalarParameter, ToggleParameter, WidgetBinding, WidgetContext, WidgetControl,
+    WidgetLayout, WidgetNode, WidgetSkin,
+};
+use crate::HarmoniqPalette;
 
 /// Bundles mutable references to the grand piano clap parameters so the UI can
 /// manipulate them directly.
@@ -51,6 +53,47 @@ impl<'a> GrandPianoClapParams<'a> {
     }
 }
 
+const PARAM_PIANO_LEVEL: &str = "piano_level";
+const PARAM_CLAP_LEVEL: &str = "clap_level";
+const PARAM_TONE: &str = "tone";
+const PARAM_SPARKLE: &str = "sparkle";
+const PARAM_BODY: &str = "body";
+const PARAM_WIDTH: &str = "width";
+const PARAM_CLAP_DELAY: &str = "clap_delay";
+const PARAM_CLAP_TIGHTNESS: &str = "clap_tightness";
+const PARAM_ATTACK: &str = "attack";
+const PARAM_DECAY: &str = "decay";
+const PARAM_SUSTAIN: &str = "sustain";
+const PARAM_RELEASE: &str = "release";
+
+impl<'a> WidgetContext for GrandPianoClapParams<'a> {
+    fn bind_scalar(&mut self, binding: &WidgetBinding) -> Option<ScalarParameter<'_>> {
+        match binding.parameter() {
+            PARAM_PIANO_LEVEL => Some(ScalarParameter::new(&mut *self.piano_level)),
+            PARAM_CLAP_LEVEL => Some(ScalarParameter::new(&mut *self.clap_level)),
+            PARAM_TONE => Some(ScalarParameter::new(&mut *self.tone)),
+            PARAM_SPARKLE => Some(ScalarParameter::new(&mut *self.sparkle)),
+            PARAM_BODY => Some(ScalarParameter::new(&mut *self.body)),
+            PARAM_WIDTH => Some(ScalarParameter::new(&mut *self.width)),
+            PARAM_CLAP_DELAY => Some(ScalarParameter::new(&mut *self.clap_delay)),
+            PARAM_CLAP_TIGHTNESS => Some(ScalarParameter::new(&mut *self.clap_tightness)),
+            PARAM_ATTACK => Some(ScalarParameter::new(&mut *self.attack)),
+            PARAM_DECAY => Some(ScalarParameter::new(&mut *self.decay)),
+            PARAM_SUSTAIN => Some(ScalarParameter::new(&mut *self.sustain)),
+            PARAM_RELEASE => Some(ScalarParameter::new(&mut *self.release)),
+            _ => None,
+        }
+    }
+
+    fn bind_toggle(&mut self, _binding: &WidgetBinding) -> Option<ToggleParameter<'_>> {
+        None
+    }
+
+    fn meter_levels(&mut self, _binding: &WidgetBinding) -> Option<MeterLevels> {
+        None
+    }
+}
+
 /// Renders the custom UI for the Grand Piano Clap instrument, returning the
 /// [`egui::Response`] from the surrounding group.
 pub fn show_grand_piano_clap_ui(
@@ -58,82 +101,106 @@ pub fn show_grand_piano_clap_ui(
     params: GrandPianoClapParams<'_>,
     palette: &HarmoniqPalette,
 ) -> egui::Response {
-    ui.group(|ui| {
-        ui.vertical_centered(|ui| {
-            ui.heading("Grand Piano Clap");
-            ui.add_space(6.0);
-        });
-        ui.horizontal(|ui| {
-            ui.add(Knob::new(
-                params.piano_level,
-                0.0,
-                1.5,
+    let mut params = params;
+    let layout = grand_piano_layout();
+    let skin = WidgetSkin::default()
+        .with_knob_diameter(62.0)
+        .with_fader_height(110.0)
+        .with_toggle_width(52.0)
+        .with_group_fill(palette.panel_alt);
+    layout.render(ui, &mut params, palette, &skin)
+}
+
+fn grand_piano_layout() -> WidgetLayout {
+    WidgetLayout::new(vec![
+        WidgetNode::control(WidgetControl::heading("Grand Piano Clap")),
+        WidgetNode::control(WidgetControl::spacer(6.0)),
+        WidgetNode::row(vec![
+            WidgetNode::control(WidgetControl::knob(
+                "piano",
+                PARAM_PIANO_LEVEL,
+                0.0..=1.5,
                 0.85,
                 "Piano",
-                palette,
-            ));
-            ui.add(Knob::new(
-                params.clap_level,
-                0.0,
-                1.5,
+            )),
+            WidgetNode::control(WidgetControl::knob(
+                "clap",
+                PARAM_CLAP_LEVEL,
+                0.0..=1.5,
                 0.65,
                 "Clap",
-                palette,
-            ));
-            ui.add(Knob::new(params.tone, 0.0, 1.0, 0.55, "Tone", palette));
-            ui.add(Knob::new(
-                params.sparkle,
-                0.0,
-                1.0,
+            )),
+            WidgetNode::control(WidgetControl::knob(
+                "tone",
+                PARAM_TONE,
+                0.0..=1.0,
+                0.55,
+                "Tone",
+            )),
+            WidgetNode::control(WidgetControl::knob(
+                "sparkle",
+                PARAM_SPARKLE,
+                0.0..=1.0,
                 0.35,
                 "Sparkle",
-                palette,
-            ));
-        });
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.add(Knob::new(params.body, 0.0, 1.0, 0.35, "Body", palette));
-            ui.add(Knob::new(params.width, 0.0, 1.0, 0.65, "Width", palette));
-            ui.add(Knob::new(
-                params.clap_delay,
-                0.0,
-                0.25,
+            )),
+        ]),
+        WidgetNode::control(WidgetControl::spacer(8.0)),
+        WidgetNode::row(vec![
+            WidgetNode::control(WidgetControl::knob(
+                "body",
+                PARAM_BODY,
+                0.0..=1.0,
+                0.35,
+                "Body",
+            )),
+            WidgetNode::control(WidgetControl::knob(
+                "width",
+                PARAM_WIDTH,
+                0.0..=1.0,
+                0.65,
+                "Width",
+            )),
+            WidgetNode::control(WidgetControl::knob(
+                "delay",
+                PARAM_CLAP_DELAY,
+                0.0..=0.25,
                 0.05,
                 "Delay",
-                palette,
-            ));
-            ui.add(Knob::new(
-                params.clap_tightness,
-                0.5,
-                1.5,
+            )),
+            WidgetNode::control(WidgetControl::knob(
+                "tightness",
+                PARAM_CLAP_TIGHTNESS,
+                0.5..=1.5,
                 1.0,
                 "Tight",
-                palette,
-            ));
-        });
-        ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.with_layout(egui::Layout::top_down(Align::Center), |ui| {
-                    ui.label("Envelope");
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            Fader::new(params.attack, 0.001, 0.2, 0.01, palette).with_height(110.0),
-                        );
-                        ui.add(
-                            Fader::new(params.decay, 0.05, 2.0, 0.35, palette).with_height(110.0),
-                        );
-                        ui.add(
-                            Fader::new(params.sustain, 0.0, 1.0, 0.65, palette).with_height(110.0),
-                        );
-                        ui.add(
-                            Fader::new(params.release, 0.05, 2.5, 0.45, palette).with_height(110.0),
-                        );
-                    });
-                });
-            });
-        });
-    })
-    .response
+            )),
+        ]),
+        WidgetNode::control(WidgetControl::spacer(10.0)),
+        WidgetNode::group(
+            Some("Envelope".to_string()),
+            vec![WidgetNode::row(vec![
+                WidgetNode::control(
+                    WidgetControl::fader("attack", PARAM_ATTACK, 0.001..=0.2, 0.01)
+                        .with_height(110.0)
+                        .with_fader_label("Attack"),
+                ),
+                WidgetNode::control(
+                    WidgetControl::fader("decay", PARAM_DECAY, 0.05..=2.0, 0.35)
+                        .with_height(110.0)
+                        .with_fader_label("Decay"),
+                ),
+                WidgetNode::control(
+                    WidgetControl::fader("sustain", PARAM_SUSTAIN, 0.0..=1.0, 0.65)
+                        .with_height(110.0)
+                        .with_fader_label("Sustain"),
+                ),
+                WidgetNode::control(
+                    WidgetControl::fader("release", PARAM_RELEASE, 0.05..=2.5, 0.45)
+                        .with_height(110.0)
+                        .with_fader_label("Release"),
+                ),
+            ])],
+        ),
+    ])
 }
