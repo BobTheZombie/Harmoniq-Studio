@@ -6,10 +6,10 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Sender as MixerCommandSender;
 
 use eframe::egui::{
-    self,
-    plot::{Legend, Line, Plot, PlotPoints},
-    Align, Align2, Color32, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke, Ui,
+    self, Align, Align2, Color32, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke,
+    Ui,
 };
+use egui_plot::{Legend, Line, Plot, PlotPoints};
 use harmoniq_engine::mixer::api::{MixerUiApi, UiStripInfo};
 #[cfg(feature = "mixer_api")]
 use harmoniq_engine::{GuiMeterReceiver, MixerCommand};

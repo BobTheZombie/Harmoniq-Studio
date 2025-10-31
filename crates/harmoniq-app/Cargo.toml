@@ -21,6 +21,7 @@ clap.workspace = true
 eframe = { version = "0.27", default-features = false, features = ["wgpu", "accesskit", "default_fonts", "wayland", "x11"] }
 egui = { version = "0.27", features = ["serde"] }
 egui_extras = { version = "0.27", features = ["image", "svg"] }
+egui_plot = "0.27"
 egui_dock = { version = "0.12", features = ["serde"] }
 indexmap = { version = "2", features = ["serde"] }
 parking_lot.workspace = true
