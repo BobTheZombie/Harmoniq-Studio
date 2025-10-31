@@ -8,6 +8,7 @@ pub struct Fader<'a> {
     max: f32,
     default: f32,
     height: f32,
+    width: f32,
     palette: &'a HarmoniqPalette,
 }
 
@@ -25,6 +26,7 @@ impl<'a> Fader<'a> {
             max,
             default,
             height: 156.0,
+            width: 32.0,
             palette,
         }
     }
@@ -33,13 +35,17 @@ impl<'a> Fader<'a> {
         self.height = height.max(80.0);
         self
     }
+
+    pub fn with_width(mut self, width: f32) -> Self {
+        self.width = width.clamp(24.0, 48.0);
+        self
+    }
 }
 
 impl<'a> egui::Widget for Fader<'a> {
     fn ui(self, ui: &mut egui::Ui) -> Response {
-        let width = 32.0;
         let (rect, mut response) =
-            ui.allocate_exact_size(egui::vec2(width, self.height), Sense::click_and_drag());
+            ui.allocate_exact_size(egui::vec2(self.width, self.height), Sense::click_and_drag());
         let mut value = (*self.value).clamp(self.min, self.max);
 
         if response.dragged() {
@@ -59,7 +65,7 @@ impl<'a> egui::Widget for Fader<'a> {
             response.mark_changed();
         }
 
-        let track_rect = rect.shrink2(egui::vec2(width * 0.3, 10.0));
+        let track_rect = rect.shrink2(egui::vec2(self.width * 0.3, 10.0));
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 8.0, self.palette.meter_background);
         painter.rect_stroke(rect, 8.0, egui::Stroke::new(1.0, self.palette.meter_border));

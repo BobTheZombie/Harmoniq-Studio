@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Sender as MixerCommandSender;
 
 use eframe::egui::{
-    self, Align, Align2, Color32, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke, Ui,
+    self, Align, Align2, Color32, FontId, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
+    Stroke, Ui, Vec2,
 };
 use egui_plot::{Legend, Line, Plot, PlotPoints};
 use harmoniq_engine::mixer::api::{MixerUiApi, UiStripInfo};
@@ -48,6 +49,151 @@ enum SelectionRequest {
 struct StripInteraction {
     reset: Option<ResetRequest>,
     selection: Option<SelectionRequest>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MixerSkin {
+    Compact,
+    Classic,
+}
+
+impl MixerSkin {
+    const ALL: [Self; 2] = [Self::Compact, Self::Classic];
+
+    fn toggle(self) -> Self {
+        match self {
+            Self::Compact => Self::Classic,
+            Self::Classic => Self::Compact,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Compact => "Compact",
+            Self::Classic => "Classic",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct SlotSkin {
+    empty_fill: Color32,
+    active_fill: Color32,
+    border: Color32,
+    highlight: Color32,
+    bypass_width: f32,
+}
+
+impl SlotSkin {
+    fn classic(palette: &HarmoniqPalette) -> Self {
+        Self {
+            empty_fill: palette.mixer_slot_bg,
+            active_fill: palette.mixer_slot_active,
+            border: palette.mixer_slot_border,
+            highlight: palette.accent_alt,
+            bypass_width: 52.0,
+        }
+    }
+
+    fn compact(palette: &HarmoniqPalette) -> Self {
+        Self {
+            empty_fill: Color32::from_rgb(38, 46, 54),
+            active_fill: Color32::from_rgb(44, 60, 70),
+            border: Color32::from_rgb(76, 98, 110),
+            highlight: Color32::from_rgb(82, 214, 226),
+            bypass_width: 46.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct CompactStripStyle {
+    strip_width: f32,
+    inner_margin: Margin,
+    item_spacing: Vec2,
+    section_spacing: f32,
+    rounding: f32,
+    meter_size: Vec2,
+    meter_rounding: f32,
+    meter_border: Color32,
+    fader_height: f32,
+    fader_width: f32,
+    knob_diameter: f32,
+    send_knob_diameter: f32,
+    toggle_width: f32,
+    base_fill: Color32,
+    border: Stroke,
+    selected_border: Stroke,
+    solo_fill: Color32,
+    mute_fill: Color32,
+    header_fill: Color32,
+    header_text: Color32,
+    label_primary: Color32,
+    label_secondary: Color32,
+    meter_bg: Color32,
+    meter_peak: Color32,
+    meter_rms: Color32,
+    meter_hold: Color32,
+    meter_tick: Color32,
+    clip_on: Color32,
+    clip_off: Color32,
+    slot_colors: SlotSkin,
+}
+
+impl CompactStripStyle {
+    fn new(palette: &HarmoniqPalette) -> Self {
+        Self {
+            strip_width: 148.0,
+            inner_margin: Margin::symmetric(10.0, 8.0),
+            item_spacing: Vec2::new(6.0, 6.0),
+            section_spacing: 8.0,
+            rounding: 8.0,
+            meter_size: Vec2::new(20.0, 168.0),
+            meter_rounding: 6.0,
+            meter_border: Color32::from_rgb(54, 74, 82),
+            fader_height: 168.0,
+            fader_width: 26.0,
+            knob_diameter: 42.0,
+            send_knob_diameter: 34.0,
+            toggle_width: 32.0,
+            base_fill: Color32::from_rgb(24, 30, 36),
+            border: Stroke::new(1.0, Color32::from_rgb(46, 58, 66)),
+            selected_border: Stroke::new(1.5, Color32::from_rgb(82, 214, 226)),
+            solo_fill: Color32::from_rgb(30, 52, 56),
+            mute_fill: Color32::from_rgb(36, 28, 40),
+            header_fill: Color32::from_rgb(32, 40, 46),
+            header_text: Color32::from_rgb(194, 222, 230),
+            label_primary: Color32::from_rgb(198, 226, 232),
+            label_secondary: Color32::from_rgb(128, 160, 168),
+            meter_bg: Color32::from_rgb(18, 26, 32),
+            meter_peak: Color32::from_rgb(54, 214, 226),
+            meter_rms: Color32::from_rgb(30, 150, 170),
+            meter_hold: Color32::from_rgb(220, 242, 250),
+            meter_tick: Color32::from_rgb(66, 88, 96),
+            clip_on: Color32::from_rgb(248, 96, 96),
+            clip_off: Color32::from_rgb(70, 78, 84),
+            slot_colors: SlotSkin::compact(palette),
+        }
+    }
+
+    fn fill_for(&self, channel: &Channel, is_selected: bool) -> (Color32, Stroke) {
+        let mut fill = if channel.solo {
+            self.solo_fill
+        } else if channel.mute {
+            self.mute_fill
+        } else {
+            self.base_fill
+        };
+        if is_selected {
+            fill = fill.gamma_multiply(1.12);
+        }
+        let stroke = if is_selected {
+            self.selected_border
+        } else {
+            self.border
+        };
+        (fill, stroke)
+    }
 }
 
 #[cfg(feature = "mixer_api")]
@@ -94,6 +240,7 @@ pub struct MixerView {
     meter_history: VecDeque<(f32, f32)>,
     history_capacity: usize,
     last_history_update: Instant,
+    skin: MixerSkin,
     #[cfg(feature = "mixer_api")]
     engine: Option<MixerEngineBridge>,
 }
@@ -110,6 +257,7 @@ impl MixerView {
             meter_history: VecDeque::with_capacity(240),
             history_capacity: 240,
             last_history_update: Instant::now(),
+            skin: MixerSkin::Compact,
             engine,
         }
     }
@@ -125,10 +273,13 @@ impl MixerView {
             meter_history: VecDeque::with_capacity(240),
             history_capacity: 240,
             last_history_update: Instant::now(),
+            skin: MixerSkin::Compact,
         }
     }
 
-    pub fn toggle_density(&mut self) {}
+    pub fn toggle_density(&mut self) {
+        self.skin = self.skin.toggle();
+    }
 
     pub fn zoom_in(&mut self) {}
 
@@ -197,6 +348,8 @@ impl MixerView {
             }
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                self.render_skin_controls(ui);
+                ui.add_space(16.0);
                 self.render_master_meter_summary(ui, palette);
                 ui.add_space(16.0);
                 self.render_cpu_summary(ui);
@@ -204,6 +357,22 @@ impl MixerView {
         });
         ui.add_space(10.0);
         self.render_rt_graphs(ui, palette);
+    }
+
+    fn render_skin_controls(&mut self, ui: &mut Ui) {
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Skin").small());
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                for variant in MixerSkin::ALL {
+                    let selected = self.skin == variant;
+                    let response = ui.selectable_label(selected, variant.label());
+                    if response.clicked() {
+                        self.skin = variant;
+                    }
+                }
+            });
+        });
     }
 
     fn render_cpu_summary(&self, ui: &mut Ui) {
@@ -351,6 +520,8 @@ impl MixerView {
     ) {
         let mut interactions = Vec::new();
         let channel_len = self.state.channels.len();
+        let classic_slots = SlotSkin::classic(palette);
+        let compact_style = CompactStripStyle::new(palette);
         ScrollArea::horizontal()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -358,8 +529,24 @@ impl MixerView {
                     for idx in 0..channel_len {
                         if let Some(ch) = self.state.channels.get_mut(idx) {
                             let is_selected = self.state.selected == Some(ch.id);
-                            let interaction =
-                                Self::render_channel_strip(ui, palette, ch, callbacks, is_selected);
+                            let interaction = match self.skin {
+                                MixerSkin::Classic => Self::render_classic_channel_strip(
+                                    ui,
+                                    palette,
+                                    ch,
+                                    callbacks,
+                                    is_selected,
+                                    classic_slots,
+                                ),
+                                MixerSkin::Compact => Self::render_compact_channel_strip(
+                                    ui,
+                                    palette,
+                                    ch,
+                                    callbacks,
+                                    is_selected,
+                                    &compact_style,
+                                ),
+                            };
                             interactions.push(interaction);
                             ui.add_space(10.0);
                         }
@@ -405,12 +592,13 @@ impl MixerView {
         }
     }
 
-    fn render_channel_strip(
+    fn render_classic_channel_strip(
         ui: &mut egui::Ui,
         palette: &HarmoniqPalette,
         ch: &mut Channel,
         callbacks: &mut MixerCallbacks,
         is_selected: bool,
+        slot_skin: SlotSkin,
     ) -> StripInteraction {
         let mut interaction = StripInteraction::default();
         let fill = if is_selected {
@@ -519,11 +707,11 @@ impl MixerView {
             });
 
             ui.separator();
-            Self::render_inserts(ui, palette, ch, callbacks);
+            Self::render_inserts(ui, palette, ch, callbacks, slot_skin);
 
             if !ch.is_master {
                 ui.separator();
-                Self::render_sends(ui, palette, ch, callbacks);
+                Self::render_sends(ui, palette, ch, callbacks, slot_skin, 40.0);
             }
 
             ui.add_space(6.0);
@@ -548,11 +736,285 @@ impl MixerView {
         interaction
     }
 
+    fn render_compact_channel_strip(
+        ui: &mut egui::Ui,
+        palette: &HarmoniqPalette,
+        ch: &mut Channel,
+        callbacks: &mut MixerCallbacks,
+        is_selected: bool,
+        style: &CompactStripStyle,
+    ) -> StripInteraction {
+        let mut interaction = StripInteraction::default();
+        let (fill, stroke) = style.fill_for(ch, is_selected);
+        let mut reset_request: Option<ResetRequest> = None;
+        let mut selection_request: Option<SelectionRequest> = None;
+
+        let frame = Frame::none()
+            .fill(fill)
+            .stroke(stroke)
+            .rounding(Rounding::same(style.rounding))
+            .inner_margin(style.inner_margin);
+
+        let response = frame.show(ui, |ui| {
+            ui.set_width(style.strip_width);
+            ui.spacing_mut().item_spacing = style.item_spacing;
+
+            Self::render_compact_header(ui, ch, style);
+
+            ui.add_space(style.section_spacing);
+
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(10.0, 0.0);
+                let meter_resp = Self::render_compact_meter(ui, ch, style);
+                if meter_resp.double_clicked() {
+                    let all = ui.input(|i| i.modifiers.shift);
+                    reset_request = Some(if all {
+                        ResetRequest::All
+                    } else {
+                        ResetRequest::Channel(ch.id)
+                    });
+                }
+
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 6.0);
+                    let fader_resp = ui.add(
+                        Fader::new(&mut ch.gain_db, -60.0, 12.0, 0.0, palette)
+                            .with_height(style.fader_height)
+                            .with_width(style.fader_width),
+                    );
+                    if fader_resp.changed() {
+                        (callbacks.set_gain_pan)(ch.id, ch.gain_db, ch.pan);
+                    }
+                    ui.label(
+                        RichText::new(format!("{:+.1} dB", ch.gain_db))
+                            .small()
+                            .color(style.label_primary),
+                    );
+                });
+
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    let pan_resp = ui.add(
+                        Knob::new(&mut ch.pan, -1.0, 1.0, 0.0, "Pan", palette)
+                            .with_diameter(style.knob_diameter),
+                    );
+                    if pan_resp.changed() {
+                        (callbacks.set_gain_pan)(ch.id, ch.gain_db, ch.pan);
+                    }
+                    ui.label(
+                        RichText::new(format!("{:+.2}", ch.pan))
+                            .small()
+                            .color(style.label_secondary),
+                    );
+
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                        let mute_resp = Self::compact_toggle(ui, &mut ch.mute, "M", style)
+                            .on_hover_text("Mute");
+                        if mute_resp.changed() {
+                            (callbacks.set_mute)(ch.id, ch.mute);
+                        }
+                        let solo_resp = Self::compact_toggle(ui, &mut ch.solo, "S", style)
+                            .on_hover_text("Solo");
+                        if solo_resp.changed() {
+                            (callbacks.set_solo)(ch.id, ch.solo);
+                        }
+                    });
+                });
+            });
+
+            ui.add_space(style.section_spacing);
+            ui.separator();
+
+            Self::render_inserts(ui, palette, ch, callbacks, style.slot_colors);
+
+            if !ch.is_master {
+                ui.separator();
+                Self::render_sends(
+                    ui,
+                    palette,
+                    ch,
+                    callbacks,
+                    style.slot_colors,
+                    style.send_knob_diameter,
+                );
+            }
+
+            ui.add_space(style.section_spacing * 0.6);
+            let select_label = if is_selected { "Selected" } else { "Select" };
+            let select_resp = ui.add(egui::SelectableLabel::new(is_selected, select_label));
+            if select_resp.clicked() {
+                selection_request = Some(if is_selected {
+                    SelectionRequest::Clear
+                } else {
+                    SelectionRequest::Select(ch.id)
+                });
+            }
+        });
+
+        if let Some(request) = reset_request {
+            interaction.reset = Some(request);
+        }
+        if let Some(selection) = selection_request {
+            interaction.selection = Some(selection);
+        }
+
+        response.response.context_menu(|ui| {
+            if ui.button("Add Insert…").clicked() {
+                (callbacks.open_insert_browser)(ch.id, None);
+                ui.close_menu();
+            }
+        });
+
+        interaction
+    }
+
+    fn render_compact_header(ui: &mut egui::Ui, ch: &mut Channel, style: &CompactStripStyle) {
+        let rounding = Rounding {
+            nw: style.rounding,
+            ne: style.rounding,
+            sw: 4.0,
+            se: 4.0,
+        };
+        Frame::none()
+            .fill(style.header_fill)
+            .stroke(Stroke::new(1.0, style.meter_border))
+            .rounding(rounding)
+            .inner_margin(Margin::symmetric(8.0, 6.0))
+            .show(ui, |ui| {
+                ui.scope(|ui| {
+                    ui.visuals_mut().override_text_color = Some(style.header_text);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut ch.name)
+                            .desired_width(f32::INFINITY)
+                            .font(egui::TextStyle::Small),
+                    );
+                });
+            });
+    }
+
+    fn render_compact_meter(
+        ui: &mut egui::Ui,
+        ch: &Channel,
+        style: &CompactStripStyle,
+    ) -> egui::Response {
+        let (rect, response) = ui.allocate_exact_size(style.meter_size, egui::Sense::click());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, style.meter_rounding, style.meter_bg);
+        painter.rect_stroke(
+            rect,
+            style.meter_rounding,
+            Stroke::new(1.0, style.meter_border),
+        );
+
+        let meter_rect = rect.shrink2(egui::vec2(4.0, 8.0));
+        let peak = ch
+            .meter
+            .peak_l
+            .max(ch.meter.peak_r)
+            .clamp(0.0, 1.2)
+            .min(1.0);
+        let rms = ((ch.meter.rms_l + ch.meter.rms_r) * 0.5)
+            .clamp(0.0, 1.2)
+            .min(1.0);
+        let hold = ch
+            .meter
+            .peak_hold_l
+            .max(ch.meter.peak_hold_r)
+            .clamp(0.0, 1.2)
+            .min(1.0);
+
+        let peak_height = meter_rect.height() * peak;
+        let peak_rect = egui::Rect::from_min_max(
+            egui::pos2(meter_rect.left(), meter_rect.bottom() - peak_height),
+            egui::pos2(meter_rect.right(), meter_rect.bottom()),
+        );
+        painter.rect_filled(peak_rect, style.meter_rounding, style.meter_peak);
+
+        let rms_height = meter_rect.height() * rms;
+        let rms_width = meter_rect.width() * 0.55;
+        let rms_rect = egui::Rect::from_min_max(
+            egui::pos2(
+                meter_rect.center().x - rms_width * 0.5,
+                meter_rect.bottom() - rms_height,
+            ),
+            egui::pos2(meter_rect.center().x + rms_width * 0.5, meter_rect.bottom()),
+        );
+        painter.rect_filled(rms_rect, style.meter_rounding, style.meter_rms);
+
+        let hold_y = meter_rect.bottom() - meter_rect.height() * hold;
+        painter.line_segment(
+            [
+                egui::pos2(meter_rect.left(), hold_y),
+                egui::pos2(meter_rect.right(), hold_y),
+            ],
+            Stroke::new(1.4, style.meter_hold),
+        );
+
+        for db in [-24.0_f32, -12.0, -6.0, 0.0] {
+            let level = db_to_gain(db).clamp(0.0, 1.0);
+            let y = meter_rect.bottom() - level * meter_rect.height();
+            painter.line_segment(
+                [
+                    egui::pos2(meter_rect.left() - 4.0, y),
+                    egui::pos2(meter_rect.left(), y),
+                ],
+                Stroke::new(1.0, style.meter_tick),
+            );
+        }
+
+        let led_center = egui::pos2(rect.center().x, rect.top() + 6.0);
+        let led_color = if ch.meter.clip_l || ch.meter.clip_r {
+            style.clip_on
+        } else {
+            style.clip_off
+        };
+        painter.circle_filled(led_center, 4.0, led_color);
+
+        response
+    }
+
+    fn compact_toggle(
+        ui: &mut egui::Ui,
+        value: &mut bool,
+        label: &str,
+        style: &CompactStripStyle,
+    ) -> egui::Response {
+        let (rect, mut response) =
+            ui.allocate_exact_size(egui::vec2(style.toggle_width, 24.0), egui::Sense::click());
+        if response.clicked() {
+            *value = !*value;
+            response.mark_changed();
+        }
+        let fill = if *value {
+            style.meter_peak
+        } else {
+            style.meter_bg.gamma_multiply(1.35)
+        };
+        let text_color = if *value {
+            style.header_text
+        } else {
+            style.label_secondary
+        };
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 5.0, fill);
+        painter.rect_stroke(rect, 5.0, style.border);
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            label,
+            FontId::proportional(11.0),
+            text_color,
+        );
+        response
+    }
+
     fn render_inserts(
         ui: &mut egui::Ui,
         palette: &HarmoniqPalette,
         ch: &mut Channel,
         callbacks: &mut MixerCallbacks,
+        slot_skin: SlotSkin,
     ) {
         ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
         ui.label(RichText::new("INSERTS").small().color(palette.text_muted));
@@ -571,8 +1033,8 @@ impl MixerView {
             };
 
             let inner = Frame::none()
-                .fill(palette.mixer_slot_bg)
-                .stroke(Stroke::new(1.0, palette.mixer_slot_border))
+                .fill(slot_skin.empty_fill)
+                .stroke(Stroke::new(1.0, slot_skin.border))
                 .rounding(Rounding::same(6.0))
                 .inner_margin(Margin::symmetric(8.0, 6.0))
                 .show(ui, |ui| {
@@ -595,7 +1057,7 @@ impl MixerView {
                         let bypass_resp = ui
                             .add(
                                 StateToggleButton::new(&mut ch.inserts[idx].bypass, "BYP", palette)
-                                    .with_width(48.0),
+                                    .with_width(slot_skin.bypass_width),
                             )
                             .on_hover_text("Toggle bypass");
                         if bypass_resp.changed() {
@@ -605,7 +1067,7 @@ impl MixerView {
                         if ui
                             .add(
                                 egui::Button::new(RichText::new(label.clone()).small())
-                                    .fill(palette.mixer_slot_active),
+                                    .fill(slot_skin.active_fill),
                             )
                             .clicked()
                         {
@@ -630,7 +1092,7 @@ impl MixerView {
             if let Some(pos) = pointer_pos {
                 if row_rect.contains(pos) {
                     drop_target = Some(idx);
-                    let stroke = Stroke::new(1.0, palette.accent_alt);
+                    let stroke = Stroke::new(1.0, slot_skin.highlight);
                     ui.painter().rect_stroke(row_rect.expand(2.0), 6.0, stroke);
                 }
             }
@@ -660,8 +1122,7 @@ impl MixerView {
 
         if ui
             .add(
-                egui::Button::new(RichText::new("+ Add Insert").small())
-                    .fill(palette.mixer_slot_bg),
+                egui::Button::new(RichText::new("+ Add Insert").small()).fill(slot_skin.empty_fill),
             )
             .clicked()
         {
@@ -674,14 +1135,16 @@ impl MixerView {
         palette: &HarmoniqPalette,
         ch: &mut Channel,
         callbacks: &mut MixerCallbacks,
+        slot_skin: SlotSkin,
+        knob_diameter: f32,
     ) {
         ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
         ui.label(RichText::new("SENDS").small().color(palette.text_muted));
 
         for send in &mut ch.sends {
             Frame::none()
-                .fill(palette.mixer_slot_bg)
-                .stroke(Stroke::new(1.0, palette.mixer_slot_border))
+                .fill(slot_skin.empty_fill)
+                .stroke(Stroke::new(1.0, slot_skin.border))
                 .rounding(Rounding::same(6.0))
                 .inner_margin(Margin::symmetric(8.0, 6.0))
                 .show(ui, |ui| {
@@ -690,7 +1153,7 @@ impl MixerView {
                         ui.label(RichText::new(label).strong());
                         let knob_resp = ui.add(
                             Knob::new(&mut send.level, 0.0, 1.0, 0.0, "", palette)
-                                .with_diameter(40.0),
+                                .with_diameter(knob_diameter),
                         );
                         if knob_resp.changed() {
                             (callbacks.configure_send)(ch.id, send.id, send.level);
