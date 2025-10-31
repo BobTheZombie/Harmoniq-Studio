@@ -800,16 +800,15 @@ impl MixerBackend for MixerUiBridge {
         }
     }
 
-    fn apply_routing(
-        &mut self,
-        set: &[(ChannelId, String, f32)],
-        remove: &[(ChannelId, String)],
-    ) {
+    fn apply_routing(&mut self, set: &[(ChannelId, String, f32)], remove: &[(ChannelId, String)]) {
         if !set.is_empty() {
             debug!(?set, "apply_routing set requests (UI bridge placeholder)");
         }
         if !remove.is_empty() {
-            debug!(?remove, "apply_routing remove requests (UI bridge placeholder)");
+            debug!(
+                ?remove,
+                "apply_routing remove requests (UI bridge placeholder)"
+            );
         }
     }
 }

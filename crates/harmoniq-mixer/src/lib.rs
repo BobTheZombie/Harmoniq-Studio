@@ -9,6 +9,8 @@ pub use rt::{
 #[cfg(feature = "egui")]
 pub mod ui;
 
+#[cfg(feature = "egui")]
+use harmoniq_ui::HarmoniqPalette;
 use state::{ChannelId, MixerState, SendId};
 
 /// Callbacks provided by the host app (non-RT).
@@ -51,9 +53,11 @@ impl MixerCallbacks {
     }
 }
 
+#[cfg(feature = "egui")]
 pub struct MixerProps<'a> {
     pub state: &'a mut MixerState,
     pub callbacks: &'a mut MixerCallbacks,
+    pub palette: &'a HarmoniqPalette,
 }
 
 pub use state::{RoutingDelta, RoutingMatrix};
