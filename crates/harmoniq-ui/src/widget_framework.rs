@@ -343,7 +343,9 @@ fn render_node(
             let inner = ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(skin.row_spacing, skin.row_spacing);
                 for child in children {
-                    last = render_node(ui, child, ctx, palette, skin).or(last);
+                    if let Some(response) = render_node(ui, child, ctx, palette, skin) {
+                        last = Some(response);
+                    }
                 }
             });
             last.or(Some(inner.response))
@@ -353,7 +355,9 @@ fn render_node(
             let inner = ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(skin.row_spacing, skin.row_spacing);
                 for child in children {
-                    last = render_node(ui, child, ctx, palette, skin).or(last);
+                    if let Some(response) = render_node(ui, child, ctx, palette, skin) {
+                        last = Some(response);
+                    }
                 }
             });
             last.or(Some(inner.response))
