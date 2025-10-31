@@ -1,18 +1,27 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[cfg(feature = "mixer_api")]
 use crossbeam_channel::Sender as MixerCommandSender;
 
-use eframe::egui::Ui;
+use eframe::egui::{
+    self,
+    plot::{Legend, Line, Plot, PlotPoints},
+    Align, Align2, Color32, Frame, Layout, Margin, RichText, Rounding, ScrollArea, Stroke, Ui,
+};
 use harmoniq_engine::mixer::api::{MixerUiApi, UiStripInfo};
 #[cfg(feature = "mixer_api")]
 use harmoniq_engine::{GuiMeterReceiver, MixerCommand};
-use harmoniq_mixer::state::{Channel, ChannelId, InsertSlot, Meter, MixerState, SendSlot};
+use harmoniq_mixer::state::{
+    Channel, ChannelId, InsertSlot, Meter, MixerState, RoutingDelta, SendSlot,
+};
 use harmoniq_mixer::ui::{db_to_gain, gain_to_db};
-use harmoniq_mixer::{self as simple_mixer, MixerCallbacks, MixerProps};
-use harmoniq_ui::HarmoniqPalette;
+use harmoniq_mixer::MixerCallbacks;
+use harmoniq_ui::{
+    widgets::{Fader, Knob, LevelMeter, StateToggleButton},
+    HarmoniqPalette,
+};
 use tracing::{info, warn};
 
 #[derive(Clone, Debug)]
@@ -22,6 +31,24 @@ struct StripSnapshot {
     solo: bool,
     insert_bypass: Vec<bool>,
     send_levels_db: Vec<f32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResetRequest {
+    Channel(ChannelId),
+    All,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SelectionRequest {
+    Select(ChannelId),
+    Clear,
+}
+
+#[derive(Default)]
+struct StripInteraction {
+    reset: Option<ResetRequest>,
+    selection: Option<SelectionRequest>,
 }
 
 #[cfg(feature = "mixer_api")]
@@ -64,6 +91,10 @@ pub struct MixerView {
     state: MixerState,
     master_cpu: f32,
     master_meter_db: (f32, f32),
+    cpu_history: VecDeque<f32>,
+    meter_history: VecDeque<(f32, f32)>,
+    history_capacity: usize,
+    last_history_update: Instant,
     #[cfg(feature = "mixer_api")]
     engine: Option<MixerEngineBridge>,
 }
@@ -76,6 +107,10 @@ impl MixerView {
             state: MixerState::default(),
             master_cpu: 0.0,
             master_meter_db: (f32::NEG_INFINITY, f32::NEG_INFINITY),
+            cpu_history: VecDeque::with_capacity(240),
+            meter_history: VecDeque::with_capacity(240),
+            history_capacity: 240,
+            last_history_update: Instant::now(),
             engine,
         }
     }
@@ -87,6 +122,10 @@ impl MixerView {
             state: MixerState::default(),
             master_cpu: 0.0,
             master_meter_db: (f32::NEG_INFINITY, f32::NEG_INFINITY),
+            cpu_history: VecDeque::with_capacity(240),
+            meter_history: VecDeque::with_capacity(240),
+            history_capacity: 240,
+            last_history_update: Instant::now(),
         }
     }
 
@@ -96,16 +135,679 @@ impl MixerView {
 
     pub fn zoom_out(&mut self) {}
 
-    pub fn ui(&mut self, ui: &mut Ui, _palette: &HarmoniqPalette) {
+    pub fn ui(&mut self, ui: &mut Ui, palette: &HarmoniqPalette) {
         let snapshots = self.sync_from_api();
         let mut callbacks = self.build_callbacks(&snapshots);
-        simple_mixer::render(
-            ui,
-            MixerProps {
-                state: &mut self.state,
-                callbacks: &mut callbacks,
-            },
-        );
+        self.update_histories();
+        self.render(ui, palette, &mut callbacks);
+    }
+
+    fn update_histories(&mut self) {
+        let now = Instant::now();
+        if now.saturating_duration_since(self.last_history_update) < Duration::from_millis(16) {
+            return;
+        }
+        self.last_history_update = now;
+        self.cpu_history.push_back(self.master_cpu);
+        self.meter_history.push_back(self.master_meter_db);
+        while self.cpu_history.len() > self.history_capacity {
+            self.cpu_history.pop_front();
+        }
+        while self.meter_history.len() > self.history_capacity {
+            self.meter_history.pop_front();
+        }
+    }
+
+    fn render(&mut self, ui: &mut Ui, palette: &HarmoniqPalette, callbacks: &mut MixerCallbacks) {
+        ui.vertical(|ui| {
+            self.render_header(ui, palette);
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Routing Matrix").clicked() {
+                    self.state.routing_visible = !self.state.routing_visible;
+                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(
+                        RichText::new("Shift+double-click any meter to clear peaks")
+                            .small()
+                            .color(palette.text_muted),
+                    );
+                });
+            });
+            ui.add_space(8.0);
+            self.render_strips(ui, palette, callbacks);
+        });
+
+        if self.state.routing_visible {
+            self.render_routing_matrix(ui, callbacks);
+        }
+    }
+
+    fn render_header(&mut self, ui: &mut Ui, palette: &HarmoniqPalette) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Mixer").heading());
+            if let Some(selected_id) = self.state.selected {
+                if let Some(channel) = self.state.channels.iter().find(|ch| ch.id == selected_id) {
+                    ui.add_space(12.0);
+                    ui.label(
+                        RichText::new(format!("Selected: {}", channel.name))
+                            .strong()
+                            .color(palette.text_primary),
+                    );
+                }
+            }
+
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                self.render_master_meter_summary(ui, palette);
+                ui.add_space(16.0);
+                self.render_cpu_summary(ui);
+            });
+        });
+        ui.add_space(10.0);
+        self.render_rt_graphs(ui, palette);
+    }
+
+    fn render_cpu_summary(&self, ui: &mut Ui) {
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Engine Load").small());
+            let pct = self.master_cpu.clamp(0.0, 100.0);
+            let bar = egui::ProgressBar::new((pct / 100.0).clamp(0.0, 1.0))
+                .desired_width(160.0)
+                .text(format!("{pct:.1}%"));
+            ui.add(bar);
+        });
+    }
+
+    fn render_master_meter_summary(&self, ui: &mut Ui, palette: &HarmoniqPalette) {
+        let (l_db, r_db) = self.master_meter_db;
+        let left = if l_db.is_finite() { l_db } else { -120.0 };
+        let right = if r_db.is_finite() { r_db } else { -120.0 };
+        let clip = left >= 0.0 || right >= 0.0;
+        let clip_color = if clip {
+            palette.warning
+        } else {
+            palette.meter_background
+        };
+
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Master Peak").small());
+            ui.horizontal(|ui| {
+                ui.label(format!("L {left:>6.1} dB"));
+                ui.label(format!("R {right:>6.1} dB"));
+                ui.colored_label(clip_color, RichText::new("●"));
+            });
+        });
+    }
+
+    fn render_rt_graphs(&self, ui: &mut Ui, palette: &HarmoniqPalette) {
+        Frame::none()
+            .fill(palette.panel_alt)
+            .stroke(Stroke::new(1.0, palette.mixer_strip_border))
+            .rounding(Rounding::same(10.0))
+            .inner_margin(Margin::symmetric(14.0, 10.0))
+            .show(ui, |ui| {
+                ui.set_height(150.0);
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("CPU History").small());
+                        ui.add_space(6.0);
+                        self.render_cpu_history_plot(ui);
+                    });
+                    ui.add_space(18.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new("Master Meter (dB)").small());
+                        ui.add_space(6.0);
+                        self.render_meter_history_plot(ui);
+                    });
+                });
+            });
+    }
+
+    fn render_cpu_history_plot(&self, ui: &mut Ui) {
+        let points = if self.cpu_history.is_empty() {
+            PlotPoints::from_iter([[0.0, 0.0]].into_iter())
+        } else {
+            PlotPoints::from_iter(
+                self.cpu_history
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, value)| [idx as f64, value.clamp(0.0, 100.0) as f64]),
+            )
+        };
+
+        Plot::new("mixer_cpu_history")
+            .view_aspect(1.8)
+            .allow_drag(false)
+            .allow_zoom(false)
+            .allow_scroll(false)
+            .include_y(0.0)
+            .include_y(100.0)
+            .show(ui, |plot_ui| {
+                plot_ui.line(
+                    Line::new(points)
+                        .color(Color32::from_rgb(166, 104, 239))
+                        .name("CPU %"),
+                );
+            });
+    }
+
+    fn render_meter_history_plot(&self, ui: &mut Ui) {
+        let sanitize = |db: f32| -> f64 {
+            if db.is_finite() {
+                db.max(-120.0) as f64
+            } else {
+                -120.0
+            }
+        };
+
+        let left_points = if self.meter_history.is_empty() {
+            PlotPoints::from_iter([[0.0, -120.0]].into_iter())
+        } else {
+            PlotPoints::from_iter(
+                self.meter_history
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, (left, _))| [idx as f64, sanitize(*left)]),
+            )
+        };
+
+        let right_points = if self.meter_history.is_empty() {
+            PlotPoints::from_iter([[0.0, -120.0]].into_iter())
+        } else {
+            PlotPoints::from_iter(
+                self.meter_history
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, (_, right))| [idx as f64, sanitize(*right)]),
+            )
+        };
+
+        Plot::new("mixer_meter_history")
+            .view_aspect(1.8)
+            .allow_drag(false)
+            .allow_zoom(false)
+            .allow_scroll(false)
+            .include_y(-120.0)
+            .include_y(6.0)
+            .legend(Legend::default())
+            .show(ui, |plot_ui| {
+                plot_ui.line(
+                    Line::new(left_points)
+                        .color(Color32::from_rgb(94, 210, 170))
+                        .name("Left"),
+                );
+                plot_ui.line(
+                    Line::new(right_points)
+                        .color(Color32::from_rgb(255, 150, 132))
+                        .name("Right"),
+                );
+            });
+    }
+
+    fn render_strips(
+        &mut self,
+        ui: &mut Ui,
+        palette: &HarmoniqPalette,
+        callbacks: &mut MixerCallbacks,
+    ) {
+        let mut interactions = Vec::new();
+        let channel_len = self.state.channels.len();
+        ScrollArea::horizontal()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    for idx in 0..channel_len {
+                        if let Some(ch) = self.state.channels.get_mut(idx) {
+                            let is_selected = self.state.selected == Some(ch.id);
+                            let interaction =
+                                Self::render_channel_strip(ui, palette, ch, callbacks, is_selected);
+                            interactions.push(interaction);
+                            ui.add_space(10.0);
+                        }
+                    }
+                });
+            });
+        self.apply_strip_interactions(interactions);
+    }
+
+    fn apply_strip_interactions(&mut self, interactions: Vec<StripInteraction>) {
+        let mut reset_all = false;
+        let mut channel_resets = Vec::new();
+        let mut selection_update: Option<Option<ChannelId>> = None;
+
+        for interaction in interactions {
+            if let Some(reset) = interaction.reset {
+                match reset {
+                    ResetRequest::All => {
+                        reset_all = true;
+                    }
+                    ResetRequest::Channel(id) => channel_resets.push(id),
+                }
+            }
+
+            if let Some(selection) = interaction.selection {
+                selection_update = Some(match selection {
+                    SelectionRequest::Select(id) => Some(id),
+                    SelectionRequest::Clear => None,
+                });
+            }
+        }
+
+        if reset_all {
+            self.state.reset_peaks_all();
+        } else {
+            for id in channel_resets {
+                self.state.reset_peaks_for(id);
+            }
+        }
+
+        if let Some(target) = selection_update {
+            self.state.selected = target;
+        }
+    }
+
+    fn render_channel_strip(
+        ui: &mut egui::Ui,
+        palette: &HarmoniqPalette,
+        ch: &mut Channel,
+        callbacks: &mut MixerCallbacks,
+        is_selected: bool,
+    ) -> StripInteraction {
+        let mut interaction = StripInteraction::default();
+        let fill = if is_selected {
+            palette.mixer_strip_selected
+        } else if ch.solo {
+            palette.mixer_strip_solo
+        } else if ch.mute {
+            palette.mixer_strip_muted
+        } else {
+            palette.mixer_strip_bg
+        };
+
+        let frame = Frame::none()
+            .fill(fill)
+            .stroke(Stroke::new(1.0, palette.mixer_strip_border))
+            .rounding(Rounding::same(12.0))
+            .inner_margin(Margin::symmetric(12.0, 10.0));
+
+        let response = frame.show(ui, |ui| {
+            ui.set_width(200.0);
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 8.0);
+
+            ui.horizontal(|ui| {
+                let clip = ch.meter.clip_l || ch.meter.clip_r;
+                let clip_color = if clip {
+                    palette.warning
+                } else {
+                    palette.meter_background
+                };
+                ui.colored_label(clip_color, RichText::new("●"));
+                ui.add(
+                    egui::TextEdit::singleline(&mut ch.name)
+                        .desired_width(140.0)
+                        .font(egui::TextStyle::Button),
+                );
+            });
+
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
+                let avg_rms = ((ch.meter.rms_l + ch.meter.rms_r) * 0.5).clamp(0.0, 1.2);
+                let meter_resp = ui
+                    .add(
+                        LevelMeter::new(palette)
+                            .with_size(egui::vec2(24.0, 190.0))
+                            .with_levels(
+                                ch.meter.peak_l.clamp(0.0, 1.2).min(1.0),
+                                ch.meter.peak_r.clamp(0.0, 1.2).min(1.0),
+                                avg_rms.min(1.0),
+                            ),
+                    )
+                    .on_hover_text("Double-click to reset peak. Hold Shift to reset all strips");
+                Self::draw_clip_light(
+                    ui,
+                    meter_resp.rect,
+                    ch.meter.clip_l || ch.meter.clip_r,
+                    palette,
+                );
+                if meter_resp.double_clicked() {
+                    if ui.input(|i| i.modifiers.shift) {
+                        interaction.reset = Some(ResetRequest::All);
+                    } else {
+                        interaction.reset = Some(ResetRequest::Channel(ch.id));
+                    }
+                }
+
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 6.0);
+                    let fader_resp = ui.add(
+                        Fader::new(&mut ch.gain_db, -60.0, 12.0, 0.0, palette).with_height(190.0),
+                    );
+                    if fader_resp.changed() {
+                        (callbacks.set_gain_pan)(ch.id, ch.gain_db, ch.pan);
+                    }
+                    ui.label(RichText::new(format!("{:.1} dB", ch.gain_db)).small());
+                });
+
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    let pan_resp = ui.add(
+                        Knob::new(&mut ch.pan, -1.0, 1.0, 0.0, "Pan", palette).with_diameter(52.0),
+                    );
+                    if pan_resp.changed() {
+                        (callbacks.set_gain_pan)(ch.id, ch.gain_db, ch.pan);
+                    }
+                    ui.label(RichText::new(format!("{:.2}", ch.pan)).small());
+
+                    ui.horizontal(|ui| {
+                        let mute_resp = ui
+                            .add(
+                                StateToggleButton::new(&mut ch.mute, "M", palette).with_width(38.0),
+                            )
+                            .on_hover_text("Mute");
+                        if mute_resp.changed() {
+                            (callbacks.set_mute)(ch.id, ch.mute);
+                        }
+                        let solo_resp = ui
+                            .add(
+                                StateToggleButton::new(&mut ch.solo, "S", palette).with_width(38.0),
+                            )
+                            .on_hover_text("Solo");
+                        if solo_resp.changed() {
+                            (callbacks.set_solo)(ch.id, ch.solo);
+                        }
+                    });
+                });
+            });
+
+            ui.separator();
+            Self::render_inserts(ui, palette, ch, callbacks);
+
+            if !ch.is_master {
+                ui.separator();
+                Self::render_sends(ui, palette, ch, callbacks);
+            }
+
+            ui.add_space(6.0);
+            let select_label = if is_selected { "Selected" } else { "Select" };
+            let select_resp = ui.add(egui::SelectableLabel::new(is_selected, select_label));
+            if select_resp.clicked() {
+                interaction.selection = Some(if is_selected {
+                    SelectionRequest::Clear
+                } else {
+                    SelectionRequest::Select(ch.id)
+                });
+            }
+        });
+
+        response.response.context_menu(|ui| {
+            if ui.button("Add Insert…").clicked() {
+                (callbacks.open_insert_browser)(ch.id, None);
+                ui.close_menu();
+            }
+        });
+
+        interaction
+    }
+
+    fn render_inserts(
+        ui: &mut egui::Ui,
+        palette: &HarmoniqPalette,
+        ch: &mut Channel,
+        callbacks: &mut MixerCallbacks,
+    ) {
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
+        ui.label(RichText::new("INSERTS").small().color(palette.text_muted));
+
+        let drag_id = egui::Id::new(("mixer_insert_drag", ch.id));
+        let pointer_pos = ui.ctx().pointer_interact_pos();
+        let mut drop_target: Option<usize> = None;
+        let mut pending_move: Option<(usize, usize)> = None;
+
+        for idx in 0..ch.inserts.len() {
+            let mut drop_request = None;
+            let label = if ch.inserts[idx].name.is_empty() {
+                "Empty".to_string()
+            } else {
+                ch.inserts[idx].name.clone()
+            };
+
+            let inner = Frame::none()
+                .fill(palette.mixer_slot_bg)
+                .stroke(Stroke::new(1.0, palette.mixer_slot_border))
+                .rounding(Rounding::same(6.0))
+                .inner_margin(Margin::symmetric(8.0, 6.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let handle = ui
+                            .add(egui::Label::new("≡").sense(egui::Sense::drag()))
+                            .on_hover_text("Drag to reorder");
+                        if handle.drag_started() {
+                            ui.ctx().data_mut(|data| data.insert_temp(drag_id, idx));
+                        }
+                        if handle.drag_released() {
+                            if let Some(from) =
+                                ui.ctx().data(|data| data.get_temp::<usize>(drag_id))
+                            {
+                                drop_request = Some((from, drop_target.unwrap_or(idx)));
+                            }
+                            ui.ctx().data_mut(|data| data.remove::<usize>(drag_id));
+                        }
+
+                        let bypass_resp = ui
+                            .add(
+                                StateToggleButton::new(&mut ch.inserts[idx].bypass, "BYP", palette)
+                                    .with_width(48.0),
+                            )
+                            .on_hover_text("Toggle bypass");
+                        if bypass_resp.changed() {
+                            (callbacks.set_insert_bypass)(ch.id, idx, ch.inserts[idx].bypass);
+                        }
+
+                        if ui
+                            .add(
+                                egui::Button::new(RichText::new(label.clone()).small())
+                                    .fill(palette.mixer_slot_active),
+                            )
+                            .clicked()
+                        {
+                            (callbacks.open_insert_ui)(ch.id, idx);
+                        }
+
+                        if ui
+                            .add(egui::Button::new("✕").min_size(egui::vec2(24.0, 24.0)))
+                            .on_hover_text("Remove")
+                            .clicked()
+                        {
+                            (callbacks.remove_insert)(ch.id, idx);
+                        }
+                    });
+                });
+
+            let row_rect = inner.response.rect;
+            if let Some((from, target)) = drop_request {
+                pending_move = Some((from, target));
+            }
+
+            if let Some(pos) = pointer_pos {
+                if row_rect.contains(pos) {
+                    drop_target = Some(idx);
+                    let stroke = Stroke::new(1.0, palette.accent_alt);
+                    ui.painter().rect_stroke(row_rect.expand(2.0), 6.0, stroke);
+                }
+            }
+        }
+
+        if ui
+            .ctx()
+            .data(|data| data.get_temp::<usize>(drag_id))
+            .is_some()
+            && drop_target.is_none()
+        {
+            drop_target = Some(ch.inserts.len());
+        }
+
+        if let Some((from, to)) = pending_move {
+            if from != to && from < ch.inserts.len() {
+                let mut destination = to.min(ch.inserts.len());
+                let slot = ch.inserts.remove(from);
+                if destination > from {
+                    destination = destination.saturating_sub(1);
+                }
+                destination = destination.min(ch.inserts.len());
+                ch.inserts.insert(destination, slot);
+                (callbacks.reorder_insert)(ch.id, from, destination);
+            }
+        }
+
+        if ui
+            .add(
+                egui::Button::new(RichText::new("+ Add Insert").small())
+                    .fill(palette.mixer_slot_bg),
+            )
+            .clicked()
+        {
+            (callbacks.open_insert_browser)(ch.id, None);
+        }
+    }
+
+    fn render_sends(
+        ui: &mut egui::Ui,
+        palette: &HarmoniqPalette,
+        ch: &mut Channel,
+        callbacks: &mut MixerCallbacks,
+    ) {
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
+        ui.label(RichText::new("SENDS").small().color(palette.text_muted));
+
+        for send in &mut ch.sends {
+            Frame::none()
+                .fill(palette.mixer_slot_bg)
+                .stroke(Stroke::new(1.0, palette.mixer_slot_border))
+                .rounding(Rounding::same(6.0))
+                .inner_margin(Margin::symmetric(8.0, 6.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let label = char::from(b'A'.saturating_add(send.id.min(25))).to_string();
+                        ui.label(RichText::new(label).strong());
+                        let knob_resp = ui.add(
+                            Knob::new(&mut send.level, 0.0, 1.0, 0.0, "", palette)
+                                .with_diameter(40.0),
+                        );
+                        if knob_resp.changed() {
+                            (callbacks.configure_send)(ch.id, send.id, send.level);
+                        }
+                        ui.label(RichText::new(format!("{:.0}%", send.level * 100.0)).small());
+                    });
+                });
+        }
+    }
+
+    fn draw_clip_light(ui: &mut egui::Ui, rect: egui::Rect, clip: bool, palette: &HarmoniqPalette) {
+        let radius = 5.0;
+        let center = egui::pos2(rect.center().x, rect.top() + radius + 4.0);
+        let color = if clip {
+            palette.warning
+        } else {
+            palette.meter_background.gamma_multiply(0.7)
+        };
+        ui.painter().circle_filled(center, radius, color);
+    }
+
+    fn render_routing_matrix(&mut self, ui: &mut Ui, callbacks: &mut MixerCallbacks) {
+        let mut open = self.state.routing_visible;
+        egui::Window::new("Routing Matrix")
+            .open(&mut open)
+            .collapsible(false)
+            .default_size(egui::vec2(720.0, 420.0))
+            .show(ui.ctx(), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Level 0..1. Click cell to toggle; drag to adjust.");
+                    if ui.button("Close").clicked() {
+                        self.state.routing_visible = false;
+                    }
+                });
+                ui.separator();
+
+                let mut buses: BTreeSet<String> = BTreeSet::new();
+                buses.insert("MASTER".to_string());
+                for map in self.state.routing.routes.values() {
+                    for bus in map.keys() {
+                        buses.insert(bus.clone());
+                    }
+                }
+
+                egui::Grid::new("routing_matrix_grid")
+                    .striped(true)
+                    .show(ui, |grid_ui| {
+                        grid_ui.label(RichText::new("Source").strong());
+                        for bus in &buses {
+                            grid_ui.label(RichText::new(bus).strong());
+                        }
+                        grid_ui.end_row();
+
+                        let mut delta = RoutingDelta::default();
+                        for ch in self.state.channels.iter().filter(|c| !c.is_master) {
+                            grid_ui.label(ch.name.clone());
+                            for bus in &buses {
+                                let current = self.state.routing.level(ch.id, bus).unwrap_or(0.0);
+                                let cell_id = grid_ui.make_persistent_id(("route", ch.id, bus));
+                                let (rect, _) = grid_ui.allocate_exact_size(
+                                    egui::vec2(80.0, 22.0),
+                                    egui::Sense::click_and_drag(),
+                                );
+                                let painter = grid_ui.painter_at(rect);
+                                let bg = if current > 0.0 {
+                                    grid_ui.visuals().selection.bg_fill
+                                } else {
+                                    grid_ui.visuals().faint_bg_color
+                                };
+                                painter.rect_filled(rect, 3.0, bg);
+                                painter.rect_stroke(
+                                    rect,
+                                    3.0,
+                                    egui::Stroke::new(
+                                        1.0,
+                                        grid_ui.visuals().widgets.noninteractive.fg_stroke.color,
+                                    ),
+                                );
+                                painter.text(
+                                    rect.center(),
+                                    Align2::CENTER_CENTER,
+                                    format!("{current:.2}"),
+                                    egui::TextStyle::Small.resolve(grid_ui.style()),
+                                    grid_ui.visuals().text_color(),
+                                );
+
+                                let response =
+                                    grid_ui.interact(rect, cell_id, egui::Sense::click_and_drag());
+                                let mut level = current;
+                                if response.clicked() {
+                                    if (level - 0.0).abs() < f32::EPSILON {
+                                        level = 1.0;
+                                        delta.set.push((ch.id, bus.clone(), level));
+                                    } else {
+                                        delta.remove.push((ch.id, bus.clone()));
+                                        level = 0.0;
+                                    }
+                                }
+                                if response.dragged() {
+                                    let dy = response.drag_delta().y;
+                                    if dy.abs() > f32::EPSILON {
+                                        level = (level - dy * 0.01).clamp(0.0, 1.0);
+                                        delta.set.push((ch.id, bus.clone(), level));
+                                    }
+                                }
+                            }
+                            grid_ui.end_row();
+                        }
+
+                        if !delta.set.is_empty() || !delta.remove.is_empty() {
+                            self.state.routing.apply_delta(&delta);
+                            (callbacks.apply_routing)(delta);
+                        }
+                    });
+            });
+        self.state.routing_visible = open;
     }
 
     pub fn cpu_estimate(&self) -> f32 {
