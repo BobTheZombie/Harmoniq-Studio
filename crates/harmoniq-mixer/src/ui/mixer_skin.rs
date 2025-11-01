@@ -73,12 +73,21 @@ pub struct ThemeColors {
     pub meter_peak: Color32,
     pub meter_clip: Color32,
     pub meter_grid: Color32,
+    pub meter_border: Color32,
     pub text_primary: Color32,
     pub text_dim: Color32,
     pub button_on: Color32,
     pub button_off: Color32,
+    pub button_mute_on: Color32,
+    pub button_solo_on: Color32,
+    pub button_rec_on: Color32,
+    pub button_badge: Color32,
     pub rack_header: Color32,
+    pub rack_panel: Color32,
     pub strip_header: Color32,
+    pub fader_track: Color32,
+    pub fader_track_inner: Color32,
+    pub fader_handle: Color32,
 }
 
 #[derive(Clone, Debug)]
@@ -118,24 +127,33 @@ impl Default for MixerTheme {
     fn default() -> Self {
         Self {
             colors: ThemeColors {
-                background: Color32::from_rgb(0x10, 0x13, 0x18),
-                panel: Color32::from_rgb(0x18, 0x1D, 0x25),
-                strip_bg: Color32::from_rgb(0x20, 0x26, 0x31),
-                strip_bg_alt: Color32::from_rgb(0x24, 0x2B, 0x37),
-                master_strip_bg: Color32::from_rgb(0x22, 0x32, 0x3F),
-                meter_background: Color32::from_rgb(0x0E, 0x11, 0x17),
-                meter_low: Color32::from_rgb(0x1B, 0xE7, 0xFF),
-                meter_mid: Color32::from_rgb(0x23, 0xCB, 0xFF),
-                meter_high: Color32::from_rgb(0x2E, 0xAC, 0xFF),
-                meter_peak: Color32::from_rgb(0xFF, 0xB0, 0x3B),
-                meter_clip: Color32::from_rgb(0xFF, 0x54, 0x54),
-                meter_grid: Color32::from_rgb(0x2C, 0x34, 0x41),
-                text_primary: Color32::from_rgb(0xE6, 0xF0, 0xF8),
-                text_dim: Color32::from_rgb(0x97, 0xA7, 0xBA),
-                button_on: Color32::from_rgb(0x2E, 0x92, 0xFF),
-                button_off: Color32::from_rgb(0x28, 0x2D, 0x36),
-                rack_header: Color32::from_rgb(0x8A, 0x99, 0xAD),
-                strip_header: Color32::from_rgb(0x1B, 0x20, 0x29),
+                background: Color32::from_rgb(0x22, 0x23, 0x29),
+                panel: Color32::from_rgb(0x2B, 0x2D, 0x34),
+                strip_bg: Color32::from_rgb(0x35, 0x38, 0x41),
+                strip_bg_alt: Color32::from_rgb(0x30, 0x33, 0x3B),
+                master_strip_bg: Color32::from_rgb(0x3D, 0x46, 0x50),
+                meter_background: Color32::from_rgb(0x15, 0x19, 0x1F),
+                meter_low: Color32::from_rgb(0x5A, 0xF3, 0xFF),
+                meter_mid: Color32::from_rgb(0x3C, 0xD6, 0xFF),
+                meter_high: Color32::from_rgb(0x18, 0xB7, 0xFF),
+                meter_peak: Color32::from_rgb(0xF4, 0xD0, 0x58),
+                meter_clip: Color32::from_rgb(0xFF, 0x55, 0x55),
+                meter_grid: Color32::from_rgb(0x2E, 0x35, 0x3E),
+                meter_border: Color32::from_rgb(0x43, 0x4B, 0x54),
+                text_primary: Color32::from_rgb(0xF3, 0xF6, 0xFC),
+                text_dim: Color32::from_rgb(0xA3, 0xAE, 0xBC),
+                button_on: Color32::from_rgb(0x4B, 0x72, 0xFF),
+                button_off: Color32::from_rgb(0x27, 0x2A, 0x32),
+                button_mute_on: Color32::from_rgb(0x4B, 0x72, 0xFF),
+                button_solo_on: Color32::from_rgb(0xFF, 0xC6, 0x4B),
+                button_rec_on: Color32::from_rgb(0xFF, 0x5B, 0x5B),
+                button_badge: Color32::from_rgb(0x1F, 0x23, 0x2A),
+                rack_header: Color32::from_rgb(0xC2, 0xCE, 0xDA),
+                rack_panel: Color32::from_rgb(0x28, 0x2C, 0x33),
+                strip_header: Color32::from_rgb(0x1C, 0x1F, 0x25),
+                fader_track: Color32::from_rgb(0x14, 0x19, 0x20),
+                fader_track_inner: Color32::from_rgb(0x1C, 0x22, 0x2A),
+                fader_handle: Color32::from_rgb(0xD9, 0xDF, 0xEA),
             },
             sizes: ThemeSizes {
                 strip_width_narrow: 68.0,
@@ -263,7 +281,7 @@ impl MixerTheme {
             painter.rect_stroke(
                 led_rect,
                 Rounding::same(led_height * 0.35),
-                Stroke::new(1.0, self.colors.meter_grid),
+                Stroke::new(1.0, self.colors.meter_border),
             );
         }
     }
@@ -328,90 +346,101 @@ impl MixerUi {
         let sizes = self.theme.scaled_sizes();
 
         Frame::none()
-            .fill(self.theme.colors.panel)
+            .fill(self.theme.colors.background)
             .rounding(Rounding::same(self.theme.rounding()))
-            .inner_margin(Margin::symmetric(sizes.spacing, sizes.spacing))
+            .inner_margin(Margin::symmetric(sizes.spacing * 0.8, sizes.spacing * 0.8))
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing = Vec2::splat(sizes.spacing);
-
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = Vec2::splat(sizes.spacing);
-                    ui.toggle_value(&mut self.show_meter_bridge, "Meter Bridge")
-                        .on_hover_text("Toggle the top meter bridge");
-
-                    let narrow = density_button(
-                        ui,
-                        "Narrow",
-                        matches!(self.density, Density::Narrow),
-                        &self.theme,
-                    );
-                    if narrow.clicked() {
-                        self.density = Density::Narrow;
-                    }
-                    let wide = density_button(
-                        ui,
-                        "Wide",
-                        matches!(self.density, Density::Wide),
-                        &self.theme,
-                    );
-                    if wide.clicked() {
-                        self.density = Density::Wide;
-                    }
-
-                    ui.separator();
-
-                    let mut slider = egui::Slider::new(&mut self.zoom, 0.85..=1.35)
-                        .text("Zoom")
-                        .step_by(0.01);
-                    slider = slider.clamp_to_range(true);
-                    if ui
-                        .add_sized(Vec2::new(140.0 * sizes.zoom, sizes.button_height), slider)
-                        .changed()
-                    {
-                        self.theme.set_zoom(self.zoom);
-                    }
-
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new("N/W to toggle density · Cmd/Ctrl ± for zoom")
-                                .small()
-                                .color(self.theme.colors.text_dim),
-                        );
-                    });
-                });
-
-                ui.separator();
-
-                egui::ScrollArea::horizontal()
-                    .id_source("mixer_skin_scroll")
-                    .auto_shrink([false, false])
+                Frame::none()
+                    .fill(self.theme.colors.panel)
+                    .rounding(Rounding::same(self.theme.rounding() * 0.85))
+                    .inner_margin(Margin::symmetric(sizes.spacing, sizes.spacing))
                     .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing = Vec2::new(sizes.spacing, 0.0);
-                        ui.horizontal_top(|ui| {
-                            for (index, strip) in self.strips.iter_mut().enumerate() {
-                                let alternate = index % 2 == 1;
-                                strip_widget(
-                                    ui,
-                                    strip,
-                                    &self.theme,
-                                    sizes,
-                                    self.density,
-                                    self.show_meter_bridge,
-                                    alternate,
-                                    false,
-                                );
-                            }
-                            strip_widget(
+                        ui.spacing_mut().item_spacing = Vec2::splat(sizes.spacing);
+
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = Vec2::splat(sizes.spacing);
+                            ui.toggle_value(&mut self.show_meter_bridge, "Meter Bridge")
+                                .on_hover_text("Toggle the top meter bridge");
+
+                            let narrow = density_button(
                                 ui,
-                                &mut self.master,
+                                "Narrow",
+                                matches!(self.density, Density::Narrow),
                                 &self.theme,
-                                sizes,
-                                Density::Wide,
-                                self.show_meter_bridge,
-                                false,
-                                true,
                             );
+                            if narrow.clicked() {
+                                self.density = Density::Narrow;
+                            }
+                            let wide = density_button(
+                                ui,
+                                "Wide",
+                                matches!(self.density, Density::Wide),
+                                &self.theme,
+                            );
+                            if wide.clicked() {
+                                self.density = Density::Wide;
+                            }
+
+                            ui.separator();
+
+                            let mut slider = egui::Slider::new(&mut self.zoom, 0.85..=1.35)
+                                .text("Zoom")
+                                .step_by(0.01);
+                            slider = slider.clamp_to_range(true);
+                            if ui
+                                .add_sized(
+                                    Vec2::new(140.0 * sizes.zoom, sizes.button_height),
+                                    slider,
+                                )
+                                .changed()
+                            {
+                                self.theme.set_zoom(self.zoom);
+                            }
+
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(
+                                    egui::RichText::new(
+                                        "N/W to toggle density · Cmd/Ctrl ± for zoom",
+                                    )
+                                    .small()
+                                    .color(self.theme.colors.text_dim),
+                                );
+                            });
                         });
+
+                        ui.separator();
+
+                        egui::ScrollArea::horizontal()
+                            .id_source("mixer_skin_scroll")
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.spacing_mut().item_spacing = Vec2::new(sizes.spacing, 0.0);
+                                ui.horizontal_top(|ui| {
+                                    for (index, strip) in self.strips.iter_mut().enumerate() {
+                                        let alternate = index % 2 == 1;
+                                        strip_widget(
+                                            ui,
+                                            strip,
+                                            &self.theme,
+                                            sizes,
+                                            self.density,
+                                            self.show_meter_bridge,
+                                            alternate,
+                                            false,
+                                        );
+                                    }
+                                    strip_widget(
+                                        ui,
+                                        &mut self.master,
+                                        &self.theme,
+                                        sizes,
+                                        Density::Wide,
+                                        self.show_meter_bridge,
+                                        false,
+                                        true,
+                                    );
+                                });
+                            });
                     });
             });
     }
@@ -465,6 +494,18 @@ fn strip_widget(
                     );
                     ui.painter().rect_filled(
                         badge_rect,
+                        Rounding::same(theme.rounding() * 0.3),
+                        theme.colors.button_badge,
+                    );
+                    let accent_rect = Rect::from_min_max(
+                        badge_rect.left_top(),
+                        Pos2::new(
+                            badge_rect.left() + badge_rect.width() * 0.55,
+                            badge_rect.bottom(),
+                        ),
+                    );
+                    ui.painter().rect_filled(
+                        accent_rect,
                         Rounding::same(theme.rounding() * 0.3),
                         strip.color,
                     );
@@ -568,7 +609,7 @@ fn strip_rack(
     };
 
     Frame::none()
-        .fill(Color32::from_rgba_unmultiplied(0, 0, 0, 26))
+        .fill(theme.colors.rack_panel)
         .rounding(Rounding::same(theme.rounding() * 0.6))
         .inner_margin(Margin::symmetric(sizes.spacing, sizes.spacing))
         .show(ui, |ui| {
@@ -612,7 +653,7 @@ fn strip_rack(
                     ui.painter().rect_filled(
                         tag_rect,
                         Rounding::same(theme.rounding() * 0.2),
-                        Color32::from_rgba_unmultiplied(0, 0, 0, 180),
+                        theme.colors.button_badge,
                     );
                     ui.painter().text(
                         tag_rect.center(),
@@ -780,12 +821,18 @@ pub fn fader(ui: &mut Ui, gain_db: &mut f32, height: f32, theme: &MixerTheme) ->
     painter.rect_filled(
         rect,
         Rounding::same(theme.rounding() * 0.4),
-        Color32::from_rgb(0x18, 0x1F, 0x25),
+        theme.colors.fader_track,
     );
     painter.rect_stroke(
         rect,
         Rounding::same(theme.rounding() * 0.4),
         theme.chrome_stroke,
+    );
+    let inner = rect.shrink2(Vec2::new(width * 0.18, width * 0.25));
+    painter.rect_filled(
+        inner,
+        Rounding::same(theme.rounding() * 0.35),
+        theme.colors.fader_track_inner,
     );
 
     const TICKS: [f32; 10] = [
@@ -813,15 +860,21 @@ pub fn fader(ui: &mut Ui, gain_db: &mut f32, height: f32, theme: &MixerTheme) ->
         Pos2::new(rect.center().x, rect.bottom() - norm * rect.height()),
         Vec2::new(width * 0.7, handle_height),
     );
-    painter.rect_filled(
-        handle_rect,
-        Rounding::same(handle_height * 0.4),
-        theme.colors.button_on,
-    );
+    let handle_rounding = Rounding::same(handle_height * 0.4);
+    painter.rect_filled(handle_rect, handle_rounding, theme.colors.fader_handle);
     painter.rect_stroke(
         handle_rect,
-        Rounding::same(handle_height * 0.4),
-        theme.chrome_stroke,
+        handle_rounding,
+        Stroke::new(1.0, theme.colors.meter_border.gamma_multiply(0.8)),
+    );
+    let indicator = Rect::from_center_size(
+        handle_rect.center(),
+        Vec2::new(handle_rect.width() * 0.35, handle_height * 0.35),
+    );
+    painter.rect_filled(
+        indicator,
+        Rounding::same(handle_height * 0.2),
+        theme.colors.button_on,
     );
 
     response
@@ -861,7 +914,7 @@ pub fn knob_small(
     painter.circle_filled(
         knob_rect.center(),
         diameter * 0.5,
-        Color32::from_rgb(0x1A, 0x21, 0x27),
+        theme.colors.fader_track_inner,
     );
     painter.circle_stroke(knob_rect.center(), diameter * 0.5, theme.chrome_stroke);
 
@@ -903,7 +956,7 @@ pub fn meter_pair(ui: &mut Ui, l: f32, r: f32, height: f32, theme: &MixerTheme) 
     painter.rect_stroke(
         rect,
         Rounding::same(theme.rounding() * 0.35),
-        Stroke::new(1.0, theme.colors.meter_grid),
+        Stroke::new(1.0, theme.colors.meter_border),
     );
 
     let divider_x = rect.center().x;
@@ -912,7 +965,7 @@ pub fn meter_pair(ui: &mut Ui, l: f32, r: f32, height: f32, theme: &MixerTheme) 
             Pos2::new(divider_x, rect.top() + 3.0),
             Pos2::new(divider_x, rect.bottom() - 3.0),
         ],
-        Stroke::new(1.0, theme.colors.meter_grid.gamma_multiply(0.7)),
+        Stroke::new(1.0, theme.colors.meter_border.gamma_multiply(0.9)),
     );
 
     let gutter = 3.0 * theme.zoom();
@@ -947,7 +1000,12 @@ fn toggle_button(
         *value = !*value;
     }
     let fill = if *value {
-        theme.colors.button_on
+        match label {
+            "M" => theme.colors.button_mute_on,
+            "S" => theme.colors.button_solo_on,
+            "R" => theme.colors.button_rec_on,
+            _ => theme.colors.button_on,
+        }
     } else {
         theme.colors.button_off
     };
