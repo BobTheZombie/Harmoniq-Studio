@@ -178,7 +178,12 @@ impl MixerUiApi for MixerUiState {
         self.strips
             .read()
             .get(idx)
-            .map(|state| state.info.clone())
+            .map(|state| {
+                let mut info = state.info.clone();
+                info.insert_count = state.inserts.len();
+                info.send_count = state.sends.len();
+                info
+            })
             .unwrap_or_default()
     }
 
