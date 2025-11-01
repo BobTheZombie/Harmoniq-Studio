@@ -79,7 +79,7 @@ impl SubVoice {
         vel: f32,
         sr: f32,
         decay_s: f32,
-        thump_st: f32,
+        _thump_st: f32,
         thump_decay_s: f32,
         glide_ms: f32,
     ) {

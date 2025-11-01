@@ -71,7 +71,12 @@ pub struct MidiEvent {
 #[derive(Clone, Debug)]
 pub enum MidiSource {
     /// Hardware device with identifier.
-    Device { id: MidiDeviceId, name: Arc<str> },
+    Device {
+        /// Unique identifier for the device.
+        id: MidiDeviceId,
+        /// Friendly name for the device.
+        name: Arc<str>,
+    },
     /// QWERTY keyboard emulation.
     Qwerty,
     /// Virtual device for tests.
@@ -98,10 +103,15 @@ pub trait MidiBackend: Send {
 /// Callback signature for backend delivered events.
 pub type MidiCallback = fn(MidiSource, MidiEvent, *mut core::ffi::c_void);
 
-struct ManagedDevice {
-    id: MidiDeviceId,
-    name: Arc<str>,
-    port_index: usize,
+/// Details about an active MIDI input connection.
+#[derive(Debug)]
+pub struct ManagedDevice {
+    /// Identifier assigned to the open connection.
+    pub id: MidiDeviceId,
+    /// User facing device name reported by the backend.
+    pub name: Arc<str>,
+    /// Backend port index associated with the connection.
+    pub port_index: usize,
 }
 
 /// Device manager responsible for configuration persistence and backend coordination.

@@ -266,7 +266,7 @@ impl MixerUi {
                 pending_density = Some(Density::Wide);
             }
             if input.modifiers.command_only() {
-                if input.key_pressed(egui::Key::PlusEquals) {
+                if input.key_pressed(egui::Key::Equals) {
                     zoom_delta += 0.05;
                 }
                 if input.key_pressed(egui::Key::Minus) {
@@ -413,12 +413,12 @@ fn strip_widget(
             let header_response = ui
                 .horizontal(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(sizes.spacing * 0.6, 0.0);
-                    let badge = ui.allocate_exact_size(
+                    let (badge_rect, _badge_response) = ui.allocate_exact_size(
                         Vec2::new(8.0 * sizes.zoom, sizes.button_height * 0.8),
                         Sense::hover(),
                     );
                     ui.painter().rect_filled(
-                        badge.rect,
+                        badge_rect,
                         Rounding::same(theme.rounding() * 0.2),
                         strip.color,
                     );
@@ -531,17 +531,17 @@ fn strip_rack(
                     toggle.on_hover_text("Toggle send");
 
                     let tag = if slot.pre { "PRE" } else { "POST" };
-                    let tag_rect = ui.allocate_exact_size(
+                    let (tag_rect, _tag_response) = ui.allocate_exact_size(
                         Vec2::new(34.0 * sizes.zoom, sizes.rack_row_height),
                         Sense::hover(),
                     );
                     ui.painter().rect_filled(
-                        tag_rect.rect,
+                        tag_rect,
                         Rounding::same(theme.rounding() * 0.2),
                         Color32::from_rgba_unmultiplied(0, 0, 0, 180),
                     );
                     ui.painter().text(
-                        tag_rect.rect.center(),
+                        tag_rect.center(),
                         Align2::CENTER_CENTER,
                         tag,
                         egui::FontId::proportional(10.0 * sizes.zoom),
