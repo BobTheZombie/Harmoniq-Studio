@@ -318,7 +318,7 @@ fn inserts_panel(
                         if handle.drag_started() {
                             ui.ctx().data_mut(|data| data.insert_temp(drag_id, index));
                         }
-                        if handle.drag_released() {
+                        if handle.drag_stopped() {
                             if let Some(from) =
                                 ui.ctx().data(|data| data.get_temp::<usize>(drag_id))
                             {

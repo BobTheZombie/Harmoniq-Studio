@@ -1,7 +1,7 @@
 use crate::convert::steps_to_midi;
 use crate::state::{Channel, ChannelId, ChannelKind, PatternId, RackState, Step};
 use crate::{RackCallbacks, RackProps};
-use egui::{self, Align2, Id, PopupCloseBehavior, RichText};
+use egui::{self, Align2, Id, RichText};
 
 pub fn render(ui: &mut egui::Ui, mut props: RackProps) {
     let RackProps { state, callbacks } = &mut props;
@@ -215,7 +215,6 @@ fn step_grid(ui: &mut egui::Ui, pat: PatternId, ch: &mut Channel) {
                 ui,
                 resp.id,
                 &resp,
-                PopupCloseBehavior::CloseOnClickOutside,
                 |ui: &mut egui::Ui| {
                     ui.set_min_width(160.0);
                     ui.label("Step params");
