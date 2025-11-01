@@ -149,25 +149,25 @@ struct CompactStripStyle {
 impl CompactStripStyle {
     fn new(palette: &HarmoniqPalette) -> Self {
         Self {
-            strip_width: 116.0,
-            inner_margin: Margin::symmetric(6.0, 8.0),
-            item_spacing: Vec2::new(3.0, 5.0),
-            section_spacing: 4.0,
-            rounding: 9.0,
-            meter_size: Vec2::new(14.0, 140.0),
-            meter_rounding: 5.0,
+            strip_width: 112.0,
+            inner_margin: Margin::symmetric(5.0, 6.0),
+            item_spacing: Vec2::new(3.0, 4.0),
+            section_spacing: 2.0,
+            rounding: 7.0,
+            meter_size: Vec2::new(14.0, 122.0),
+            meter_rounding: 4.0,
             meter_border: Color32::from_rgb(54, 74, 82),
-            history_height: 44.0,
-            history_rounding: 6.0,
+            history_height: 36.0,
+            history_rounding: 5.0,
             history_fill: Color32::from_rgba_unmultiplied(28, 48, 58, 90),
             history_line: Color32::from_rgb(90, 208, 220),
             history_glow: Color32::from_rgba_unmultiplied(90, 208, 220, 60),
             history_grid: Color32::from_rgb(38, 52, 60),
-            fader_height: 140.0,
+            fader_height: 126.0,
             fader_width: 20.0,
-            knob_diameter: 34.0,
-            send_knob_diameter: 28.0,
-            toggle_width: 26.0,
+            knob_diameter: 30.0,
+            send_knob_diameter: 24.0,
+            toggle_width: 24.0,
             base_fill: Color32::from_rgb(20, 26, 32),
             border: Stroke::new(1.0, Color32::from_rgb(46, 58, 66)),
             selected_border: Stroke::new(1.4, Color32::from_rgb(82, 214, 226)),
@@ -325,6 +325,9 @@ impl MixerView {
 
     fn render(&mut self, ui: &mut Ui, palette: &HarmoniqPalette, callbacks: &mut MixerCallbacks) {
         ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            ui.spacing_mut().button_padding = egui::vec2(6.0, 4.0);
+
             self.render_header(ui, palette);
             ui.separator();
             ui.horizontal(|ui| {
@@ -339,7 +342,7 @@ impl MixerView {
                     );
                 });
             });
-            ui.add_space(8.0);
+            ui.add_space(4.0);
             self.render_strips(ui, palette, callbacks);
         });
 
@@ -350,10 +353,10 @@ impl MixerView {
 
     fn render_header(&mut self, ui: &mut Ui, palette: &HarmoniqPalette) {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Mixer").heading());
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 2.0);
+            ui.label(RichText::new("Mixer").strong());
             if let Some(selected_id) = self.state.selected {
                 if let Some(channel) = self.state.channels.iter().find(|ch| ch.id == selected_id) {
-                    ui.add_space(12.0);
                     ui.label(
                         RichText::new(format!("Selected: {}", channel.name))
                             .strong()
@@ -362,7 +365,6 @@ impl MixerView {
                 }
             }
 
-            ui.add_space(12.0);
             let button_label = if self.graphs_visible {
                 "Hide Graphs"
             } else {
@@ -374,20 +376,19 @@ impl MixerView {
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 self.render_skin_controls(ui);
-                ui.add_space(16.0);
                 self.render_master_meter_summary(ui, palette);
-                ui.add_space(16.0);
                 self.render_cpu_summary(ui);
             });
         });
         if self.graphs_visible {
-            ui.add_space(10.0);
+            ui.add_space(6.0);
             self.render_rt_graphs(ui, palette);
         }
     }
 
     fn render_skin_controls(&mut self, ui: &mut Ui) {
         ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
             ui.label(RichText::new("Skin").small());
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
@@ -404,10 +405,12 @@ impl MixerView {
 
     fn render_cpu_summary(&self, ui: &mut Ui) {
         ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
             ui.label(RichText::new("Engine Load").small());
             let pct = self.master_cpu.clamp(0.0, 100.0);
             let bar = egui::ProgressBar::new((pct / 100.0).clamp(0.0, 1.0))
-                .desired_width(160.0)
+                .desired_width(140.0)
+                .desired_height(12.0)
                 .text(format!("{pct:.1}%"));
             ui.add(bar);
         });
@@ -425,8 +428,10 @@ impl MixerView {
         };
 
         ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
             ui.label(RichText::new("Master Peak").small());
             ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
                 ui.label(format!("L {left:>6.1} dB"));
                 ui.label(format!("R {right:>6.1} dB"));
                 ui.colored_label(clip_color, RichText::new("●"));
@@ -438,20 +443,20 @@ impl MixerView {
         Frame::none()
             .fill(palette.panel_alt)
             .stroke(Stroke::new(1.0, palette.mixer_strip_border))
-            .rounding(Rounding::same(10.0))
-            .inner_margin(Margin::symmetric(14.0, 10.0))
+            .rounding(Rounding::same(8.0))
+            .inner_margin(Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
-                ui.set_height(150.0);
+                ui.set_height(110.0);
+                ui.spacing_mut().item_spacing = egui::vec2(12.0, 4.0);
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
                         ui.label(RichText::new("CPU History").small());
-                        ui.add_space(6.0);
                         self.render_cpu_history_plot(ui);
                     });
-                    ui.add_space(18.0);
                     ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
                         ui.label(RichText::new("Master Meter (dB)").small());
-                        ui.add_space(6.0);
                         self.render_meter_history_plot(ui);
                     });
                 });
@@ -552,6 +557,7 @@ impl MixerView {
         ScrollArea::horizontal()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
                 ui.horizontal_top(|ui| {
                     for idx in 0..channel_len {
                         if let Some(ch) = self.state.channels.get_mut(idx) {
@@ -575,7 +581,6 @@ impl MixerView {
                                 ),
                             };
                             interactions.push(interaction);
-                            ui.add_space(10.0);
                         }
                     }
                 });
