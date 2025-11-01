@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 pub type ChannelId = u32;
@@ -60,7 +60,18 @@ pub struct Channel {
     pub inserts: Vec<InsertSlot>,
     pub sends: Vec<SendSlot>,
     pub meter: Meter,
+    pub meter_history: VecDeque<f32>,
     pub is_master: bool,
+}
+
+impl Channel {
+    pub const METER_HISTORY_CAPACITY: usize = 64;
+
+    pub fn new_meter_history() -> VecDeque<f32> {
+        let mut history = VecDeque::with_capacity(Self::METER_HISTORY_CAPACITY);
+        history.resize(Self::METER_HISTORY_CAPACITY, 0.0);
+        history
+    }
 }
 
 pub struct MixerState {
@@ -143,6 +154,7 @@ impl MixerState {
                     SendSlot { id: 1, level: 0.0 },
                 ],
                 meter: Meter::default(),
+                meter_history: Channel::new_meter_history(),
                 is_master: false,
             });
         }
@@ -156,6 +168,7 @@ impl MixerState {
             inserts: Vec::new(),
             sends: vec![],
             meter: Meter::default(),
+            meter_history: Channel::new_meter_history(),
             is_master: true,
         });
         s
@@ -191,6 +204,12 @@ impl MixerState {
             c.meter.clip_l |= clip_l;
             c.meter.clip_r |= clip_r;
             c.meter.last_update = Instant::now();
+
+            let rms_sample = ((c.meter.rms_l + c.meter.rms_r) * 0.5).clamp(0.0, 1.2);
+            if c.meter_history.len() >= Channel::METER_HISTORY_CAPACITY {
+                c.meter_history.pop_front();
+            }
+            c.meter_history.push_back(rms_sample.min(1.0));
         }
     }
 

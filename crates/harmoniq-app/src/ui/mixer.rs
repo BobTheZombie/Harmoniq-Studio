@@ -116,6 +116,12 @@ struct CompactStripStyle {
     meter_size: Vec2,
     meter_rounding: f32,
     meter_border: Color32,
+    history_height: f32,
+    history_rounding: f32,
+    history_fill: Color32,
+    history_line: Color32,
+    history_glow: Color32,
+    history_grid: Color32,
     fader_height: f32,
     fader_width: f32,
     knob_diameter: f32,
@@ -143,33 +149,39 @@ struct CompactStripStyle {
 impl CompactStripStyle {
     fn new(palette: &HarmoniqPalette) -> Self {
         Self {
-            strip_width: 148.0,
-            inner_margin: Margin::symmetric(10.0, 8.0),
-            item_spacing: Vec2::new(6.0, 6.0),
-            section_spacing: 8.0,
-            rounding: 8.0,
-            meter_size: Vec2::new(20.0, 168.0),
-            meter_rounding: 6.0,
+            strip_width: 136.0,
+            inner_margin: Margin::symmetric(8.0, 10.0),
+            item_spacing: Vec2::new(4.0, 6.0),
+            section_spacing: 6.0,
+            rounding: 9.0,
+            meter_size: Vec2::new(16.0, 146.0),
+            meter_rounding: 5.0,
             meter_border: Color32::from_rgb(54, 74, 82),
-            fader_height: 168.0,
-            fader_width: 26.0,
-            knob_diameter: 42.0,
-            send_knob_diameter: 34.0,
-            toggle_width: 32.0,
-            base_fill: Color32::from_rgb(24, 30, 36),
+            history_height: 46.0,
+            history_rounding: 6.0,
+            history_fill: Color32::from_rgba_unmultiplied(28, 48, 58, 90),
+            history_line: Color32::from_rgb(90, 208, 220),
+            history_glow: Color32::from_rgba_unmultiplied(90, 208, 220, 60),
+            history_grid: Color32::from_rgb(38, 52, 60),
+            fader_height: 146.0,
+            fader_width: 22.0,
+            knob_diameter: 38.0,
+            send_knob_diameter: 32.0,
+            toggle_width: 30.0,
+            base_fill: Color32::from_rgb(20, 26, 32),
             border: Stroke::new(1.0, Color32::from_rgb(46, 58, 66)),
-            selected_border: Stroke::new(1.5, Color32::from_rgb(82, 214, 226)),
-            solo_fill: Color32::from_rgb(30, 52, 56),
-            mute_fill: Color32::from_rgb(36, 28, 40),
-            header_fill: Color32::from_rgb(32, 40, 46),
-            header_text: Color32::from_rgb(194, 222, 230),
+            selected_border: Stroke::new(1.4, Color32::from_rgb(82, 214, 226)),
+            solo_fill: Color32::from_rgb(28, 48, 54),
+            mute_fill: Color32::from_rgb(34, 26, 38),
+            header_fill: Color32::from_rgb(30, 38, 46),
+            header_text: Color32::from_rgb(204, 228, 234),
             label_primary: Color32::from_rgb(198, 226, 232),
-            label_secondary: Color32::from_rgb(128, 160, 168),
-            meter_bg: Color32::from_rgb(18, 26, 32),
-            meter_peak: Color32::from_rgb(54, 214, 226),
-            meter_rms: Color32::from_rgb(30, 150, 170),
-            meter_hold: Color32::from_rgb(220, 242, 250),
-            meter_tick: Color32::from_rgb(66, 88, 96),
+            label_secondary: Color32::from_rgb(126, 158, 168),
+            meter_bg: Color32::from_rgb(14, 22, 28),
+            meter_peak: Color32::from_rgb(64, 208, 220),
+            meter_rms: Color32::from_rgb(28, 150, 170),
+            meter_hold: Color32::from_rgb(210, 240, 246),
+            meter_tick: Color32::from_rgb(56, 78, 88),
             clip_on: Color32::from_rgb(248, 96, 96),
             clip_off: Color32::from_rgb(70, 78, 84),
             slot_colors: SlotSkin::compact(palette),
@@ -778,8 +790,12 @@ impl MixerView {
 
             ui.add_space(style.section_spacing);
 
+            Self::render_compact_history(ui, ch, style);
+
+            ui.add_space(style.section_spacing);
+
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(10.0, 0.0);
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
                 let meter_resp = Self::render_compact_meter(ui, ch, style);
                 if meter_resp.double_clicked() {
                     let all = ui.input(|i| i.modifiers.shift);
@@ -906,6 +922,78 @@ impl MixerView {
                     );
                 });
             });
+    }
+
+    fn render_compact_history(ui: &mut egui::Ui, ch: &Channel, style: &CompactStripStyle) {
+        let width = ui.available_width();
+        let width = if width.is_finite() {
+            width
+        } else {
+            style.strip_width
+        };
+        let size = egui::vec2(width, style.history_height);
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        let painter = ui.painter_at(rect);
+
+        painter.rect_filled(rect, style.history_rounding, style.history_fill);
+        painter.rect_stroke(
+            rect,
+            style.history_rounding,
+            Stroke::new(1.0, style.meter_border),
+        );
+
+        for db in [-24.0_f32, -12.0, -6.0, 0.0] {
+            let level = db_to_gain(db).clamp(0.0, 1.0);
+            let y = rect.bottom() - rect.height() * level;
+            painter.line_segment(
+                [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                Stroke::new(1.0, style.history_grid),
+            );
+        }
+
+        let values: Vec<f32> = ch.meter_history.iter().copied().collect();
+        if values.len() > 1 {
+            let step = if values.len() > 1 {
+                rect.width() / (values.len() as f32 - 1.0)
+            } else {
+                rect.width()
+            };
+
+            let mut points = Vec::with_capacity(values.len());
+            for (idx, value) in values.iter().enumerate() {
+                let x = rect.left() + step * idx as f32;
+                let y = rect.bottom() - rect.height() * value.clamp(0.0, 1.0);
+                points.push(egui::pos2(x, y));
+            }
+
+            if points.len() >= 3 {
+                let mut area = points.clone();
+                area.push(egui::pos2(rect.right(), rect.bottom()));
+                area.push(egui::pos2(rect.left(), rect.bottom()));
+                painter.add(egui::Shape::convex_polygon(
+                    area,
+                    style.history_glow,
+                    Stroke::NONE,
+                ));
+            }
+
+            painter.add(egui::Shape::line(
+                points.clone(),
+                Stroke::new(1.5, style.history_line),
+            ));
+
+            if let Some(last) = points.last() {
+                painter.circle_filled(*last, 3.0, style.history_line);
+            }
+        }
+
+        painter.text(
+            rect.left_top() + egui::vec2(8.0, 6.0),
+            Align2::LEFT_TOP,
+            "RMS",
+            FontId::proportional(10.0),
+            style.label_secondary,
+        );
     }
 
     fn render_compact_meter(
@@ -1313,11 +1401,16 @@ impl MixerView {
         let total = self.api.strips_len();
         let mut snapshots = HashMap::with_capacity(total);
         let previous_selection = self.state.selected;
-        let mut previous_meters: HashMap<ChannelId, Meter> = self
+        let mut previous_meters: HashMap<ChannelId, (Meter, VecDeque<f32>)> = self
             .state
             .channels
             .iter()
-            .map(|channel| (channel.id, channel.meter.clone()))
+            .map(|channel| {
+                (
+                    channel.id,
+                    (channel.meter.clone(), channel.meter_history.clone()),
+                )
+            })
             .collect();
         self.state.channels.clear();
 
@@ -1344,7 +1437,7 @@ impl MixerView {
         &mut self,
         idx: usize,
         info: &UiStripInfo,
-        previous_meter: Option<Meter>,
+        previous_state: Option<(Meter, VecDeque<f32>)>,
     ) -> StripSnapshot {
         let mut channel = Channel {
             id: info.id,
@@ -1356,6 +1449,10 @@ impl MixerView {
             inserts: Vec::with_capacity(info.insert_count),
             sends: Vec::with_capacity(info.send_count),
             meter: Meter::default(),
+            meter_history: previous_state
+                .as_ref()
+                .map(|(_, history)| history.clone())
+                .unwrap_or_else(Channel::new_meter_history),
             is_master: info.is_master,
         };
 
@@ -1381,7 +1478,7 @@ impl MixerView {
             send_levels_db.push(level_db);
         }
 
-        let mut meter = previous_meter.unwrap_or_default();
+        let mut meter = previous_state.map(|(meter, _)| meter).unwrap_or_default();
         #[cfg(feature = "mixer_api")]
         let use_engine_meters = self.engine.is_some();
         #[cfg(not(feature = "mixer_api"))]
