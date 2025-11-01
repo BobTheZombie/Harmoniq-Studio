@@ -241,6 +241,7 @@ pub struct MixerView {
     history_capacity: usize,
     last_history_update: Instant,
     skin: MixerSkin,
+    graphs_visible: bool,
     #[cfg(feature = "mixer_api")]
     engine: Option<MixerEngineBridge>,
 }
@@ -258,6 +259,7 @@ impl MixerView {
             history_capacity: 240,
             last_history_update: Instant::now(),
             skin: MixerSkin::Compact,
+            graphs_visible: false,
             engine,
         }
     }
@@ -274,6 +276,7 @@ impl MixerView {
             history_capacity: 240,
             last_history_update: Instant::now(),
             skin: MixerSkin::Compact,
+            graphs_visible: false,
         }
     }
 
@@ -347,6 +350,16 @@ impl MixerView {
                 }
             }
 
+            ui.add_space(12.0);
+            let button_label = if self.graphs_visible {
+                "Hide Graphs"
+            } else {
+                "Show Graphs"
+            };
+            if ui.button(button_label).clicked() {
+                self.graphs_visible = !self.graphs_visible;
+            }
+
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 self.render_skin_controls(ui);
                 ui.add_space(16.0);
@@ -355,8 +368,10 @@ impl MixerView {
                 self.render_cpu_summary(ui);
             });
         });
-        ui.add_space(10.0);
-        self.render_rt_graphs(ui, palette);
+        if self.graphs_visible {
+            ui.add_space(10.0);
+            self.render_rt_graphs(ui, palette);
+        }
     }
 
     fn render_skin_controls(&mut self, ui: &mut Ui) {
