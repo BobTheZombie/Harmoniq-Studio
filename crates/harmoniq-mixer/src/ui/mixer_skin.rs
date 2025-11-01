@@ -66,13 +66,19 @@ pub struct ThemeColors {
     pub strip_bg: Color32,
     pub strip_bg_alt: Color32,
     pub master_strip_bg: Color32,
-    pub meter_bar: Color32,
+    pub meter_background: Color32,
+    pub meter_low: Color32,
+    pub meter_mid: Color32,
+    pub meter_high: Color32,
+    pub meter_peak: Color32,
     pub meter_clip: Color32,
+    pub meter_grid: Color32,
     pub text_primary: Color32,
     pub text_dim: Color32,
     pub button_on: Color32,
     pub button_off: Color32,
     pub rack_header: Color32,
+    pub strip_header: Color32,
 }
 
 #[derive(Clone, Debug)]
@@ -112,36 +118,42 @@ impl Default for MixerTheme {
     fn default() -> Self {
         Self {
             colors: ThemeColors {
-                background: Color32::from_rgb(0x12, 0x16, 0x1A),
-                panel: Color32::from_rgb(0x1C, 0x22, 0x28),
-                strip_bg: Color32::from_rgb(0x22, 0x2A, 0x33),
-                strip_bg_alt: Color32::from_rgb(0x29, 0x32, 0x3B),
-                master_strip_bg: Color32::from_rgb(0x27, 0x39, 0x46),
-                meter_bar: Color32::from_rgb(0x00, 0xEB, 0xD4),
-                meter_clip: Color32::from_rgb(0xFF, 0x6B, 0x6B),
-                text_primary: Color32::from_gray(240),
-                text_dim: Color32::from_rgb(0xBF, 0xD0, 0xDF),
-                button_on: Color32::from_rgb(0x46, 0xC8, 0xFF),
-                button_off: Color32::from_rgb(0x46, 0x50, 0x5A),
-                rack_header: Color32::from_rgb(0xB4, 0xC7, 0xD4),
+                background: Color32::from_rgb(0x10, 0x13, 0x18),
+                panel: Color32::from_rgb(0x18, 0x1D, 0x25),
+                strip_bg: Color32::from_rgb(0x20, 0x26, 0x31),
+                strip_bg_alt: Color32::from_rgb(0x24, 0x2B, 0x37),
+                master_strip_bg: Color32::from_rgb(0x22, 0x32, 0x3F),
+                meter_background: Color32::from_rgb(0x0E, 0x11, 0x17),
+                meter_low: Color32::from_rgb(0x1B, 0xE7, 0xFF),
+                meter_mid: Color32::from_rgb(0x23, 0xCB, 0xFF),
+                meter_high: Color32::from_rgb(0x2E, 0xAC, 0xFF),
+                meter_peak: Color32::from_rgb(0xFF, 0xB0, 0x3B),
+                meter_clip: Color32::from_rgb(0xFF, 0x54, 0x54),
+                meter_grid: Color32::from_rgb(0x2C, 0x34, 0x41),
+                text_primary: Color32::from_rgb(0xE6, 0xF0, 0xF8),
+                text_dim: Color32::from_rgb(0x97, 0xA7, 0xBA),
+                button_on: Color32::from_rgb(0x2E, 0x92, 0xFF),
+                button_off: Color32::from_rgb(0x28, 0x2D, 0x36),
+                rack_header: Color32::from_rgb(0x8A, 0x99, 0xAD),
+                strip_header: Color32::from_rgb(0x1B, 0x20, 0x29),
             },
             sizes: ThemeSizes {
-                strip_width_narrow: 74.0,
-                strip_width_wide: 110.0,
-                fader_height: 220.0,
-                fader_width: 28.0,
-                meter_width: 12.0,
+                strip_width_narrow: 68.0,
+                strip_width_wide: 112.0,
+                fader_height: 248.0,
+                fader_width: 30.0,
+                meter_width: 18.0,
                 knob_diameter: 34.0,
-                spacing: 4.0,
-                inner_spacing: 6.0,
+                spacing: 5.0,
+                inner_spacing: 7.0,
                 rack_row_height: 20.0,
                 rack_section_title: 14.0,
-                button_height: 18.0,
-                strip_inner_margin: 8.0,
+                button_height: 20.0,
+                strip_inner_margin: 9.0,
             },
             zoom: 1.0,
-            rounding: 8.0,
-            chrome_stroke: Stroke::new(1.0, Color32::from_rgba_unmultiplied(0, 0, 0, 255)),
+            rounding: 6.0,
+            chrome_stroke: Stroke::new(1.0, Color32::from_rgba_unmultiplied(0, 0, 0, 200)),
         }
     }
 }
@@ -183,60 +195,91 @@ impl MixerTheme {
 
     /// Paint meter bar for a single channel inside the given rect.
     pub fn paint_meter(&self, painter: &egui::Painter, rect: Rect, value: f32, left: bool) {
-        let clamped = value.clamp(0.0, 1.0);
-        let half_width = rect.width() * 0.5 - 1.0;
-        let x_min = if left {
-            rect.left() + 1.0
-        } else {
-            rect.center().x + 1.0
-        };
-        let x_max = x_min + half_width;
-        let y_min = rect.bottom() - clamped * rect.height();
-        let bar_rect = Rect::from_min_max(
-            Pos2::new(x_min, y_min),
-            Pos2::new(x_max, rect.bottom() - 1.0),
-        );
-        painter.rect_filled(
-            bar_rect,
-            Rounding::same(self.rounding() * 0.15),
-            self.colors.meter_bar,
-        );
+        let level = value.clamp(0.0, 1.0);
+        let lane = self.meter_lane(rect, left);
+        let height = lane.height();
+        let bottom = lane.bottom();
+        let segments = [
+            (0.0, 0.6, self.colors.meter_low),
+            (0.6, 0.82, self.colors.meter_mid),
+            (0.82, 0.96, self.colors.meter_high),
+            (0.96, 1.0, self.colors.meter_peak),
+        ];
+
+        for &(start, end, color) in &segments {
+            if level <= start {
+                continue;
+            }
+            let seg_end = level.min(end);
+            if seg_end <= start {
+                continue;
+            }
+
+            let start_y = bottom - start * height;
+            let end_y = bottom - seg_end * height;
+            if end_y >= start_y {
+                continue;
+            }
+
+            let segment_rect = Rect::from_min_max(
+                Pos2::new(lane.left(), end_y),
+                Pos2::new(lane.right(), start_y),
+            );
+            let rounding = if seg_end >= 0.99 {
+                Rounding::same(self.rounding() * 0.25)
+            } else {
+                Rounding::same(self.rounding() * 0.05)
+            };
+            painter.rect_filled(segment_rect, rounding, color);
+        }
     }
 
     /// Paint peak hold line overlay for a single meter.
     pub fn paint_peak_line(&self, painter: &egui::Painter, rect: Rect, peak: f32, left: bool) {
         let clamped = peak.clamp(0.0, 1.0);
-        let half_width = rect.width() * 0.5 - 1.0;
-        let x_min = if left {
-            rect.left() + 1.0
-        } else {
-            rect.center().x + 1.0
-        };
-        let y = rect.bottom() - clamped * rect.height();
+        let lane = self.meter_lane(rect, left);
+        let y = lane.bottom() - clamped * lane.height();
         painter.line_segment(
-            [Pos2::new(x_min, y), Pos2::new(x_min + half_width, y)],
+            [Pos2::new(lane.left(), y), Pos2::new(lane.right(), y)],
             Stroke::new(1.0, self.colors.text_dim),
         );
     }
 
     /// Paint a clip LED at the top of the meter pair.
     pub fn paint_clip_led(&self, painter: &egui::Painter, rect: Rect, clip: bool) {
-        let led_size = (rect.width() * 0.5).clamp(6.0, 9.0);
-        let led_rect = Rect::from_center_size(
-            Pos2::new(rect.center().x, rect.top() + led_size * 0.75),
-            Vec2::splat(led_size),
-        );
-        let color = if clip {
-            self.colors.meter_clip
+        let led_height = (rect.height() * 0.08).clamp(6.0, 10.0);
+        for left in [true, false] {
+            let lane = self.meter_lane(rect, left);
+            let led_rect = Rect::from_center_size(
+                Pos2::new(lane.center().x, rect.top() + led_height * 0.6),
+                Vec2::new(lane.width() * 0.9, led_height),
+            );
+            let color = if clip {
+                self.colors.meter_clip
+            } else {
+                Color32::from_rgba_unmultiplied(0, 0, 0, 150)
+            };
+            painter.rect_filled(led_rect, Rounding::same(led_height * 0.35), color);
+            painter.rect_stroke(
+                led_rect,
+                Rounding::same(led_height * 0.35),
+                Stroke::new(1.0, self.colors.meter_grid),
+            );
+        }
+    }
+
+    fn meter_lane(&self, rect: Rect, left: bool) -> Rect {
+        let gutter = 3.0 * self.zoom();
+        let lane_width = rect.width() * 0.5 - gutter * 1.5;
+        let lane_left = if left {
+            rect.left() + gutter
         } else {
-            Color32::from_rgba_unmultiplied(0, 0, 0, 180)
+            rect.center().x + gutter * 0.5
         };
-        painter.rect_filled(led_rect, Rounding::same(led_size * 0.4), color);
-        painter.rect_stroke(
-            led_rect,
-            Rounding::same(led_size * 0.4),
-            Stroke::new(1.0, self.chrome_stroke.color),
-        );
+        Rect::from_min_max(
+            Pos2::new(lane_left, rect.top() + gutter),
+            Pos2::new(lane_left + lane_width, rect.bottom() - gutter),
+        )
     }
 }
 
@@ -410,22 +453,30 @@ fn strip_widget(
             ui.set_width(width);
             ui.spacing_mut().item_spacing = Vec2::new(sizes.spacing, sizes.spacing);
 
-            let header_response = ui
-                .horizontal(|ui| {
+            let header_response = Frame::none()
+                .fill(theme.colors.strip_header)
+                .rounding(Rounding::same(theme.rounding() * 0.6))
+                .inner_margin(Margin::symmetric(sizes.spacing * 0.6, sizes.spacing * 0.4))
+                .show(ui, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(sizes.spacing * 0.6, 0.0);
                     let (badge_rect, _badge_response) = ui.allocate_exact_size(
-                        Vec2::new(8.0 * sizes.zoom, sizes.button_height * 0.8),
+                        Vec2::new(10.0 * sizes.zoom, sizes.button_height * 0.9),
                         Sense::hover(),
                     );
                     ui.painter().rect_filled(
                         badge_rect,
-                        Rounding::same(theme.rounding() * 0.2),
+                        Rounding::same(theme.rounding() * 0.3),
                         strip.color,
+                    );
+                    ui.painter().rect_stroke(
+                        badge_rect,
+                        Rounding::same(theme.rounding() * 0.3),
+                        Stroke::new(1.0, theme.chrome_stroke.color),
                     );
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(&strip.name)
-                                .size(12.0 * sizes.zoom)
+                                .size(12.5 * sizes.zoom)
                                 .color(theme.colors.text_primary),
                         )
                         .sense(Sense::click()),
@@ -446,6 +497,29 @@ fn strip_widget(
 
             strip_rack(ui, strip, theme, sizes, density);
             fader_strip(ui, strip, theme, sizes, density);
+
+            let footer_height = sizes.button_height * 1.15;
+            let (footer_rect, _) = ui.allocate_exact_size(
+                Vec2::new(width - sizes.spacing * 0.4, footer_height),
+                Sense::hover(),
+            );
+            ui.painter().rect_filled(
+                footer_rect,
+                Rounding::same(theme.rounding() * 0.45),
+                strip.color,
+            );
+            ui.painter().rect_stroke(
+                footer_rect,
+                Rounding::same(theme.rounding() * 0.45),
+                Stroke::new(1.0, theme.chrome_stroke.color),
+            );
+            ui.painter().text(
+                footer_rect.center(),
+                Align2::CENTER_CENTER,
+                &strip.name,
+                egui::FontId::proportional(11.0 * sizes.zoom),
+                theme.colors.text_primary,
+            );
         });
 }
 
@@ -823,14 +897,36 @@ pub fn meter_pair(ui: &mut Ui, l: f32, r: f32, height: f32, theme: &MixerTheme) 
     let painter = ui.painter();
     painter.rect_filled(
         rect,
-        Rounding::same(theme.rounding() * 0.3),
-        Color32::from_rgb(0x18, 0x1F, 0x25),
+        Rounding::same(theme.rounding() * 0.35),
+        theme.colors.meter_background,
     );
     painter.rect_stroke(
         rect,
-        Rounding::same(theme.rounding() * 0.3),
-        theme.chrome_stroke,
+        Rounding::same(theme.rounding() * 0.35),
+        Stroke::new(1.0, theme.colors.meter_grid),
     );
+
+    let divider_x = rect.center().x;
+    painter.line_segment(
+        [
+            Pos2::new(divider_x, rect.top() + 3.0),
+            Pos2::new(divider_x, rect.bottom() - 3.0),
+        ],
+        Stroke::new(1.0, theme.colors.meter_grid.gamma_multiply(0.7)),
+    );
+
+    let gutter = 3.0 * theme.zoom();
+    let usable_height = rect.height() - gutter * 2.0;
+    for tick in [0.25_f32, 0.5, 0.75] {
+        let y = rect.bottom() - gutter - tick * usable_height;
+        painter.line_segment(
+            [
+                Pos2::new(rect.left() + gutter * 0.6, y),
+                Pos2::new(rect.right() - gutter * 0.6, y),
+            ],
+            Stroke::new(0.8, theme.colors.meter_grid.gamma_multiply(0.6)),
+        );
+    }
     theme.paint_meter(painter, rect, l, true);
     theme.paint_meter(painter, rect, r, false);
     response
