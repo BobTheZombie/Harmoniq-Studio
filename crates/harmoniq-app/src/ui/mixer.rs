@@ -63,6 +63,8 @@ impl MixerEngineBridge {
 pub struct MixerView {
     api: Arc<dyn MixerUiApi>,
     state: MixerState,
+    master_cpu: f32,
+    master_meter_db: (f32, f32),
     #[cfg(feature = "mixer_api")]
     engine: Option<MixerEngineBridge>,
 }
@@ -73,6 +75,8 @@ impl MixerView {
         Self {
             api,
             state: MixerState::default(),
+            master_cpu: 0.0,
+            master_meter_db: (f32::NEG_INFINITY, f32::NEG_INFINITY),
             engine,
         }
     }
@@ -82,7 +86,21 @@ impl MixerView {
         Self {
             api,
             state: MixerState::default(),
+            master_cpu: 0.0,
+            master_meter_db: (f32::NEG_INFINITY, f32::NEG_INFINITY),
         }
+    }
+
+    pub fn zoom_in(&mut self) {}
+
+    pub fn zoom_out(&mut self) {}
+
+    pub fn cpu_estimate(&self) -> f32 {
+        self.master_cpu
+    }
+
+    pub fn master_meter(&self) -> (f32, f32) {
+        self.master_meter_db
     }
 
     pub fn ui(&mut self, ui: &mut Ui, palette: &HarmoniqPalette) {
@@ -116,6 +134,8 @@ impl MixerView {
     fn sync_from_api(&mut self) -> HashMap<ChannelId, StripSnapshot> {
         let total = self.api.strips_len();
         let mut snapshots = HashMap::with_capacity(total);
+        self.master_cpu = 0.0;
+        self.master_meter_db = (f32::NEG_INFINITY, f32::NEG_INFINITY);
         let previous_selection = self.state.selected;
         let mut previous_meters: HashMap<ChannelId, (Meter, VecDeque<f32>)> = self
             .state
@@ -199,6 +219,7 @@ impl MixerView {
         let use_engine_meters = self.engine.is_some();
         #[cfg(not(feature = "mixer_api"))]
         let use_engine_meters = false;
+        let mut master_peak_db = None;
         if !use_engine_meters {
             let (peak_l_db, peak_r_db, rms_l_db, rms_r_db, clipped) = self.api.level_fetch(idx);
             meter.peak_l = db_to_linear(peak_l_db);
@@ -210,8 +231,21 @@ impl MixerView {
             meter.clip_l = clipped;
             meter.clip_r = clipped;
             meter.last_update = Instant::now();
+            master_peak_db = Some((peak_l_db, peak_r_db));
+        } else if info.is_master {
+            master_peak_db = Some((
+                gain_to_db(meter.peak_l).clamp(-120.0, 6.0),
+                gain_to_db(meter.peak_r).clamp(-120.0, 6.0),
+            ));
         }
         channel.meter = meter;
+
+        if info.is_master {
+            self.master_cpu = info.cpu_percent;
+            if let Some(peak_db) = master_peak_db {
+                self.master_meter_db = peak_db;
+            }
+        }
 
         self.state.channels.push(channel);
 
