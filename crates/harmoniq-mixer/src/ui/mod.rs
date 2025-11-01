@@ -1,4 +1,5 @@
 pub mod mixer;
+pub mod mixer_skin;
 pub mod widgets;
 
 #[inline(always)]
