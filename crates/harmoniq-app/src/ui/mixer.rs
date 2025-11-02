@@ -150,10 +150,33 @@ impl MixerView {
             .collect();
         self.state.channels.clear();
 
+        let mut has_master = false;
         for idx in 0..total {
             let info = self.api.strip_info(idx);
             let snapshot = self.populate_channel(idx, &info, previous_meters.remove(&info.id));
             snapshots.insert(info.id, snapshot);
+            has_master |= info.is_master;
+        }
+
+        if !has_master {
+            const MASTER_CHANNEL_ID: ChannelId = 10_000;
+            let (meter, history) = previous_meters
+                .remove(&MASTER_CHANNEL_ID)
+                .unwrap_or_else(|| (Meter::default(), Channel::new_meter_history()));
+            let channel = Channel {
+                id: MASTER_CHANNEL_ID,
+                name: "MASTER".to_string(),
+                gain_db: 0.0,
+                pan: 0.0,
+                mute: false,
+                solo: false,
+                inserts: Vec::new(),
+                sends: Vec::new(),
+                meter,
+                meter_history: history,
+                is_master: true,
+            };
+            self.state.channels.push(channel);
         }
 
         if let Some(selected) = previous_selection {
