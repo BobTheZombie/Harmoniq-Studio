@@ -7,6 +7,8 @@ use ringbuf::{Consumer, HeapRb, Producer};
 pub type ChannelId = u32;
 pub type SendId = u8;
 
+pub const MASTER_CHANNEL_ID: ChannelId = 10_000;
+
 #[derive(Debug, Clone)]
 pub enum MixerCommand {
     SetGainPan {

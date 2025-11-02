@@ -20,6 +20,7 @@ pub mod host;
 pub mod ipc;
 pub mod media;
 pub mod mixer;
+mod mixer_rt;
 pub mod nodes;
 #[cfg(feature = "mixer_api")]
 pub mod panlaw;
