@@ -9,10 +9,13 @@ use rayon::prelude::*;
 
 use crate::mixer::api::{MixerUiApi, MixerUiState};
 #[cfg(feature = "mixer_api")]
-use crate::mixer::control::{ChannelId, EngineMixerHandle, MeterEvent, MixerBackend, SendId};
+use crate::mixer::control::{
+    ChannelId, EngineMixerHandle, MeterEvent, MixerBackend, SendId, MASTER_CHANNEL_ID,
+};
+use crate::mixer_rt::{AutoTx, Command, CommandTx, Mixer, MixerConfig, TrackId};
 use crate::{
     automation::{AutomationEvent, AutomationLane, AutomationSender, ParameterSpec},
-    graph::{self, GraphBuilder, GraphHandle},
+    graph::{GraphBuilder, GraphHandle},
     nodes::{GainNode as BuiltinGain, NodeNoise as BuiltinNoise, NodeOsc as BuiltinSine},
     plugin::{MidiEvent, PluginDescriptor, PluginId},
     rt::{AudioMetrics, AudioMetricsCollector},
@@ -24,12 +27,11 @@ use crate::{
 };
 use harmoniq_rt::RtEvent;
 #[cfg(feature = "mixer_api")]
-use log::{debug, warn};
+use log::debug;
+use log::warn;
 
 const COMMAND_QUEUE_CAPACITY: usize = 1024;
 const METRICS_HISTORY_CAPACITY: usize = 512;
-#[cfg(feature = "mixer_api")]
-const MASTER_CHANNEL_ID: ChannelId = 10_000;
 
 /// Transport state shared with UI and sequencing components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,6 +108,16 @@ pub struct HarmoniqEngine {
     metrics: AudioMetricsCollector,
     block_period_ns: u64,
     automation_cursor: u64,
+    mixer_cfg: MixerConfig,
+    mixer: Mixer,
+    mixer_command_tx: Mutex<CommandTx>,
+    mixer_auto_tx: Mutex<AutoTx>,
+    mixer_track_count: usize,
+    mixer_warned_overflow: bool,
+    #[cfg(feature = "mixer_api")]
+    mixer_track_ids: Vec<ChannelId>,
+    #[cfg(feature = "mixer_api")]
+    mixer_channel_to_track: HashMap<ChannelId, TrackId>,
     mixer_ui: Arc<MixerUiState>,
     #[cfg(feature = "mixer_api")]
     mixer_handle: EngineMixerHandle,
@@ -126,6 +138,14 @@ impl HarmoniqEngine {
             .sr
             .store(config.sample_rate.round() as u32, Ordering::Relaxed);
 
+        let mixer_cfg = MixerConfig {
+            max_tracks: 64,
+            max_block: config.block_size.max(1),
+            sample_rate: config.sample_rate,
+            smooth_alpha: 0.2,
+            max_aux_busses: 4,
+        };
+        let (mixer, command_tx, auto_tx) = Mixer::new(mixer_cfg, 4096, 4096);
         let mixer_ui = MixerUiState::demo();
         #[cfg(feature = "mixer_api")]
         let mixer_handle = EngineMixerHandle::new(4096);
@@ -148,6 +168,16 @@ impl HarmoniqEngine {
             metrics,
             block_period_ns,
             automation_cursor: 0,
+            mixer_cfg,
+            mixer,
+            mixer_command_tx: Mutex::new(command_tx),
+            mixer_auto_tx: Mutex::new(auto_tx),
+            mixer_track_count: 0,
+            mixer_warned_overflow: false,
+            #[cfg(feature = "mixer_api")]
+            mixer_track_ids: Vec::new(),
+            #[cfg(feature = "mixer_api")]
+            mixer_channel_to_track: HashMap::new(),
             mixer_ui,
             #[cfg(feature = "mixer_api")]
             mixer_handle,
@@ -277,6 +307,20 @@ impl HarmoniqEngine {
 
         self.scratch_buffers.clear();
 
+        self.mixer_cfg.max_block = self.config.block_size.max(1);
+        self.mixer_cfg.sample_rate = self.config.sample_rate;
+        let (mixer, command_tx, auto_tx) = Mixer::new(self.mixer_cfg, 4096, 4096);
+        self.mixer = mixer;
+        self.mixer_command_tx = Mutex::new(command_tx);
+        self.mixer_auto_tx = Mutex::new(auto_tx);
+        self.mixer_track_count = 0;
+        self.mixer_warned_overflow = false;
+        #[cfg(feature = "mixer_api")]
+        {
+            self.mixer_track_ids.clear();
+            self.mixer_channel_to_track.clear();
+        }
+
         {
             let processors = self.processors.read();
             let mut latencies = self.latencies.write();
@@ -290,6 +334,9 @@ impl HarmoniqEngine {
 
         self.delay_lines.clear();
         self.sound_test = None;
+        if let Some(graph) = self.graph.read().clone() {
+            self.configure_mixer_for_graph(&graph);
+        }
         Ok(())
     }
 
@@ -365,12 +412,104 @@ impl HarmoniqEngine {
         Ok(id)
     }
 
-    pub fn replace_graph(&self, graph: GraphHandle) -> anyhow::Result<()> {
+    pub fn replace_graph(&mut self, graph: GraphHandle) -> anyhow::Result<()> {
         if graph.is_empty() {
             anyhow::bail!("graph must contain at least one node");
         }
+        self.configure_mixer_for_graph(&graph);
         *self.graph.write() = Some(graph);
         Ok(())
+    }
+
+    fn configure_mixer_for_graph(&mut self, graph: &GraphHandle) {
+        let requested = graph.plugin_nodes().len();
+        let max_tracks = self.mixer_cfg.max_tracks;
+        let active = requested.min(max_tracks);
+        if requested > max_tracks {
+            if !self.mixer_warned_overflow {
+                warn!(
+                    "mixer only supports {} tracks; dropping excess (requested {})",
+                    max_tracks, requested
+                );
+                self.mixer_warned_overflow = true;
+            }
+        } else {
+            self.mixer_warned_overflow = false;
+        }
+
+        self.mixer_track_count = active;
+
+        #[cfg(feature = "mixer_api")]
+        {
+            self.mixer_track_ids.clear();
+            self.mixer_channel_to_track.clear();
+            for idx in 0..active {
+                let channel_id = (idx as ChannelId).saturating_add(1);
+                self.mixer_track_ids.push(channel_id);
+                self.mixer_channel_to_track
+                    .insert(channel_id, idx as TrackId);
+            }
+        }
+
+        let mut tx = self.mixer_command_tx.lock();
+        let mut push = |cmd: Command| {
+            if let Err(cmd) = tx.push(cmd) {
+                warn!("dropping mixer command due to full queue: {:?}", cmd);
+            }
+        };
+
+        for track in 0..max_tracks {
+            if track > u16::MAX as usize {
+                break;
+            }
+            let track_id = track as TrackId;
+            let enable = track < active;
+            push(Command::EnableTrack {
+                track: track_id,
+                enable,
+            });
+            if !enable {
+                push(Command::SetMute {
+                    track: track_id,
+                    mute: false,
+                });
+                push(Command::SetSolo {
+                    track: track_id,
+                    solo: false,
+                });
+            }
+        }
+
+        for (idx, node) in graph.plugin_nodes().iter().take(active).enumerate() {
+            if idx > u16::MAX as usize {
+                break;
+            }
+            let track_id = idx as TrackId;
+            let gain = graph.gain_for(*node);
+            let gain_db = if gain <= 0.0 {
+                -90.0
+            } else {
+                20.0 * gain.log10()
+            };
+            push(Command::SetGain {
+                track: track_id,
+                gain_db,
+            });
+            push(Command::SetPan {
+                track: track_id,
+                pan: 0.0,
+            });
+            push(Command::SetMute {
+                track: track_id,
+                mute: false,
+            });
+            push(Command::SetSolo {
+                track: track_id,
+                solo: false,
+            });
+        }
+
+        push(Command::SetMasterGain { gain_db: 0.0 });
     }
 
     pub fn execute_command(&mut self, command: EngineCommand) -> anyhow::Result<()> {
@@ -427,7 +566,11 @@ impl HarmoniqEngine {
             };
             #[cfg(feature = "mixer_api")]
             {
-                let mut adapter = MixerUiBridge::new(Arc::clone(&self.mixer_ui));
+                let mut adapter = MixerUiBridge::new(
+                    Arc::clone(&self.mixer_ui),
+                    &self.mixer_command_tx,
+                    &self.mixer_channel_to_track,
+                );
                 self.mixer_handle.drain_commands_and_apply(&mut adapter);
             }
             let graph = match self.graph.read().clone() {
@@ -507,7 +650,7 @@ impl HarmoniqEngine {
             let result = {
                 let scratch_buffers = &self.scratch_buffers[..scratch_len];
                 let mut master = self.master_buffer.lock();
-                graph::mixdown(&graph, &mut master, scratch_buffers);
+                let active_tracks = self.process_mixer_block(scratch_buffers, &mut master);
                 let _guard = RtAllocGuard::enter();
                 self.tone_shaper.process(&mut master);
 
@@ -518,7 +661,10 @@ impl HarmoniqEngine {
                 }
 
                 #[cfg(feature = "mixer_api")]
-                self.publish_master_meter(&master);
+                {
+                    self.publish_mixer_track_meters(active_tracks);
+                    self.publish_master_meter(&master);
+                }
 
                 visitor(&master, scratch_buffers)
             };
@@ -569,6 +715,84 @@ impl HarmoniqEngine {
         if max_block_us != 0 && max_block_us > self.last_reported_max_block_us {
             bridge.push(RtEvent::MaxBlockMicros { us: max_block_us });
             self.last_reported_max_block_us = max_block_us;
+        }
+    }
+
+    fn process_mixer_block(
+        &mut self,
+        track_buffers: &[AudioBuffer],
+        master: &mut AudioBuffer,
+    ) -> usize {
+        let frames = track_buffers
+            .first()
+            .map(|buffer| buffer.len())
+            .unwrap_or_else(|| {
+                if master.len() != 0 {
+                    master.len()
+                } else {
+                    self.config.block_size
+                }
+            });
+
+        self.mixer.begin_block();
+
+        if frames == 0 {
+            master.clear();
+            self.mixer.end_block();
+            return 0;
+        }
+
+        if master.channel_count() != 2 || master.len() != frames {
+            master.resize(2, frames);
+        }
+
+        let active = track_buffers.len().min(self.mixer_cfg.max_tracks);
+        let mut inputs: Vec<Option<&[f32]>> = Vec::with_capacity(active);
+        for buffer in track_buffers.iter().take(active) {
+            if buffer.channel_count() == 0 || buffer.len() == 0 {
+                inputs.push(None);
+            } else {
+                inputs.push(Some(buffer.channel(0)));
+            }
+        }
+
+        let total_frames = frames.min(self.mixer_cfg.max_block);
+        {
+            let data = master.as_mut_slice();
+            let (left, rest) = data.split_at_mut(total_frames);
+            let (right, _) = rest.split_at_mut(total_frames.min(rest.len()));
+            self.mixer.process(&inputs, left, right, total_frames);
+        }
+
+        self.mixer.end_block();
+        active
+    }
+
+    #[cfg(feature = "mixer_api")]
+    fn publish_mixer_track_meters(&mut self, track_count: usize) {
+        let limit = track_count.min(self.mixer_track_ids.len());
+        for idx in 0..limit {
+            if idx > u16::MAX as usize {
+                break;
+            }
+            let track_id = idx as TrackId;
+            let Some(&channel_id) = self.mixer_track_ids.get(idx) else {
+                continue;
+            };
+            let Some(peak) = self.mixer.track_peak(track_id) else {
+                continue;
+            };
+            let rms = self.mixer.track_rms(track_id).unwrap_or(0.0);
+            let event = MeterEvent {
+                ch: channel_id,
+                peak_l: peak,
+                peak_r: peak,
+                rms_l: rms,
+                rms_r: rms,
+                clip_l: peak >= 1.0,
+                clip_r: peak >= 1.0,
+            };
+            self.mixer_handle.push_meter(event);
         }
     }
 
@@ -701,19 +925,40 @@ impl HarmoniqEngine {
 }
 
 #[cfg(feature = "mixer_api")]
-struct MixerUiBridge {
+struct MixerUiBridge<'a> {
     state: Arc<MixerUiState>,
+    command_tx: &'a Mutex<CommandTx>,
+    channel_to_track: &'a HashMap<ChannelId, TrackId>,
 }
 
 #[cfg(feature = "mixer_api")]
-impl MixerUiBridge {
-    fn new(state: Arc<MixerUiState>) -> Self {
-        Self { state }
+impl<'a> MixerUiBridge<'a> {
+    fn new(
+        state: Arc<MixerUiState>,
+        command_tx: &'a Mutex<CommandTx>,
+        channel_to_track: &'a HashMap<ChannelId, TrackId>,
+    ) -> Self {
+        Self {
+            state,
+            command_tx,
+            channel_to_track,
+        }
     }
 
     fn strip_index(&self, channel: ChannelId) -> Option<usize> {
         let len = self.state.strips_len();
         (0..len).find(|&idx| self.state.strip_info(idx).id == channel)
+    }
+
+    fn track_id(&self, channel: ChannelId) -> Option<TrackId> {
+        self.channel_to_track.get(&channel).copied()
+    }
+
+    fn push_command(&self, command: Command) {
+        let mut tx = self.command_tx.lock();
+        if let Err(cmd) = tx.push(command) {
+            warn!("dropping mixer command due to full queue: {:?}", cmd);
+        }
     }
 
     fn set_fader_and_pan(&self, idx: usize, gain_db: f32, pan: f32) {
@@ -749,12 +994,16 @@ impl MixerUiBridge {
 }
 
 #[cfg(feature = "mixer_api")]
-impl MixerBackend for MixerUiBridge {
+impl<'a> MixerBackend for MixerUiBridge<'a> {
     fn set_gain_pan(&mut self, ch: ChannelId, gain_db: f32, pan: f32) {
         if let Some(idx) = self.strip_index(ch) {
             let (gain_l, gain_r) = crate::panlaw::constant_power_pan_gains(pan);
             debug!(channel = ch, gain_l, gain_r, "constant-power pan gains");
             self.set_fader_and_pan(idx, gain_db, pan);
+        }
+        if let Some(track) = self.track_id(ch) {
+            self.push_command(Command::SetGain { track, gain_db });
+            self.push_command(Command::SetPan { track, pan });
         }
     }
 
@@ -762,11 +1011,17 @@ impl MixerBackend for MixerUiBridge {
         if let Some(idx) = self.strip_index(ch) {
             self.set_mute_state(idx, mute);
         }
+        if let Some(track) = self.track_id(ch) {
+            self.push_command(Command::SetMute { track, mute });
+        }
     }
 
     fn set_solo(&mut self, ch: ChannelId, solo: bool) {
         if let Some(idx) = self.strip_index(ch) {
             self.set_solo_state(idx, solo);
+        }
+        if let Some(track) = self.track_id(ch) {
+            self.push_command(Command::SetSolo { track, solo });
         }
     }
 

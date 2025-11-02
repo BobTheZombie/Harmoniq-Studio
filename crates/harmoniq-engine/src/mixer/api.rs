@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+use super::control::MASTER_CHANNEL_ID;
 use super::levels::MixerLevels;
 
 #[derive(Debug, Clone)]
@@ -108,8 +109,12 @@ impl MixerUiState {
         for idx in 0..track_count {
             let is_master = idx == track_count - 1;
             let mut info = UiStripInfo::default();
-            info.id = id_counter;
-            id_counter += 1;
+            if is_master {
+                info.id = MASTER_CHANNEL_ID;
+            } else {
+                info.id = id_counter;
+                id_counter += 1;
+            }
             info.name = if is_master {
                 "Master".to_string()
             } else {
