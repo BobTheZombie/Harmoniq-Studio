@@ -2,7 +2,11 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
+#[cfg(feature = "mixer_api")]
 use super::control::MASTER_CHANNEL_ID;
+
+#[cfg(not(feature = "mixer_api"))]
+const MASTER_CHANNEL_ID: u32 = 10_000;
 use super::levels::MixerLevels;
 
 #[derive(Debug, Clone)]
