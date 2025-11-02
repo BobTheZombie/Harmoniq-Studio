@@ -1,5 +1,6 @@
 use std::env;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::str::FromStr;
@@ -34,7 +35,7 @@ use harmoniq_plugin_scanner::Scanner as PluginBrowserScanner;
 use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth};
 use harmoniq_ui::{
     perf_hud::{self, PerfHudState, PerfMetrics},
-    startup_banner, HarmoniqPalette, HarmoniqTheme,
+    startup_banner, HarmoniqPalette, HarmoniqTheme, MixerSkin, MixerSkinLoadError,
 };
 use hound::{SampleFormat, WavSpec, WavWriter};
 use parking_lot::Mutex;
@@ -1476,7 +1477,24 @@ impl HarmoniqStudioApp {
         qwerty_config: QwertyConfig,
         cc: &CreationContext<'_>,
     ) -> anyhow::Result<Self> {
-        let theme = HarmoniqTheme::init(&cc.egui_ctx);
+        let mut theme = HarmoniqTheme::init(&cc.egui_ctx);
+        let skin_path = PathBuf::from("config/mixer_skin.json");
+        match MixerSkin::load_from_path(&skin_path) {
+            Ok(skin) => {
+                if !skin.is_empty() {
+                    theme.apply_mixer_skin(&skin);
+                }
+            }
+            Err(err) => {
+                let is_missing = err
+                    .io_error()
+                    .map(|io| io.kind() == ErrorKind::NotFound)
+                    .unwrap_or(false);
+                if !is_missing {
+                    warn!("failed to load mixer skin from {skin_path:?}: {err}");
+                }
+            }
+        }
         let dock_style = Self::create_dock_style(cc.egui_ctx.style().as_ref(), theme.palette());
         let icons = AppIcons::load(&cc.egui_ctx)?;
 
