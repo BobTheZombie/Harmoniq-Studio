@@ -649,19 +649,25 @@ impl HarmoniqEngine {
             }
 
             let result = {
-                let mut master = self.master_buffer.lock();
+                let scratch_buffers = &self.scratch_buffers[..scratch_len];
+                let master = self.master_buffer.get_mut();
 
                 #[allow(unused_variables)]
                 let active_tracks = {
-                    let scratch_buffers = &self.scratch_buffers[..scratch_len];
-                    self.process_mixer_block(scratch_buffers, &mut master)
+                    Self::process_mixer_block(
+                        &mut self.mixer,
+                        self.mixer_cfg,
+                        self.config.block_size,
+                        scratch_buffers,
+                        master,
+                    )
                 };
 
                 let _guard = RtAllocGuard::enter();
-                self.tone_shaper.process(&mut master);
+                self.tone_shaper.process(master);
 
                 if let Some(player) = self.sound_test.as_mut() {
-                    if player.mix_into(&mut master) {
+                    if player.mix_into(master) {
                         self.sound_test = None;
                     }
                 }
@@ -669,11 +675,10 @@ impl HarmoniqEngine {
                 #[cfg(feature = "mixer_api")]
                 {
                     self.publish_mixer_track_meters(active_tracks);
-                    self.publish_master_meter(&master);
+                    self.publish_master_meter(master);
                 }
 
-                let scratch_buffers = &self.scratch_buffers[..scratch_len];
-                visitor(&master, scratch_buffers)
+                visitor(master, scratch_buffers)
             };
 
             Ok(result)
@@ -726,7 +731,9 @@ impl HarmoniqEngine {
     }
 
     fn process_mixer_block(
-        &mut self,
+        mixer: &mut Mixer,
+        mixer_cfg: MixerConfig,
+        block_size: usize,
         track_buffers: &[AudioBuffer],
         master: &mut AudioBuffer,
     ) -> usize {
@@ -737,15 +744,15 @@ impl HarmoniqEngine {
                 if master.len() != 0 {
                     master.len()
                 } else {
-                    self.config.block_size
+                    block_size
                 }
             });
 
-        self.mixer.begin_block();
+        mixer.begin_block();
 
         if frames == 0 {
             master.clear();
-            self.mixer.end_block();
+            mixer.end_block();
             return 0;
         }
 
@@ -753,7 +760,7 @@ impl HarmoniqEngine {
             master.resize(2, frames);
         }
 
-        let active = track_buffers.len().min(self.mixer_cfg.max_tracks);
+        let active = track_buffers.len().min(mixer_cfg.max_tracks);
         let mut inputs: Vec<Option<&[f32]>> = Vec::with_capacity(active);
         for buffer in track_buffers.iter().take(active) {
             if buffer.channel_count() == 0 || buffer.len() == 0 {
@@ -763,15 +770,15 @@ impl HarmoniqEngine {
             }
         }
 
-        let total_frames = frames.min(self.mixer_cfg.max_block);
+        let total_frames = frames.min(mixer_cfg.max_block);
         {
             let data = master.as_mut_slice();
             let (left, rest) = data.split_at_mut(total_frames);
             let (right, _) = rest.split_at_mut(total_frames.min(rest.len()));
-            self.mixer.process(&inputs, left, right, total_frames);
+            mixer.process(&inputs, left, right, total_frames);
         }
 
-        self.mixer.end_block();
+        mixer.end_block();
         active
     }
 
