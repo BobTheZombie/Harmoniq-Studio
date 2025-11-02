@@ -334,7 +334,8 @@ impl HarmoniqEngine {
 
         self.delay_lines.clear();
         self.sound_test = None;
-        if let Some(graph) = self.graph.read().clone() {
+        let graph = { self.graph.read().clone() };
+        if let Some(graph) = graph {
             self.configure_mixer_for_graph(&graph);
         }
         Ok(())
@@ -648,9 +649,14 @@ impl HarmoniqEngine {
             }
 
             let result = {
-                let scratch_buffers = &self.scratch_buffers[..scratch_len];
                 let mut master = self.master_buffer.lock();
-                let active_tracks = self.process_mixer_block(scratch_buffers, &mut master);
+
+                #[allow(unused_variables)]
+                let active_tracks = {
+                    let scratch_buffers = &self.scratch_buffers[..scratch_len];
+                    self.process_mixer_block(scratch_buffers, &mut master)
+                };
+
                 let _guard = RtAllocGuard::enter();
                 self.tone_shaper.process(&mut master);
 
@@ -666,6 +672,7 @@ impl HarmoniqEngine {
                     self.publish_master_meter(&master);
                 }
 
+                let scratch_buffers = &self.scratch_buffers[..scratch_len];
                 visitor(&master, scratch_buffers)
             };
 
