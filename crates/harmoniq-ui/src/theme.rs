@@ -1,6 +1,8 @@
 use egui::epaint::Margin;
 use egui::{self, Color32, Context, FontId, Rounding, Stroke, TextStyle};
 
+use crate::mixer_skin::MixerSkin;
+
 #[derive(Clone)]
 pub struct HarmoniqPalette {
     pub background: Color32,
@@ -138,6 +140,12 @@ impl HarmoniqPalette {
             mixer_toggle_text: Color32::from_rgb(232, 232, 240),
         }
     }
+
+    pub fn apply_mixer_skin(&mut self, skin: &MixerSkin) {
+        if !skin.is_empty() {
+            skin.apply(self);
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -190,5 +198,13 @@ impl HarmoniqTheme {
 
     pub fn palette(&self) -> &HarmoniqPalette {
         &self.palette
+    }
+
+    pub fn apply_mixer_skin(&mut self, skin: &MixerSkin) {
+        self.palette.apply_mixer_skin(skin);
+    }
+
+    pub fn palette_mut(&mut self) -> &mut HarmoniqPalette {
+        &mut self.palette
     }
 }
