@@ -159,7 +159,7 @@ fn channel_strip(
                 channel.name = name;
             }
 
-            ui.separator();
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(12.0, 0.0);
                 let meter = &channel.meter;
@@ -200,6 +200,11 @@ fn channel_strip(
             });
 
             ui.add_space(4.0);
+            inserts_panel(ui, channel, callbacks, palette, &metrics);
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
             ui.vertical(|ui| {
                 ui.with_layout(Layout::top_down(Align::Center), |ui| {
                     let pan_response = ui.add(
@@ -233,9 +238,6 @@ fn channel_strip(
                     }
                 });
             });
-
-            ui.separator();
-            inserts_panel(ui, channel, callbacks, palette, &metrics);
 
             if !channel.is_master {
                 ui.separator();
