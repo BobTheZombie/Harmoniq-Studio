@@ -103,6 +103,24 @@ fn piano_roll_toggle_button(
     }
 }
 
+fn sequencer_toggle_button(
+    ui: &mut egui::Ui,
+    palette: &HarmoniqPalette,
+    icons: &AppIcons,
+    commands: &CommandSender,
+    sequencer_visible: bool,
+) {
+    if toolbar_toggle_button(
+        ui,
+        &icons.sequencer,
+        palette,
+        sequencer_visible,
+        "Show/Hide Sequencer (F6)",
+    ) {
+        let _ = commands.try_send(Command::View(ViewCommand::ToggleSequencer));
+    }
+}
+
 #[derive(Default)]
 pub struct TransportBar;
 
@@ -237,6 +255,8 @@ impl TransportBar {
             playlist_toggle_button(ui, palette, icons, commands, snapshot.playlist_visible);
             ui.add_space(6.0);
             piano_roll_toggle_button(ui, palette, icons, commands, snapshot.piano_roll_visible);
+            ui.add_space(6.0);
+            sequencer_toggle_button(ui, palette, icons, commands, snapshot.sequencer_visible);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
@@ -260,4 +280,5 @@ pub struct TransportSnapshot {
     pub mixer_visible: bool,
     pub playlist_visible: bool,
     pub piano_roll_visible: bool,
+    pub sequencer_visible: bool,
 }

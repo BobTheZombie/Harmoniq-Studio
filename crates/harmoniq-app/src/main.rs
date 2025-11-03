@@ -102,6 +102,7 @@ use ui::{
     },
     plugins::library_ui::{LibraryAction, PluginLibraryUi},
     plugins::scanner_ui::ScannerUi,
+    sequencer::SequencerPane,
     shortcuts::ShortcutMap,
     transport::{TransportBar, TransportSnapshot},
     workspace::{build_default_workspace, WorkspacePane},
@@ -434,6 +435,7 @@ pub(crate) struct AppIcons {
     mixer: egui::TextureHandle,
     playlist: egui::TextureHandle,
     piano_roll: egui::TextureHandle,
+    sequencer: egui::TextureHandle,
 }
 
 impl AppIcons {
@@ -518,6 +520,11 @@ impl AppIcons {
                 ctx,
                 "icon_piano_roll",
                 include_bytes!("../../../resources/icons/pianoroll.svg"),
+            )?,
+            sequencer: load_svg(
+                ctx,
+                "icon_sequencer",
+                include_bytes!("../../../resources/icons/sequencer.svg"),
             )?,
         })
     }
@@ -1403,6 +1410,7 @@ struct HarmoniqStudioApp {
     transport_bar: TransportBar,
     browser: BrowserPane,
     channel_rack: ChannelRackPane,
+    sequencer: SequencerPane,
     piano_roll: PianoRollPane,
     mixer: MixerView,
     inspector: InspectorPane,
@@ -1448,10 +1456,12 @@ struct HarmoniqStudioApp {
     status_message: Option<String>,
     notices: Notifications,
     browser_hidden: bool,
+    sequencer_hidden: bool,
     mixer_window_open: bool,
     playlist_window_open: bool,
     playlist_view: PlaylistState,
     playlist_snap: PlaylistSnap,
+    sequencer_window_open: bool,
     piano_roll_hidden: bool,
     piano_roll_window_open: bool,
     piano_roll_widget: PianoRollWidget,
@@ -1556,6 +1566,7 @@ impl HarmoniqStudioApp {
         let browser_width = layout.browser_width();
         let browser = BrowserPane::new(resources_root, browser_visible, browser_width);
         let channel_rack = ChannelRackPane::default();
+        let sequencer = SequencerPane::default();
         let piano_roll = PianoRollPane::default();
         let mut piano_roll_state = PianoRollEditorState::new(PianoRollClip::new(960));
         piano_roll_state.snap = Some(SnapUnit::Grid(4));
@@ -1622,6 +1633,7 @@ impl HarmoniqStudioApp {
             transport_bar,
             browser,
             channel_rack,
+            sequencer,
             piano_roll,
             mixer,
             inspector,
@@ -1667,10 +1679,12 @@ impl HarmoniqStudioApp {
             status_message,
             notices: Notifications::default(),
             browser_hidden: !browser_visible,
+            sequencer_hidden: false,
             mixer_window_open: false,
             playlist_window_open: false,
             playlist_view: PlaylistState::new_default(960),
             playlist_snap: PlaylistSnap::N1_4,
+            sequencer_window_open: false,
             piano_roll_hidden: false,
             piano_roll_window_open: false,
             piano_roll_widget,
@@ -2282,6 +2296,17 @@ impl CommandHandler for HarmoniqStudioApp {
                     self.console
                         .log(LogLevel::Info, format!("Playlist {state}"));
                 }
+                ViewCommand::ToggleSequencer => {
+                    self.sequencer_hidden = !self.sequencer_hidden;
+                    self.sequencer_window_open = !self.sequencer_hidden;
+                    let state = if self.sequencer_window_open {
+                        "shown"
+                    } else {
+                        "hidden"
+                    };
+                    self.console
+                        .log(LogLevel::Info, format!("Sequencer {state}"));
+                }
                 ViewCommand::TogglePianoRoll => {
                     self.piano_roll_hidden = !self.piano_roll_hidden;
                     self.piano_roll_window_open = !self.piano_roll_hidden;
@@ -2494,14 +2519,17 @@ struct WorkspaceTabViewer<'a> {
     event_bus: &'a EventBus,
     browser: &'a mut BrowserPane,
     channel_rack: &'a mut ChannelRackPane,
+    sequencer: &'a mut SequencerPane,
     piano_roll: &'a mut PianoRollPane,
     inspector: &'a mut InspectorPane,
     console: &'a mut ConsolePane,
     input_focus: &'a mut InputFocus,
     browser_hidden: bool,
+    sequencer_hidden: bool,
     piano_roll_hidden: bool,
     transport_state: TransportState,
     transport_clock: TransportClock,
+    time_signature: TimeSignature,
 }
 
 impl<'a> TabViewer for WorkspaceTabViewer<'a> {
@@ -2524,6 +2552,25 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
                 } else {
                     self.browser
                         .ui(ui, self.palette, self.event_bus, self.input_focus);
+                }
+            }
+            WorkspacePane::Sequencer => {
+                if self.sequencer_hidden {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            RichText::new("Sequencer hidden (View → Toggle Sequencer)")
+                                .color(self.palette.text_muted),
+                        );
+                    });
+                } else {
+                    self.sequencer.ui(
+                        ui,
+                        self.palette,
+                        self.time_signature,
+                        self.transport_clock,
+                        self.transport_state,
+                        Some(self.input_focus),
+                    );
                 }
             }
             WorkspacePane::PianoRoll => {
@@ -2616,6 +2663,7 @@ impl App for HarmoniqStudioApp {
                 let snapshot = MenuBarSnapshot {
                     mixer_visible: self.mixer_window_open,
                     playlist_visible: self.playlist_window_open,
+                    sequencer_visible: !self.sequencer_hidden,
                     piano_roll_visible: !self.piano_roll_hidden,
                     browser_visible: !self.browser_hidden,
                     perf_hud_visible: self.perf_hud.visible,
@@ -2660,6 +2708,7 @@ impl App for HarmoniqStudioApp {
                     mixer_visible: self.mixer_window_open,
                     playlist_visible: self.playlist_window_open,
                     piano_roll_visible: self.piano_roll_window_open,
+                    sequencer_visible: self.sequencer_window_open,
                 };
                 self.transport_bar.ui(
                     ui,
@@ -2686,14 +2735,17 @@ impl App for HarmoniqStudioApp {
                     event_bus: &self.event_bus,
                     browser: &mut self.browser,
                     channel_rack: &mut self.channel_rack,
+                    sequencer: &mut self.sequencer,
                     piano_roll: &mut self.piano_roll,
                     inspector: &mut self.inspector,
                     console: &mut self.console,
                     input_focus: &mut self.input_focus,
                     browser_hidden: self.browser_hidden,
+                    sequencer_hidden: self.sequencer_hidden,
                     piano_roll_hidden: self.piano_roll_hidden,
                     transport_state: self.transport_state,
                     transport_clock: self.transport_clock,
+                    time_signature: self.time_signature,
                 };
                 DockArea::new(&mut self.dock_state)
                     .style(dock_style)
@@ -2773,6 +2825,41 @@ impl App for HarmoniqStudioApp {
                         import_audio_file: &mut import_audio,
                     };
                     render_playlist_window(ui, props);
+                });
+        }
+
+        if self.sequencer_window_open {
+            let window_id = egui::Id::new("sequencer_window");
+            let esc_pressed = ctx.input(|i| {
+                i.key_pressed(Key::Escape)
+                    && !i.modifiers.ctrl
+                    && !i.modifiers.alt
+                    && !i.modifiers.command
+                    && !i.modifiers.shift
+            });
+            let focused_sequencer =
+                ctx.memory(|mem| mem.focused().is_some_and(|focus| focus == window_id));
+            if esc_pressed && focused_sequencer {
+                self.sequencer_window_open = false;
+            }
+
+            egui::Window::new("Sequencer")
+                .id(window_id)
+                .open(&mut self.sequencer_window_open)
+                .collapsible(false)
+                .resizable(true)
+                .vscroll(true)
+                .default_size(egui::vec2(1040.0, 560.0))
+                .default_pos(egui::pos2(120.0, 72.0))
+                .show(ctx, |ui| {
+                    self.sequencer.ui(
+                        ui,
+                        &palette,
+                        self.time_signature,
+                        self.transport_clock,
+                        self.transport_state,
+                        None,
+                    );
                 });
         }
 
