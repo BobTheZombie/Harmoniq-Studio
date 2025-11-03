@@ -1,13 +1,13 @@
 use crate::state::{
-    AutomationMode, Channel, ChannelEq, ChannelId, ChannelRackState, CueSend, EqBand, EqFilterKind,
-    MixerLayout, MixerRackVisibility, MixerState, MixerViewTab, RoutingDelta,
+    AutomationMode, Channel, ChannelEq, ChannelId, CueSend, EqBand, EqFilterKind, MixerLayout,
+    MixerRackVisibility, MixerState, MixerViewTab, RoutingDelta,
 };
 use harmoniq_ui::{Fader, HarmoniqPalette, Knob, LevelMeter, StateToggleButton};
 use std::collections::BTreeSet;
 
 use egui::{
-    self, Align, Align2, Color32, ComboBox, Frame, Layout, Margin, Pos2, Rect, RichText, Rounding,
-    Sense, Shape, Stroke, TextStyle, Vec2,
+    self, Align, Align2, Color32, ComboBox, Frame, Layout, Margin, Pos2, RichText, Rounding, Sense,
+    Shape, Stroke, TextStyle, Vec2,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -296,7 +296,7 @@ fn render_left_zone(ui: &mut egui::Ui, state: &mut MixerState, palette: &Harmoni
             .max_height(260.0)
             .show(ui, |ui| {
                 for channel in &mut state.channels {
-                    let mut row = egui::CollapsingHeader::new(channel.name.clone())
+                    let row = egui::CollapsingHeader::new(channel.name.clone())
                         .default_open(false)
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
@@ -454,7 +454,7 @@ fn channel_area(
                     }
                     let events = channel_strip(
                         ui,
-                        state,
+                        &state.rack_visibility,
                         channel,
                         callbacks,
                         palette,
@@ -500,7 +500,7 @@ struct StripEvents {
 
 fn channel_strip(
     ui: &mut egui::Ui,
-    state: &MixerState,
+    rack_visibility: &MixerRackVisibility,
     channel: &mut Channel,
     callbacks: &mut crate::MixerCallbacks,
     palette: &HarmoniqPalette,
@@ -521,78 +521,92 @@ fn channel_strip(
 
             strip_header(ui, channel, palette);
 
-            if state.rack_visibility.input {
+            if rack_visibility.input {
+                let mut expanded = channel.rack_state.input_expanded;
                 rack_section(
                     ui,
                     palette,
-                    &mut channel.rack_state.input_expanded,
+                    &mut expanded,
                     "Input Routing",
                     |ui| {
                         input_section(ui, channel, palette);
                     },
                 );
+                channel.rack_state.input_expanded = expanded;
             }
 
-            if state.rack_visibility.pre {
+            if rack_visibility.pre {
+                let mut expanded = channel.rack_state.pre_expanded;
                 rack_section(
                     ui,
                     palette,
-                    &mut channel.rack_state.pre_expanded,
+                    &mut expanded,
                     "Pre",
                     |ui| {
                         pre_section(ui, channel, palette);
                     },
                 );
+                channel.rack_state.pre_expanded = expanded;
             }
 
-            if state.rack_visibility.strip {
+            if rack_visibility.strip {
+                let mut expanded = channel.rack_state.strip_expanded;
                 rack_section(
                     ui,
                     palette,
-                    &mut channel.rack_state.strip_expanded,
+                    &mut expanded,
                     "Channel Strip",
                     |ui| channel_strip_section(ui, channel, palette),
                 );
+                channel.rack_state.strip_expanded = expanded;
             }
 
-            if state.rack_visibility.eq {
+            if rack_visibility.eq {
+                let mut expanded = channel.rack_state.eq_expanded;
                 rack_section(
                     ui,
                     palette,
-                    &mut channel.rack_state.eq_expanded,
+                    &mut expanded,
                     "EQ",
                     |ui| eq_section(ui, channel, palette),
                 );
+                channel.rack_state.eq_expanded = expanded;
             }
 
-            if state.rack_visibility.inserts {
+            if rack_visibility.inserts {
+                let mut expanded = channel.rack_state.inserts_expanded;
                 rack_section(
                     ui,
                     palette,
-                    &mut channel.rack_state.inserts_expanded,
+                    &mut expanded,
                     "Inserts",
                     |ui| inserts_panel(ui, channel, callbacks, palette, metrics),
                 );
+                channel.rack_state.inserts_expanded = expanded;
             }
 
-            if state.rack_visibility.sends {
+            if rack_visibility.sends {
+                let mut expanded = channel.rack_state.sends_expanded;
                 rack_section(
                     ui,
                     palette,
-                    &mut channel.rack_state.sends_expanded,
+                    &mut expanded,
                     "Sends",
                     |ui| sends_section(ui, channel, callbacks, palette, metrics),
                 );
+                channel.rack_state.sends_expanded = expanded;
             }
 
-            if state.rack_visibility.cues {
+            if rack_visibility.cues {
+                let mut expanded = channel.rack_state.cues_expanded;
                 rack_section(
                     ui,
                     palette,
-                    &mut channel.rack_state.cues_expanded,
+                    &mut expanded,
                     "Cue Sends",
                     |ui| cue_section(ui, channel, palette, metrics),
                 );
+                channel.rack_state.cues_expanded = expanded;
             }
 
             ui.add_space(6.0);
@@ -937,7 +951,7 @@ fn eq_curve(ui: &mut egui::Ui, eq: &ChannelEq, palette: &HarmoniqPalette) {
     painter.rect_filled(rect, 6.0, palette.mixer_slot_bg);
     painter.rect_stroke(rect, 6.0, Stroke::new(1.0, palette.mixer_slot_border));
 
-    let freqs = [
+    let freqs: [f32; 10] = [
         20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0, 20000.0,
     ];
     for freq in freqs {
@@ -956,7 +970,7 @@ fn eq_curve(ui: &mut egui::Ui, eq: &ChannelEq, palette: &HarmoniqPalette) {
     let steps = 120;
     for i in 0..=steps {
         let t = i as f32 / steps as f32;
-        let freq = 20.0 * (20000.0 / 20.0).powf(t);
+        let freq = 20.0_f32 * (20000.0_f32 / 20.0_f32).powf(t);
         let gain = eq_gain(eq, freq);
         let norm = ((gain + 18.0) / 36.0).clamp(0.0, 1.0);
         let x = egui::lerp(rect.left()..=rect.right(), t);
@@ -1178,6 +1192,7 @@ fn inserts_panel(
         let pointer_pos = ui.ctx().pointer_interact_pos();
         let mut drop_target: Option<usize> = None;
         let mut pending_move: Option<(usize, usize)> = None;
+        let insert_count = channel.inserts.len();
 
         for (index, slot) in channel.inserts.iter_mut().enumerate() {
             let title = if slot.name.is_empty() {
@@ -1211,7 +1226,8 @@ fn inserts_panel(
                             if let Some(from) =
                                 ui.ctx().data(|data| data.get_temp::<usize>(drag_id))
                             {
-                                drop_request = Some((from, drop_target.unwrap_or(index)));
+                                let target = drop_target.unwrap_or(insert_count);
+                                drop_request = Some((from, target));
                             }
                             ui.ctx().data_mut(|data| data.remove::<usize>(drag_id));
                         }
@@ -1263,15 +1279,6 @@ fn inserts_panel(
                         .rect_stroke(response.rect.shrink(2.0), 6.0, stroke);
                 }
             }
-        }
-
-        if ui
-            .ctx()
-            .data(|data| data.get_temp::<usize>(drag_id))
-            .is_some()
-            && drop_target.is_none()
-        {
-            drop_target = Some(channel.inserts.len());
         }
 
         if let Some((from, to)) = pending_move {
