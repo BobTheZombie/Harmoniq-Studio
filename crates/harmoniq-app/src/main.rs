@@ -41,7 +41,7 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 use parking_lot::Mutex;
 use rtrb::Consumer;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 use tracing_subscriber::EnvFilter;
 use winit::keyboard::{KeyCode, ModifiersState};
 
@@ -64,9 +64,10 @@ use audio::{
     SoundTestSample,
 };
 use config::qwerty::{QwertyConfig, VelocityCurveSetting};
-use harmoniq_pianoroll::state::PianoRollState as PianoRollWidgetState;
-use harmoniq_pianoroll::ui::{ScaleGuide as PianoRollScaleGuide, Snap as PianoRollSnap};
-use harmoniq_pianoroll::{self as pianoroll_widget, PianoRollProps as PianoRollWidgetProps};
+use harmoniq_pianoroll::{
+    model::{Clip as PianoRollClip, EditorState as PianoRollEditorState, SnapUnit},
+    PianoRoll as PianoRollWidget,
+};
 use harmoniq_playlist::{
     state::{Playlist as PlaylistState, Snap as PlaylistSnap},
     ui::{render as render_playlist_window, PlaylistProps as PlaylistUiProps},
@@ -1453,7 +1454,7 @@ struct HarmoniqStudioApp {
     playlist_snap: PlaylistSnap,
     piano_roll_hidden: bool,
     piano_roll_window_open: bool,
-    piano_roll_widget: PianoRollWidgetState,
+    piano_roll_widget: PianoRollWidget,
     fullscreen: bool,
     fullscreen_dirty: bool,
     last_screen_rect: egui::Rect,
@@ -1556,6 +1557,9 @@ impl HarmoniqStudioApp {
         let browser = BrowserPane::new(resources_root, browser_visible, browser_width);
         let channel_rack = ChannelRackPane::default();
         let piano_roll = PianoRollPane::default();
+        let mut piano_roll_state = PianoRollEditorState::new(PianoRollClip::new(960));
+        piano_roll_state.snap = Some(SnapUnit::Grid(4));
+        let piano_roll_widget = PianoRollWidget::new(piano_roll_state);
         #[cfg(feature = "mixer_api")]
         let mixer = MixerView::new(mixer_api, mixer_engine_bridge);
         #[cfg(not(feature = "mixer_api"))]
@@ -1669,7 +1673,7 @@ impl HarmoniqStudioApp {
             playlist_snap: PlaylistSnap::N1_4,
             piano_roll_hidden: false,
             piano_roll_window_open: false,
-            piano_roll_widget: PianoRollWidgetState::default(),
+            piano_roll_widget,
             fullscreen: false,
             fullscreen_dirty: false,
             last_screen_rect: egui::Rect::from_min_size(
@@ -2797,19 +2801,14 @@ impl App for HarmoniqStudioApp {
                 .default_size(egui::vec2(980.0, 560.0))
                 .default_pos(egui::pos2(160.0, 100.0))
                 .show(ctx, |ui| {
-                    let mut props = PianoRollWidgetProps {
-                        state: &mut self.piano_roll_widget,
-                        snap: PianoRollSnap::N1_16,
-                        ghost_clip: None,
-                        scale: PianoRollScaleGuide::None,
-                        on_changed: Box::new(|_clip| {
-                            // TODO: route mutations to session persistence/engine bridge.
-                        }),
-                        on_preview: Some(Box::new(|key, velocity| {
-                            tracing::info!("Preview note key={key} velocity={velocity}");
-                        })),
-                    };
-                    pianoroll_widget::render(ui, props);
+                    self.piano_roll_widget.ui(ui);
+                    let edits = self.piano_roll_widget.take_edits();
+                    if !edits.is_empty() {
+                        tracing::info!(
+                            "Piano roll produced {} edit(s) (integration pending)",
+                            edits.len()
+                        );
+                    }
                 });
         }
 
