@@ -63,6 +63,21 @@ impl SequencerTrack {
     }
 }
 
+#[derive(Clone)]
+struct StockArrangement {
+    name: String,
+    tempo: u32,
+    bars: u32,
+    description: String,
+    tags: Vec<String>,
+}
+
+impl StockArrangement {
+    fn summary(&self) -> String {
+        format!("{} bars • {} BPM", self.bars, self.tempo)
+    }
+}
+
 pub struct SequencerPane {
     tracks: Vec<SequencerTrack>,
     selected_track: Option<usize>,
@@ -74,6 +89,8 @@ pub struct SequencerPane {
     loop_region: Option<(f32, f32)>,
     zoom: f32,
     total_bars: u32,
+    stock_arrangements: Vec<StockArrangement>,
+    selected_stock_arrangement: Option<usize>,
 }
 
 impl Default for SequencerPane {
@@ -89,6 +106,8 @@ impl Default for SequencerPane {
             loop_region: Some((4.0, 8.0)),
             zoom: 1.0,
             total_bars: 8,
+            stock_arrangements: stock_arrangements(),
+            selected_stock_arrangement: None,
         }
     }
 }
@@ -162,6 +181,9 @@ impl SequencerPane {
             });
             ui.add_space(8.0);
 
+            self.draw_stock_arrangements(ui, palette);
+            ui.add_space(8.0);
+
             let scroll = egui::ScrollArea::both()
                 .id_source("sequencer_scroll")
                 .show(ui, |ui| {
@@ -179,6 +201,60 @@ impl SequencerPane {
         if let Some(focus) = focus {
             focus.track_pane_interaction(&ctx, root_rect, WorkspacePane::Sequencer);
         }
+    }
+
+    fn draw_stock_arrangements(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette) {
+        egui::CollapsingHeader::new(
+            RichText::new("Stock Sequencer Sounds").color(palette.text_primary),
+        )
+        .id_source("sequencer_stock_sounds")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            for (index, arrangement) in self.stock_arrangements.iter().enumerate() {
+                let selected = self.selected_stock_arrangement == Some(index);
+                let fill = if selected {
+                    palette.panel_alt.gamma_multiply(1.08)
+                } else {
+                    palette.panel_alt
+                };
+                egui::Frame::none()
+                    .fill(fill)
+                    .rounding(egui::Rounding::same(10.0))
+                    .stroke(egui::Stroke::new(1.0, palette.toolbar_outline))
+                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                    .show(ui, |ui| {
+                        let response = ui.selectable_label(
+                            selected,
+                            RichText::new(&arrangement.name)
+                                .color(palette.text_primary)
+                                .strong()
+                                .size(16.0),
+                        );
+                        if response.clicked() {
+                            if selected {
+                                self.selected_stock_arrangement = None;
+                            } else {
+                                self.selected_stock_arrangement = Some(index);
+                            }
+                        }
+                        ui.label(RichText::new(arrangement.summary()).color(palette.text_muted));
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(&arrangement.description).color(palette.text_muted));
+                        if !arrangement.tags.is_empty() {
+                            ui.add_space(6.0);
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                for tag in &arrangement.tags {
+                                    let tag_text =
+                                        RichText::new(tag).color(palette.text_primary).size(12.0);
+                                    ui.label(tag_text);
+                                }
+                            });
+                        }
+                    });
+            }
+        });
     }
 
     fn draw_arrangement(
@@ -739,6 +815,53 @@ fn track_button_rects(header_rect: &Rect) -> (Rect, Rect) {
         Pos2::new(header_rect.right() - 16.0, top + button_height),
     );
     (solo_rect, mute_rect)
+}
+
+fn stock_arrangements() -> Vec<StockArrangement> {
+    vec![
+        StockArrangement {
+            name: "Sunrise Reverie".into(),
+            tempo: 92,
+            bars: 8,
+            description:
+                "Dreamy electric piano chords paired with warm analog bass and brushed drums.".into(),
+            tags: vec!["Chill".into(), "Keys".into(), "Bass".into()],
+        },
+        StockArrangement {
+            name: "Midnight Drive".into(),
+            tempo: 108,
+            bars: 8,
+            description:
+                "Tight synth bass groove, syncopated plucks and dusty drum textures for late-night vibes."
+                    .into(),
+            tags: vec!["Synthwave".into(), "Groove".into()],
+        },
+        StockArrangement {
+            name: "Neon Skies".into(),
+            tempo: 122,
+            bars: 16,
+            description: "Pulsing arps and side-chained pads designed to drop straight into uplifting house."
+                .into(),
+            tags: vec!["Dance".into(), "Arp".into(), "Pad".into()],
+        },
+        StockArrangement {
+            name: "Lo-Fi Sketchbook".into(),
+            tempo: 74,
+            bars: 8,
+            description:
+                "Crackling vinyl layers, swung drum loops and lazy guitar chops made for hip-hop sketches."
+                    .into(),
+            tags: vec!["Lo-Fi".into(), "Guitar".into()],
+        },
+        StockArrangement {
+            name: "Festival Sparks".into(),
+            tempo: 128,
+            bars: 16,
+            description: "Big-room supersaws, risers and percussive drops primed for instant festival energy."
+                .into(),
+            tags: vec!["EDM".into(), "Supersaw".into(), "Riser".into()],
+        },
+    ]
 }
 
 fn demo_tracks() -> Vec<SequencerTrack> {

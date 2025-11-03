@@ -22,6 +22,23 @@ impl Note {
     }
 }
 
+#[derive(Clone)]
+struct PianoPattern {
+    name: String,
+    description: String,
+    range: (i32, i32),
+    feel: String,
+}
+
+impl PianoPattern {
+    fn summary(&self) -> String {
+        format!(
+            "Range: MIDI {}–{} • Feel: {}",
+            self.range.0, self.range.1, self.feel
+        )
+    }
+}
+
 pub struct PianoRollPane {
     notes: Vec<Note>,
     selected: Option<usize>,
@@ -32,6 +49,8 @@ pub struct PianoRollPane {
     scale_kind: ScaleKind,
     chord_library: Vec<ChordDefinition>,
     insert_position: f32,
+    stock_patterns: Vec<PianoPattern>,
+    selected_stock_pattern: Option<usize>,
 }
 
 impl Default for PianoRollPane {
@@ -71,6 +90,8 @@ impl Default for PianoRollPane {
             scale_kind: ScaleKind::Ionian,
             chord_library: default_chord_library(),
             insert_position: 0.0,
+            stock_patterns: stock_piano_patterns(),
+            selected_stock_pattern: None,
         }
     }
 }
@@ -128,6 +149,9 @@ impl PianoRollPane {
                     }
                 }
             });
+            ui.add_space(8.0);
+
+            self.draw_stock_patterns(ui, palette);
             ui.add_space(8.0);
 
             let scroll = egui::ScrollArea::both()
@@ -246,6 +270,49 @@ impl PianoRollPane {
         focus.track_pane_interaction(&ctx, root_rect, WorkspacePane::PianoRoll);
     }
 
+    fn draw_stock_patterns(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette) {
+        egui::CollapsingHeader::new(
+            RichText::new("Stock Piano Roll Patterns").color(palette.text_primary),
+        )
+        .id_source("piano_roll_stock_patterns")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            for (index, pattern) in self.stock_patterns.iter().enumerate() {
+                let selected = self.selected_stock_pattern == Some(index);
+                let fill = if selected {
+                    palette.panel_alt.gamma_multiply(1.08)
+                } else {
+                    palette.panel_alt
+                };
+                egui::Frame::none()
+                    .fill(fill)
+                    .rounding(egui::Rounding::same(10.0))
+                    .stroke(egui::Stroke::new(1.0, palette.toolbar_outline))
+                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                    .show(ui, |ui| {
+                        let response = ui.selectable_label(
+                            selected,
+                            RichText::new(&pattern.name)
+                                .color(palette.text_primary)
+                                .strong()
+                                .size(16.0),
+                        );
+                        if response.clicked() {
+                            if selected {
+                                self.selected_stock_pattern = None;
+                            } else {
+                                self.selected_stock_pattern = Some(index);
+                            }
+                        }
+                        ui.label(RichText::new(pattern.summary()).color(palette.text_muted));
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(&pattern.description).color(palette.text_muted));
+                    });
+            }
+        });
+    }
+
     fn quantize_note_to_scale(&mut self, index: usize) {
         if index >= self.notes.len() {
             return;
@@ -359,6 +426,46 @@ impl ChordDefinition {
     fn intervals(&self) -> impl Iterator<Item = i32> + '_ {
         self.intervals.iter().copied()
     }
+}
+
+fn stock_piano_patterns() -> Vec<PianoPattern> {
+    vec![
+        PianoPattern {
+            name: "Glass Arp".into(),
+            description: "Plucked triad arpeggio ideal for shimmering intros and transitions."
+                .into(),
+            range: (60, 76),
+            feel: "Sparkling".into(),
+        },
+        PianoPattern {
+            name: "Cinematic Swell".into(),
+            description: "Ascending chords with octave doubles for instant dramatic tension."
+                .into(),
+            range: (50, 79),
+            feel: "Evolving".into(),
+        },
+        PianoPattern {
+            name: "Dusty Keys".into(),
+            description: "Loose swung voicings designed for lo-fi hip-hop hooks.".into(),
+            range: (55, 72),
+            feel: "Laid-back".into(),
+        },
+        PianoPattern {
+            name: "Starlight Motif".into(),
+            description: "Repeating fifth-based figure perfect for ambient or synthwave beds."
+                .into(),
+            range: (62, 85),
+            feel: "Dreamy".into(),
+        },
+        PianoPattern {
+            name: "Neo-Soul Voicing".into(),
+            description:
+                "Extended seventh chords with tasteful suspensions for modern soul progressions."
+                    .into(),
+            range: (48, 78),
+            feel: "Smooth".into(),
+        },
+    ]
 }
 
 fn default_chord_library() -> Vec<ChordDefinition> {
