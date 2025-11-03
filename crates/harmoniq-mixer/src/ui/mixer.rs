@@ -447,7 +447,7 @@ fn channel_area(
     egui::ScrollArea::horizontal()
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(16.0, 0.0);
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
             let mut reset_requests: Vec<ResetRequest> = Vec::new();
             let mut selection_request: Option<ChannelId> = None;
             let selected = state.selected;
@@ -521,7 +521,7 @@ fn channel_strip(
         .fill(strip_fill(palette, is_selected, channel))
         .stroke(Stroke::new(1.0, palette.mixer_strip_border))
         .rounding(Rounding::same(14.0))
-        .inner_margin(Margin::symmetric(16.0, 14.0))
+        .inner_margin(Margin::symmetric(10.0, 14.0))
         .show(ui, |ui| {
             ui.set_width(metrics.strip_w);
             ui.spacing_mut().item_spacing = egui::vec2(10.0, metrics.section_spacing);
