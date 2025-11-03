@@ -9,7 +9,8 @@ use harmoniq_engine::mixer::api::{MixerUiApi, UiStripInfo};
 #[cfg(feature = "mixer_api")]
 use harmoniq_engine::{GuiMeterReceiver, MixerCommand};
 use harmoniq_mixer::state::{
-    Channel, ChannelId, InsertSlot, Meter, MixerState, RoutingDelta, SendSlot,
+    AutomationMode, Channel, ChannelEq, ChannelId, ChannelRackState, ChannelStripModules,
+    InsertSlot, Meter, MixerState, RoutingDelta, SendSlot,
 };
 use harmoniq_mixer::ui::{db_to_gain, gain_to_db};
 use harmoniq_mixer::{MixerCallbacks, MixerProps};
@@ -175,6 +176,22 @@ impl MixerView {
                 meter,
                 meter_history: history,
                 is_master: true,
+                visible: true,
+                color: [252, 200, 64],
+                input_bus: "MixBus".into(),
+                output_bus: "Main Out".into(),
+                record_enable: false,
+                monitor_enable: false,
+                phase_invert: false,
+                automation: AutomationMode::default(),
+                pre_gain_db: 0.0,
+                low_cut_hz: 20.0,
+                high_cut_hz: 20_000.0,
+                quick_controls: [0.5; 8],
+                cue_sends: Vec::new(),
+                eq: ChannelEq::default(),
+                strip_modules: ChannelStripModules::default(),
+                rack_state: ChannelRackState::default(),
             };
             self.state.channels.push(channel);
         }
@@ -213,6 +230,26 @@ impl MixerView {
                 .map(|(_, history)| history.clone())
                 .unwrap_or_else(Channel::new_meter_history),
             is_master: info.is_master,
+            visible: true,
+            color: [
+                (info.color_rgba[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+                (info.color_rgba[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+                (info.color_rgba[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+            ],
+            input_bus: format!("Input {}", idx + 1),
+            output_bus: info.route_target.clone(),
+            record_enable: info.armed,
+            monitor_enable: false,
+            phase_invert: info.phase_invert,
+            automation: AutomationMode::default(),
+            pre_gain_db: 0.0,
+            low_cut_hz: 20.0,
+            high_cut_hz: 20_000.0,
+            quick_controls: [0.5; 8],
+            cue_sends: Vec::new(),
+            eq: ChannelEq::default(),
+            strip_modules: ChannelStripModules::default(),
+            rack_state: ChannelRackState::default(),
         };
 
         let mut insert_bypass = Vec::with_capacity(info.insert_count);
