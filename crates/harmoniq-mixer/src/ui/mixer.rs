@@ -399,7 +399,7 @@ fn meter_bridge(ui: &mut egui::Ui, state: &mut MixerState, palette: &HarmoniqPal
                         {
                             let meter = &channel.meter;
                             ui.vertical(|ui| {
-                                ui.centered_and_justified(|ui| {
+                                ui.vertical_centered(|ui| {
                                     ui.label(
                                         RichText::new(channel.name.clone())
                                             .small()
