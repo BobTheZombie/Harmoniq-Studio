@@ -35,7 +35,7 @@ use harmoniq_plugin_scanner::Scanner as PluginBrowserScanner;
 use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth};
 use harmoniq_ui::{
     perf_hud::{self, PerfHudState, PerfMetrics},
-    startup_banner, HarmoniqPalette, HarmoniqTheme, MixerSkin, MixerSkinLoadError,
+    startup_banner, HarmoniqPalette, HarmoniqTheme, MixerSkin,
 };
 use hound::{SampleFormat, WavSpec, WavWriter};
 use parking_lot::Mutex;
@@ -2009,7 +2009,6 @@ impl HarmoniqStudioApp {
     fn update_engine_context(&mut self) {
         let sample_rate = self.transport.sr.load(AtomicOrdering::Relaxed).max(1);
         let sample_pos = self.transport.sample_pos.load(AtomicOrdering::Relaxed);
-        let is_playing = self.transport.playing.load(AtomicOrdering::Relaxed);
         let seconds = sample_pos as f64 / sample_rate as f64;
         let beats = (seconds * (self.tempo.max(1.0) as f64 / 60.0)) as f32;
         self.transport_clock = TransportClock::from_beats(beats, self.time_signature);

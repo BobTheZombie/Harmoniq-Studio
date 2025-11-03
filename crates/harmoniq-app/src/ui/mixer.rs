@@ -451,13 +451,18 @@ impl MixerView {
         let tx_routing = engine_sender;
         callbacks.apply_routing = Box::new(move |delta: RoutingDelta| {
             #[cfg(feature = "mixer_api")]
-            if let Some(tx) = &tx_routing {
-                let cmd = MixerCommand::ApplyRouting {
-                    set: delta.set.clone(),
-                    remove: delta.remove.clone(),
-                };
-                let _ = tx.send(cmd);
+            {
+                if let Some(tx) = &tx_routing {
+                    let cmd = MixerCommand::ApplyRouting {
+                        set: delta.set.clone(),
+                        remove: delta.remove.clone(),
+                    };
+                    let _ = tx.send(cmd);
+                }
             }
+
+            #[cfg(not(feature = "mixer_api"))]
+            let _ = delta;
         });
 
         callbacks
