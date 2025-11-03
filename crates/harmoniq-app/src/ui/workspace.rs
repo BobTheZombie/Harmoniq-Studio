@@ -26,7 +26,7 @@ pub fn build_default_workspace() -> DockState<WorkspacePane> {
         let surface = dock.main_surface_mut();
         let [_browser_node, center_node] =
             surface.split_left(NodeIndex::root(), 0.26, vec![WorkspacePane::Browser]);
-        let [center_node, inspector_node] =
+        let [_center_node, inspector_node] =
             surface.split_right(center_node, 0.78, vec![WorkspacePane::Inspector]);
         let [_inspector, _console] =
             surface.split_below(inspector_node, 0.56, vec![WorkspacePane::Console]);
