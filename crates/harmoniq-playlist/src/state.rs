@@ -62,13 +62,128 @@ impl Clip {
     }
 }
 
+/// A clip lane inside a track timeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackLane {
+    pub id: u32,
+    pub name: String,
+    pub clips: Vec<Clip>,
+}
+
+impl TrackLane {
+    pub fn new(id: u32, name: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            clips: Vec::new(),
+        }
+    }
+
+    pub fn add_clip(&mut self, clip: Clip) {
+        self.clips.push(clip);
+        self.clips.sort_by_key(|clip| clip.start_ticks);
+    }
+
+    pub fn take_clip(&mut self, clip_id: ClipId) -> Option<Clip> {
+        if let Some(index) = self.clips.iter().position(|clip| clip.id == clip_id) {
+            Some(self.clips.remove(index))
+        } else {
+            None
+        }
+    }
+}
+
+/// Type of slot rendered inside the track rack.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RackSlotKind {
+    Instrument,
+    Insert,
+    Send,
+    Midi,
+}
+
+impl RackSlotKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            RackSlotKind::Instrument => "Instrument",
+            RackSlotKind::Insert => "Insert",
+            RackSlotKind::Send => "Send",
+            RackSlotKind::Midi => "MIDI",
+        }
+    }
+}
+
+/// A single module shown in the Cubase-style rack.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RackSlot {
+    pub id: u32,
+    pub name: String,
+    pub kind: RackSlotKind,
+    pub active: bool,
+}
+
+impl RackSlot {
+    pub fn new(id: u32, name: impl Into<String>, kind: RackSlotKind) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            kind,
+            active: true,
+        }
+    }
+
+    pub fn toggle(&mut self) {
+        self.active = !self.active;
+    }
+}
+
+/// Mixer-like controls available on each track header.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackControls {
+    pub record_arm: bool,
+    pub solo: bool,
+    pub mute: bool,
+    pub monitor: bool,
+}
+
+impl Default for TrackControls {
+    fn default() -> Self {
+        Self {
+            record_arm: false,
+            solo: false,
+            mute: false,
+            monitor: true,
+        }
+    }
+}
+
+impl TrackControls {
+    pub fn toggle_record_arm(&mut self) {
+        self.record_arm = !self.record_arm;
+    }
+
+    pub fn toggle_solo(&mut self) {
+        self.solo = !self.solo;
+    }
+
+    pub fn toggle_mute(&mut self) {
+        self.mute = !self.mute;
+    }
+
+    pub fn toggle_monitor(&mut self) {
+        self.monitor = !self.monitor;
+    }
+}
+
 /// Track within the playlist.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: TrackId,
     pub name: String,
     pub color: [f32; 4],
-    pub clips: Vec<Clip>,
+    pub controls: TrackControls,
+    pub rack: Vec<RackSlot>,
+    pub lanes: Vec<TrackLane>,
 }
 
 impl Track {
@@ -77,13 +192,38 @@ impl Track {
             id,
             name: name.into(),
             color: DEFAULT_TRACK_COLORS[id.as_usize() % DEFAULT_TRACK_COLORS.len()],
-            clips: Vec::new(),
+            controls: TrackControls::default(),
+            rack: Vec::new(),
+            lanes: Vec::new(),
         }
     }
 
+    pub fn add_lane(&mut self, lane: TrackLane) {
+        self.lanes.push(lane);
+    }
+
+    pub fn lane_mut(&mut self, lane_id: u32) -> Option<&mut TrackLane> {
+        self.lanes.iter_mut().find(|lane| lane.id == lane_id)
+    }
+
+    pub fn lane(&self, lane_id: u32) -> Option<&TrackLane> {
+        self.lanes.iter().find(|lane| lane.id == lane_id)
+    }
+
     pub fn add_clip(&mut self, clip: Clip) {
-        self.clips.push(clip);
-        self.clips.sort_by_key(|clip| clip.start_ticks);
+        if let Some(lane) = self.lanes.first_mut() {
+            lane.add_clip(clip);
+        }
+    }
+
+    pub fn add_clip_to_lane(&mut self, lane_id: u32, clip: Clip) {
+        if let Some(lane) = self.lane_mut(lane_id) {
+            lane.add_clip(clip);
+        }
+    }
+
+    pub fn rack_slot_mut(&mut self, slot_id: u32) -> Option<&mut RackSlot> {
+        self.rack.iter_mut().find(|slot| slot.id == slot_id)
     }
 }
 
@@ -169,12 +309,17 @@ impl Playlist {
     pub fn selected_clip(&self) -> Option<SelectedClip> {
         let (track_id, clip_id) = self.selection?;
         let track = self.tracks.iter().find(|track| track.id == track_id)?;
-        let clip = track.clips.iter().find(|clip| clip.id == clip_id)?;
+        let (lane_name, clip) = track.lanes.iter().find_map(|lane| {
+            lane.clips
+                .iter()
+                .find(|clip| clip.id == clip_id)
+                .map(|clip| (&lane.name, clip))
+        })?;
         Some(SelectedClip {
             track: track.id,
             clip: clip.id,
             track_name: track.name.clone(),
-            clip_name: clip.name.clone(),
+            clip_name: format!("{} ({lane_name})", clip.name),
             start_ticks: clip.start_ticks,
             duration_ticks: clip.duration_ticks,
             color: clip.color,
@@ -204,26 +349,56 @@ impl Playlist {
         let ppq = self.ppq as u64;
         for (index, name) in ["Drums", "Bass", "Keys", "Lead"].into_iter().enumerate() {
             let mut track = Track::new(TrackId(index as u32), name);
-            track.add_clip(Clip {
-                id: ClipId((index as u64) * 10 + 1),
-                name: format!("{} Pattern", name),
-                start_ticks: 0,
-                duration_ticks: 4 * ppq,
-                color: track.color,
-                kind: ClipKind::Pattern {
-                    pattern_id: (index as u32) + 1,
+            track.add_lane(TrackLane::new(0, "Main Lane"));
+            track.add_lane(TrackLane::new(1, "Automation"));
+            track.add_clip_to_lane(
+                0,
+                Clip {
+                    id: ClipId((index as u64) * 10 + 1),
+                    name: format!("{} Pattern", name),
+                    start_ticks: 0,
+                    duration_ticks: 4 * ppq,
+                    color: track.color,
+                    kind: ClipKind::Pattern {
+                        pattern_id: (index as u32) + 1,
+                    },
                 },
-            });
-            track.add_clip(Clip {
-                id: ClipId((index as u64) * 10 + 2),
-                name: format!("{} Variation", name),
-                start_ticks: 6 * ppq,
-                duration_ticks: 4 * ppq,
-                color: track.color,
-                kind: ClipKind::Pattern {
-                    pattern_id: (index as u32) + 101,
+            );
+            track.add_clip_to_lane(
+                0,
+                Clip {
+                    id: ClipId((index as u64) * 10 + 2),
+                    name: format!("{} Variation", name),
+                    start_ticks: 6 * ppq,
+                    duration_ticks: 4 * ppq,
+                    color: track.color,
+                    kind: ClipKind::Pattern {
+                        pattern_id: (index as u32) + 101,
+                    },
                 },
-            });
+            );
+            track.add_clip_to_lane(
+                1,
+                Clip {
+                    id: ClipId((index as u64) * 10 + 3),
+                    name: "Filter Sweep".into(),
+                    start_ticks: ppq,
+                    duration_ticks: 5 * ppq,
+                    color: [track.color[0], track.color[1], track.color[2], 0.7],
+                    kind: ClipKind::Automation,
+                },
+            );
+            track.rack.push(RackSlot::new(
+                0,
+                format!("{} Instrument", name),
+                RackSlotKind::Instrument,
+            ));
+            track
+                .rack
+                .push(RackSlot::new(1, "Compressor", RackSlotKind::Insert));
+            track
+                .rack
+                .push(RackSlot::new(2, "Delay", RackSlotKind::Send));
             self.tracks.push(track);
         }
     }
