@@ -9,7 +9,11 @@ license = "GPL-3.0-or-later"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-serde = { workspace = true, features = ["derive"] }
+anyhow = "1.0"
+clap-plugin-authoring = { path = "../../../crates/clap-plugin-authoring" }
+clap-sys = { path = "../../../crates/clap-sys" }
 
 [features]
 default = []
+
+[workspace]
