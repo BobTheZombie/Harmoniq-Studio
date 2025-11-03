@@ -1,4 +1,6 @@
-use eframe::egui::{self, Align2, Color32, FontId, PointerButton, Pos2, Rect, RichText, Stroke};
+use eframe::egui::{
+    self, Align2, Color32, FontId, PointerButton, Pos2, Rect, RichText, Shape, Stroke,
+};
 use harmoniq_engine::TransportState;
 use harmoniq_ui::HarmoniqPalette;
 
@@ -99,7 +101,7 @@ impl SequencerPane {
         time_signature: TimeSignature,
         transport_clock: TransportClock,
         transport_state: TransportState,
-        mut focus: Option<&mut InputFocus>,
+        focus: Option<&mut InputFocus>,
     ) {
         let ctx = ui.ctx().clone();
         let mut root_rect = ui.min_rect();
@@ -268,22 +270,24 @@ impl SequencerPane {
             let color = palette.accent.linear_multiply(LOOP_ALPHA);
             painter.rect_filled(loop_rect, 4.0, color);
             painter.rect_stroke(loop_rect, 4.0, Stroke::new(1.0, palette.accent));
-            painter.triangle_filled(
-                [
+            painter.add(Shape::convex_polygon(
+                vec![
                     Pos2::new(start_x, header_rect.bottom()),
                     Pos2::new(start_x + 10.0, header_rect.bottom() - 12.0),
                     Pos2::new(start_x + 20.0, header_rect.bottom()),
                 ],
                 palette.accent,
-            );
-            painter.triangle_filled(
-                [
+                Stroke::NONE,
+            ));
+            painter.add(Shape::convex_polygon(
+                vec![
                     Pos2::new(end_x, header_rect.bottom()),
                     Pos2::new(end_x - 10.0, header_rect.bottom() - 12.0),
                     Pos2::new(end_x - 20.0, header_rect.bottom()),
                 ],
                 palette.accent,
-            );
+                Stroke::NONE,
+            ));
         }
 
         let playhead_ticks = transport_clock.total_ticks(time_signature);
@@ -600,7 +604,7 @@ impl SequencerPane {
                 })
                 .collect();
             if points.len() >= 2 {
-                painter.polyline(points.clone(), Stroke::new(1.6, track.color));
+                painter.add(Shape::line(points.clone(), Stroke::new(1.6, track.color)));
                 for point in points.drain(..) {
                     painter.circle_filled(point, 3.5, track.color);
                 }
