@@ -24,8 +24,25 @@ impl Channel {
     }
 }
 
+#[derive(Clone)]
+struct DrumKit {
+    name: String,
+    style: String,
+    description: String,
+    sounds: Vec<String>,
+}
+
+impl DrumKit {
+    fn summary(&self) -> String {
+        let sounds = self.sounds.join(", ");
+        format!("Style: {} • Sounds: {}", self.style, sounds)
+    }
+}
+
 pub struct ChannelRackPane {
     channels: Vec<Channel>,
+    stock_kits: Vec<DrumKit>,
+    selected_stock_kit: Option<usize>,
 }
 
 impl ChannelRackPane {
@@ -38,6 +55,47 @@ impl ChannelRackPane {
         ]
     }
 
+    fn draw_stock_kits(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette) {
+        egui::CollapsingHeader::new(RichText::new("Stock Drum Kits").color(palette.text_primary))
+            .id_source("channel_rack_stock_kits")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                for (index, kit) in self.stock_kits.iter().enumerate() {
+                    let selected = self.selected_stock_kit == Some(index);
+                    let fill = if selected {
+                        palette.panel_alt.gamma_multiply(1.08)
+                    } else {
+                        palette.panel_alt
+                    };
+                    egui::Frame::none()
+                        .fill(fill)
+                        .rounding(egui::Rounding::same(10.0))
+                        .stroke(egui::Stroke::new(1.0, palette.toolbar_outline))
+                        .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                        .show(ui, |ui| {
+                            let response = ui.selectable_label(
+                                selected,
+                                RichText::new(&kit.name)
+                                    .color(palette.text_primary)
+                                    .strong()
+                                    .size(16.0),
+                            );
+                            if response.clicked() {
+                                if selected {
+                                    self.selected_stock_kit = None;
+                                } else {
+                                    self.selected_stock_kit = Some(index);
+                                }
+                            }
+                            ui.label(RichText::new(kit.summary()).color(palette.text_muted));
+                            ui.add_space(4.0);
+                            ui.label(RichText::new(&kit.description).color(palette.text_muted));
+                        });
+                }
+            });
+    }
+
     pub fn ui(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette, event_bus: &EventBus) {
         if self.channels.is_empty() {
             self.channels = Self::seed_channels();
@@ -46,6 +104,8 @@ impl ChannelRackPane {
 
         ui.vertical(|ui| {
             ui.heading(RichText::new("Channel Rack").color(palette.text_primary));
+            ui.add_space(6.0);
+            self.draw_stock_kits(ui, palette);
             ui.add_space(6.0);
             for (index, channel) in self.channels.iter_mut().enumerate() {
                 egui::Frame::none()
@@ -154,10 +214,75 @@ impl ChannelRackPane {
     }
 }
 
+fn stock_drum_kits() -> Vec<DrumKit> {
+    vec![
+        DrumKit {
+            name: "Sunset Boom".into(),
+            style: "Lo-Fi Chill".into(),
+            description:
+                "Warm cassette-saturated hits with soft transients and vinyl noise layers.".into(),
+            sounds: vec![
+                "Deep Kick".into(),
+                "Dusty Snare".into(),
+                "Lazy Hat".into(),
+                "Perc Shaker".into(),
+            ],
+        },
+        DrumKit {
+            name: "Neon Pulse".into(),
+            style: "Synthwave".into(),
+            description: "Punchy analog drums with gated reverb perfect for retro outrun anthems."
+                .into(),
+            sounds: vec![
+                "Thump Kick".into(),
+                "Gated Snare".into(),
+                "Bright Clap".into(),
+                "Analog Tom".into(),
+            ],
+        },
+        DrumKit {
+            name: "Festival Sparks".into(),
+            style: "EDM Mainstage".into(),
+            description: "Cutting-edge drums with tuned risers and crowd-ready impacts.".into(),
+            sounds: vec![
+                "Sub Kick".into(),
+                "Snare Stack".into(),
+                "Clap Layer".into(),
+                "Ride Wash".into(),
+            ],
+        },
+        DrumKit {
+            name: "City Streets".into(),
+            style: "Boom Bap".into(),
+            description: "Booming kicks and crispy snares sampled from dusty records.".into(),
+            sounds: vec![
+                "Boom Kick".into(),
+                "Crack Snare".into(),
+                "Closed Hat".into(),
+                "Open Hat".into(),
+            ],
+        },
+        DrumKit {
+            name: "Aurora Drops".into(),
+            style: "Future Bass".into(),
+            description: "Lush percussion with foley textures for emotive future bass drops."
+                .into(),
+            sounds: vec![
+                "Sub Impact".into(),
+                "Glass Snare".into(),
+                "Feather Hat".into(),
+                "Foley Hit".into(),
+            ],
+        },
+    ]
+}
+
 impl Default for ChannelRackPane {
     fn default() -> Self {
         Self {
             channels: Self::seed_channels(),
+            stock_kits: stock_drum_kits(),
+            selected_stock_kit: None,
         }
     }
 }
