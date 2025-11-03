@@ -64,8 +64,9 @@ pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
 }
 
 fn top_toolbar(ui: &mut egui::Ui, state: &mut MixerState, palette: &HarmoniqPalette) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(10.0, 0.0);
+    ui.horizontal_wrapped(|ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing = egui::vec2(10.0, 6.0);
         for tab in [
             MixerViewTab::MixConsole,
             MixerViewTab::ChannelStrip,
@@ -93,36 +94,40 @@ fn top_toolbar(ui: &mut egui::Ui, state: &mut MixerState, palette: &HarmoniqPale
                 .hint_text("Channel, bus, color"),
         );
 
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            layout_toggle(
-                ui,
-                &mut state.layout,
-                palette,
-                |layout| &mut layout.show_right_zone,
-                "Right Zone",
-            );
-            layout_toggle(
-                ui,
-                &mut state.layout,
-                palette,
-                |layout| &mut layout.show_left_zone,
-                "Left Zone",
-            );
-            layout_toggle(
-                ui,
-                &mut state.layout,
-                palette,
-                |layout| &mut layout.show_meter_bridge,
-                "Meter Bridge",
-            );
-            layout_toggle(
-                ui,
-                &mut state.layout,
-                palette,
-                |layout| &mut layout.show_channel_racks,
-                "Channel Racks",
-            );
-        });
+        ui.allocate_ui_with_layout(
+            ui.available_size_before_wrap(),
+            Layout::right_to_left(Align::Center),
+            |ui| {
+                layout_toggle(
+                    ui,
+                    &mut state.layout,
+                    palette,
+                    |layout| &mut layout.show_right_zone,
+                    "Right Zone",
+                );
+                layout_toggle(
+                    ui,
+                    &mut state.layout,
+                    palette,
+                    |layout| &mut layout.show_left_zone,
+                    "Left Zone",
+                );
+                layout_toggle(
+                    ui,
+                    &mut state.layout,
+                    palette,
+                    |layout| &mut layout.show_meter_bridge,
+                    "Meter Bridge",
+                );
+                layout_toggle(
+                    ui,
+                    &mut state.layout,
+                    palette,
+                    |layout| &mut layout.show_channel_racks,
+                    "Channel Racks",
+                );
+            },
+        );
     });
 }
 
@@ -246,7 +251,9 @@ fn zone_toolbar(ui: &mut egui::Ui, state: &mut MixerState, palette: &HarmoniqPal
         .inner_margin(Margin::symmetric(12.0, 8.0))
         .stroke(Stroke::new(1.0, palette.toolbar_outline))
         .show(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 6.0;
                 ui.label(
                     RichText::new("Rack Visibility")
                         .strong()
@@ -523,89 +530,57 @@ fn channel_strip(
 
             if rack_visibility.input {
                 let mut expanded = channel.rack_state.input_expanded;
-                rack_section(
-                    ui,
-                    palette,
-                    &mut expanded,
-                    "Input Routing",
-                    |ui| {
-                        input_section(ui, channel, palette);
-                    },
-                );
+                rack_section(ui, palette, &mut expanded, "Input Routing", |ui| {
+                    input_section(ui, channel, palette);
+                });
                 channel.rack_state.input_expanded = expanded;
             }
 
             if rack_visibility.pre {
                 let mut expanded = channel.rack_state.pre_expanded;
-                rack_section(
-                    ui,
-                    palette,
-                    &mut expanded,
-                    "Pre",
-                    |ui| {
-                        pre_section(ui, channel, palette);
-                    },
-                );
+                rack_section(ui, palette, &mut expanded, "Pre", |ui| {
+                    pre_section(ui, channel, palette);
+                });
                 channel.rack_state.pre_expanded = expanded;
             }
 
             if rack_visibility.strip {
                 let mut expanded = channel.rack_state.strip_expanded;
-                rack_section(
-                    ui,
-                    palette,
-                    &mut expanded,
-                    "Channel Strip",
-                    |ui| channel_strip_section(ui, channel, palette),
-                );
+                rack_section(ui, palette, &mut expanded, "Channel Strip", |ui| {
+                    channel_strip_section(ui, channel, palette)
+                });
                 channel.rack_state.strip_expanded = expanded;
             }
 
             if rack_visibility.eq {
                 let mut expanded = channel.rack_state.eq_expanded;
-                rack_section(
-                    ui,
-                    palette,
-                    &mut expanded,
-                    "EQ",
-                    |ui| eq_section(ui, channel, palette),
-                );
+                rack_section(ui, palette, &mut expanded, "EQ", |ui| {
+                    eq_section(ui, channel, palette)
+                });
                 channel.rack_state.eq_expanded = expanded;
             }
 
             if rack_visibility.inserts {
                 let mut expanded = channel.rack_state.inserts_expanded;
-                rack_section(
-                    ui,
-                    palette,
-                    &mut expanded,
-                    "Inserts",
-                    |ui| inserts_panel(ui, channel, callbacks, palette, metrics),
-                );
+                rack_section(ui, palette, &mut expanded, "Inserts", |ui| {
+                    inserts_panel(ui, channel, callbacks, palette, metrics)
+                });
                 channel.rack_state.inserts_expanded = expanded;
             }
 
             if rack_visibility.sends {
                 let mut expanded = channel.rack_state.sends_expanded;
-                rack_section(
-                    ui,
-                    palette,
-                    &mut expanded,
-                    "Sends",
-                    |ui| sends_section(ui, channel, callbacks, palette, metrics),
-                );
+                rack_section(ui, palette, &mut expanded, "Sends", |ui| {
+                    sends_section(ui, channel, callbacks, palette, metrics)
+                });
                 channel.rack_state.sends_expanded = expanded;
             }
 
             if rack_visibility.cues {
                 let mut expanded = channel.rack_state.cues_expanded;
-                rack_section(
-                    ui,
-                    palette,
-                    &mut expanded,
-                    "Cue Sends",
-                    |ui| cue_section(ui, channel, palette, metrics),
-                );
+                rack_section(ui, palette, &mut expanded, "Cue Sends", |ui| {
+                    cue_section(ui, channel, palette, metrics)
+                });
                 channel.rack_state.cues_expanded = expanded;
             }
 
