@@ -56,7 +56,7 @@ pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
 
         match state.view_tab {
             MixerViewTab::MixConsole => mixconsole_view(ui, state, callbacks, palette),
-            MixerViewTab::ChannelStrip => channel_strip_view(ui, state, palette),
+            MixerViewTab::ChannelStrip => channel_strip_view(ui, state, callbacks, palette),
             MixerViewTab::Meter => meter_view(ui, state, palette),
             MixerViewTab::ControlRoom => control_room_view(ui, state, palette),
         }
@@ -187,26 +187,177 @@ fn mixconsole_view(
     });
 }
 
-fn channel_strip_view(ui: &mut egui::Ui, state: &mut MixerState, palette: &HarmoniqPalette) {
+fn channel_strip_view(
+    ui: &mut egui::Ui,
+    state: &mut MixerState,
+    callbacks: &mut crate::MixerCallbacks,
+    palette: &HarmoniqPalette,
+) {
     Frame::none()
         .fill(palette.mixer_strip_bg)
         .rounding(Rounding::same(12.0))
         .inner_margin(Margin::same(18.0))
         .show(ui, |ui| {
-            if let Some(id) = state.selected {
-                if let Some(channel) = state.channels.iter().find(|c| c.id == id) {
-                    ui.heading(format!("Channel Strip: {}", channel.name));
-                    ui.add_space(12.0);
-                    ui.label(
-                        RichText::new("The dedicated channel strip view is under construction.")
-                            .color(palette.text_muted),
-                    );
-                }
-            } else {
+            if state.selected.is_none() {
                 ui.label(
                     RichText::new("Select a channel in the MixConsole to inspect its strip.")
                         .color(palette.text_muted),
                 );
+                return;
+            }
+
+            ui.horizontal_wrapped(|ui| {
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing = egui::vec2(10.0, 6.0);
+                ui.label(
+                    RichText::new("Sections")
+                        .strong()
+                        .color(palette.text_primary),
+                );
+                rack_toggle(ui, palette, "Input", &mut state.rack_visibility.input);
+                rack_toggle(ui, palette, "Pre", &mut state.rack_visibility.pre);
+                rack_toggle(ui, palette, "Strip", &mut state.rack_visibility.strip);
+                rack_toggle(ui, palette, "EQ", &mut state.rack_visibility.eq);
+                rack_toggle(ui, palette, "Inserts", &mut state.rack_visibility.inserts);
+                rack_toggle(ui, palette, "Sends", &mut state.rack_visibility.sends);
+                rack_toggle(ui, palette, "Cue", &mut state.rack_visibility.cues);
+            });
+
+            ui.separator();
+            ui.add_space(8.0);
+
+            let rack_visibility = state.rack_visibility.clone();
+            if let Some(channel) = state
+                .channels
+                .iter_mut()
+                .find(|c| Some(c.id) == state.selected)
+            {
+                let metrics = StripMetrics::default();
+                strip_header(ui, channel, palette);
+                ui.add_space(12.0);
+
+                let reset_request = egui::ScrollArea::vertical()
+                    .id_source(("channel_strip_scroll", channel.id))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let mut reset_request = None;
+                        ui.horizontal(|ui| {
+                            let total_width = ui.available_width();
+                            let spacing = ui.spacing().item_spacing.x;
+                            let control_width = 260.0;
+                            let left_width = (total_width - control_width - spacing).max(320.0);
+
+                            ui.allocate_ui_with_layout(
+                                Vec2::new(left_width, 0.0),
+                                Layout::top_down(Align::Min),
+                                |ui| {
+                                    ui.set_min_width(left_width);
+                                    ui.spacing_mut().item_spacing =
+                                        egui::vec2(10.0, metrics.section_spacing);
+
+                                    if rack_visibility.input {
+                                        let mut expanded = channel.rack_state.input_expanded;
+                                        rack_section(
+                                            ui,
+                                            palette,
+                                            &mut expanded,
+                                            "Input Routing",
+                                            |ui| {
+                                                input_section(ui, channel, palette);
+                                            },
+                                        );
+                                        channel.rack_state.input_expanded = expanded;
+                                    }
+
+                                    if rack_visibility.pre {
+                                        let mut expanded = channel.rack_state.pre_expanded;
+                                        rack_section(ui, palette, &mut expanded, "Pre", |ui| {
+                                            pre_section(ui, channel, palette);
+                                        });
+                                        channel.rack_state.pre_expanded = expanded;
+                                    }
+
+                                    if rack_visibility.strip {
+                                        let mut expanded = channel.rack_state.strip_expanded;
+                                        rack_section(
+                                            ui,
+                                            palette,
+                                            &mut expanded,
+                                            "Channel Strip",
+                                            |ui| {
+                                                channel_strip_section(ui, channel, palette);
+                                            },
+                                        );
+                                        channel.rack_state.strip_expanded = expanded;
+                                    }
+
+                                    if rack_visibility.eq {
+                                        let mut expanded = channel.rack_state.eq_expanded;
+                                        rack_section(ui, palette, &mut expanded, "EQ", |ui| {
+                                            eq_section(ui, channel, palette);
+                                        });
+                                        channel.rack_state.eq_expanded = expanded;
+                                    }
+
+                                    if rack_visibility.inserts {
+                                        let mut expanded = channel.rack_state.inserts_expanded;
+                                        rack_section(ui, palette, &mut expanded, "Inserts", |ui| {
+                                            inserts_panel(
+                                                ui, channel, callbacks, palette, &metrics,
+                                            );
+                                        });
+                                        channel.rack_state.inserts_expanded = expanded;
+                                    }
+
+                                    if rack_visibility.sends {
+                                        let mut expanded = channel.rack_state.sends_expanded;
+                                        rack_section(ui, palette, &mut expanded, "Sends", |ui| {
+                                            sends_section(
+                                                ui, channel, callbacks, palette, &metrics,
+                                            );
+                                        });
+                                        channel.rack_state.sends_expanded = expanded;
+                                    }
+
+                                    if rack_visibility.cues {
+                                        let mut expanded = channel.rack_state.cues_expanded;
+                                        rack_section(
+                                            ui,
+                                            palette,
+                                            &mut expanded,
+                                            "Cue Sends",
+                                            |ui| {
+                                                cue_section(ui, channel, palette, &metrics);
+                                            },
+                                        );
+                                        channel.rack_state.cues_expanded = expanded;
+                                    }
+                                },
+                            );
+
+                            ui.add_space(spacing);
+
+                            let response = ui.allocate_ui_with_layout(
+                                Vec2::new(control_width, 0.0),
+                                Layout::top_down(Align::Min),
+                                |ui| {
+                                    channel_strip_controls(
+                                        ui, channel, callbacks, palette, &metrics,
+                                    )
+                                },
+                            );
+                            reset_request = response.inner;
+                        });
+                        reset_request
+                    })
+                    .inner;
+
+                if let Some(reset) = reset_request {
+                    match reset {
+                        ResetRequest::All => state.reset_peaks_all(),
+                        ResetRequest::Channel(id) => state.reset_peaks_for(id),
+                    }
+                }
             }
         });
 }
@@ -584,78 +735,9 @@ fn channel_strip(
                 channel.rack_state.cues_expanded = expanded;
             }
 
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(12.0, 0.0);
-                let meter = &channel.meter;
-                let rms = 0.5 * (meter.rms_l + meter.rms_r);
-                let meter_response = ui.add(
-                    LevelMeter::new(palette)
-                        .with_levels(meter.peak_l, meter.peak_r, rms)
-                        .with_size(egui::vec2(metrics.meter_w, metrics.fader_h))
-                        .with_clip(meter.clip_l, meter.clip_r)
-                        .interactive(true),
-                );
-                if meter_response.double_clicked() {
-                    let all = ui.input(|input| input.modifiers.shift);
-                    reset_request = Some(if all {
-                        ResetRequest::All
-                    } else {
-                        ResetRequest::Channel(channel.id)
-                    });
-                }
-
-                ui.vertical(|ui| {
-                    let fader_response = ui.add(
-                        Fader::new(&mut channel.gain_db, -60.0, 12.0, 0.0, palette)
-                            .with_height(metrics.fader_h),
-                    );
-                    if fader_response.changed() {
-                        (callbacks.set_gain_pan)(channel.id, channel.gain_db, channel.pan);
-                    }
-                    ui.add_space(4.0);
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        ui.label(
-                            RichText::new(format!("{:.1} dB", channel.gain_db))
-                                .small()
-                                .color(palette.text_muted),
-                        );
-                    });
-                });
-            });
-
-            ui.add_space(6.0);
-            ui.with_layout(Layout::top_down(Align::Center), |ui| {
-                let pan_response = ui.add(
-                    Knob::new(&mut channel.pan, -1.0, 1.0, 0.0, "Pan", palette)
-                        .with_diameter(metrics.pan_knob_diameter),
-                );
-                if pan_response.changed() {
-                    (callbacks.set_gain_pan)(channel.id, channel.gain_db, channel.pan);
-                }
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
-                    let mute_response = ui
-                        .add(
-                            StateToggleButton::new(&mut channel.mute, "M", palette)
-                                .with_width(40.0),
-                        )
-                        .on_hover_text("Mute");
-                    if mute_response.changed() {
-                        (callbacks.set_mute)(channel.id, channel.mute);
-                    }
-                    let solo_response = ui
-                        .add(
-                            StateToggleButton::new(&mut channel.solo, "S", palette)
-                                .with_width(40.0),
-                        )
-                        .on_hover_text("Solo");
-                    if solo_response.changed() {
-                        (callbacks.set_solo)(channel.id, channel.solo);
-                    }
-                });
-            });
+            if let Some(request) = strip_controls(ui, channel, callbacks, palette, metrics) {
+                reset_request = Some(request);
+            }
         })
         .response;
 
@@ -764,6 +846,226 @@ fn strip_header(ui: &mut egui::Ui, channel: &mut Channel, palette: &HarmoniqPale
                 });
             });
         });
+}
+
+fn strip_controls(
+    ui: &mut egui::Ui,
+    channel: &mut Channel,
+    callbacks: &mut crate::MixerCallbacks,
+    palette: &HarmoniqPalette,
+    metrics: &StripMetrics,
+) -> Option<ResetRequest> {
+    ui.add_space(6.0);
+    let mut reset_request = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(12.0, 0.0);
+        let meter = &channel.meter;
+        let rms = 0.5 * (meter.rms_l + meter.rms_r);
+        let meter_response = ui.add(
+            LevelMeter::new(palette)
+                .with_levels(meter.peak_l, meter.peak_r, rms)
+                .with_size(egui::vec2(metrics.meter_w, metrics.fader_h))
+                .with_clip(meter.clip_l, meter.clip_r)
+                .interactive(true),
+        );
+        if meter_response.double_clicked() {
+            let all = ui.input(|input| input.modifiers.shift);
+            reset_request = Some(if all {
+                ResetRequest::All
+            } else {
+                ResetRequest::Channel(channel.id)
+            });
+        }
+
+        ui.vertical(|ui| {
+            let fader_response = ui.add(
+                Fader::new(&mut channel.gain_db, -60.0, 12.0, 0.0, palette)
+                    .with_height(metrics.fader_h),
+            );
+            if fader_response.changed() {
+                (callbacks.set_gain_pan)(channel.id, channel.gain_db, channel.pan);
+            }
+            ui.add_space(4.0);
+            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                ui.label(
+                    RichText::new(format!("{:.1} dB", channel.gain_db))
+                        .small()
+                        .color(palette.text_muted),
+                );
+            });
+        });
+    });
+
+    ui.add_space(6.0);
+    ui.with_layout(Layout::top_down(Align::Center), |ui| {
+        let pan_response = ui.add(
+            Knob::new(&mut channel.pan, -1.0, 1.0, 0.0, "Pan", palette)
+                .with_diameter(metrics.pan_knob_diameter),
+        );
+        if pan_response.changed() {
+            (callbacks.set_gain_pan)(channel.id, channel.gain_db, channel.pan);
+        }
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+            let mute_response = ui
+                .add(StateToggleButton::new(&mut channel.mute, "M", palette).with_width(40.0))
+                .on_hover_text("Mute");
+            if mute_response.changed() {
+                (callbacks.set_mute)(channel.id, channel.mute);
+            }
+            let solo_response = ui
+                .add(StateToggleButton::new(&mut channel.solo, "S", palette).with_width(40.0))
+                .on_hover_text("Solo");
+            if solo_response.changed() {
+                (callbacks.set_solo)(channel.id, channel.solo);
+            }
+        });
+    });
+
+    reset_request
+}
+
+fn channel_strip_controls(
+    ui: &mut egui::Ui,
+    channel: &mut Channel,
+    callbacks: &mut crate::MixerCallbacks,
+    palette: &HarmoniqPalette,
+    metrics: &StripMetrics,
+) -> Option<ResetRequest> {
+    ui.set_width(260.0);
+    let mut reset_request = strip_controls(ui, channel, callbacks, palette, metrics);
+
+    ui.add_space(12.0);
+    ui.label(
+        RichText::new("Quick Controls")
+            .strong()
+            .color(palette.text_primary),
+    );
+    ui.add_space(6.0);
+    quick_controls_grid(ui, channel, palette, metrics);
+
+    ui.add_space(16.0);
+    ui.label(
+        RichText::new("Meter History")
+            .strong()
+            .color(palette.text_primary),
+    );
+    ui.add_space(6.0);
+    meter_history_plot(ui, channel, palette);
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new(format!(
+            "Peak Hold L {l:.1} dB | R {r:.1} dB",
+            l = level_to_db(channel.meter.peak_hold_l),
+            r = level_to_db(channel.meter.peak_hold_r),
+        ))
+        .small()
+        .color(palette.text_muted),
+    );
+    if channel.meter.clip_l || channel.meter.clip_r {
+        ui.label(
+            RichText::new("Clipping detected")
+                .color(palette.accent)
+                .strong(),
+        );
+    }
+
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+        if ui
+            .button(RichText::new("Reset Peaks").color(palette.text_primary))
+            .clicked()
+        {
+            reset_request = Some(ResetRequest::Channel(channel.id));
+        }
+        if ui
+            .button(RichText::new("Reset All").color(palette.text_primary))
+            .clicked()
+        {
+            reset_request = Some(ResetRequest::All);
+        }
+    });
+
+    reset_request
+}
+
+fn quick_controls_grid(
+    ui: &mut egui::Ui,
+    channel: &mut Channel,
+    palette: &HarmoniqPalette,
+    metrics: &StripMetrics,
+) {
+    egui::Grid::new(("channel_strip_quick_controls", channel.id))
+        .spacing(egui::vec2(12.0, 14.0))
+        .num_columns(4)
+        .show(ui, |grid_ui| {
+            for row in 0..2 {
+                for col in 0..4 {
+                    let index = row * 4 + col;
+                    grid_ui.vertical(|cell_ui| {
+                        cell_ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(format!("QC{}", index + 1))
+                                    .small()
+                                    .color(palette.text_muted),
+                            );
+                            ui.add(
+                                Knob::new(
+                                    &mut channel.quick_controls[index],
+                                    0.0,
+                                    1.0,
+                                    0.5,
+                                    "",
+                                    palette,
+                                )
+                                .with_diameter(metrics.quick_control_width),
+                            );
+                        });
+                    });
+                }
+                grid_ui.end_row();
+            }
+        });
+}
+
+fn meter_history_plot(ui: &mut egui::Ui, channel: &Channel, palette: &HarmoniqPalette) {
+    let width = ui.available_width().max(180.0);
+    let size = Vec2::new(width, 92.0);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 8.0, palette.mixer_slot_bg);
+    painter.rect_stroke(rect, 8.0, Stroke::new(1.0, palette.mixer_slot_border));
+
+    let zero_line = rect.bottom();
+    painter.line_segment(
+        [
+            Pos2::new(rect.left(), zero_line),
+            Pos2::new(rect.right(), zero_line),
+        ],
+        Stroke::new(1.0, palette.toolbar_outline.gamma_multiply(0.5)),
+    );
+
+    if channel.meter_history.len() > 1 {
+        let denom = (channel.meter_history.len() - 1) as f32;
+        let mut points = Vec::with_capacity(channel.meter_history.len());
+        for (idx, value) in channel.meter_history.iter().enumerate() {
+            let t = idx as f32 / denom;
+            let x = egui::lerp(rect.left()..=rect.right(), t);
+            let y = rect.bottom() - rect.height() * value.clamp(0.0, 1.0);
+            points.push(Pos2::new(x, y));
+        }
+        painter.add(Shape::line(points, Stroke::new(1.6, palette.accent_alt)));
+    }
+}
+
+fn level_to_db(level: f32) -> f32 {
+    if level <= 0.000_001 {
+        -80.0
+    } else {
+        20.0 * level.log10()
+    }
 }
 
 fn rack_section(
