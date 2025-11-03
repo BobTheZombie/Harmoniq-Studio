@@ -211,30 +211,25 @@ fn step_grid(ui: &mut egui::Ui, pat: PatternId, ch: &mut Channel) {
             if resp.hovered() && ui.input(|i| i.pointer.secondary_clicked()) {
                 ui.memory_mut(|m| m.toggle_popup(resp.id));
             }
-            egui::popup_below_widget(
-                ui,
-                resp.id,
-                &resp,
-                |ui: &mut egui::Ui| {
-                    ui.set_min_width(160.0);
-                    ui.label("Step params");
-                    ui.add(egui::Slider::new(&mut st.velocity, 1..=127).text("Velocity"));
-                    let mut pan = st.pan as i32;
-                    if ui
-                        .add(egui::Slider::new(&mut pan, -64..=63).text("Pan"))
-                        .changed()
-                    {
-                        st.pan = pan as i8;
-                    }
-                    let mut shift = st.shift_ticks as i32;
-                    if ui
-                        .add(egui::Slider::new(&mut shift, -48..=48).text("Shift"))
-                        .changed()
-                    {
-                        st.shift_ticks = shift as i16;
-                    }
-                },
-            );
+            egui::popup_below_widget(ui, resp.id, &resp, |ui: &mut egui::Ui| {
+                ui.set_min_width(160.0);
+                ui.label("Step params");
+                ui.add(egui::Slider::new(&mut st.velocity, 1..=127).text("Velocity"));
+                let mut pan = st.pan as i32;
+                if ui
+                    .add(egui::Slider::new(&mut pan, -64..=63).text("Pan"))
+                    .changed()
+                {
+                    st.pan = pan as i8;
+                }
+                let mut shift = st.shift_ticks as i32;
+                if ui
+                    .add(egui::Slider::new(&mut shift, -48..=48).text("Shift"))
+                    .changed()
+                {
+                    st.shift_ticks = shift as i16;
+                }
+            });
         }
     });
 
