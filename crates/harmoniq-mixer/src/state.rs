@@ -5,6 +5,68 @@ pub type ChannelId = u32;
 pub type InsertSlotId = usize;
 pub type SendId = u8; // 0='A',1='B',...
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MixerViewTab {
+    MixConsole,
+    ChannelStrip,
+    Meter,
+    ControlRoom,
+}
+
+impl Default for MixerViewTab {
+    fn default() -> Self {
+        Self::MixConsole
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MixerLayout {
+    pub show_left_zone: bool,
+    pub show_right_zone: bool,
+    pub show_meter_bridge: bool,
+    pub show_channel_racks: bool,
+    pub show_history: bool,
+    pub show_control_room: bool,
+}
+
+impl Default for MixerLayout {
+    fn default() -> Self {
+        Self {
+            show_left_zone: true,
+            show_right_zone: true,
+            show_meter_bridge: true,
+            show_channel_racks: true,
+            show_history: false,
+            show_control_room: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MixerRackVisibility {
+    pub input: bool,
+    pub pre: bool,
+    pub strip: bool,
+    pub eq: bool,
+    pub inserts: bool,
+    pub sends: bool,
+    pub cues: bool,
+}
+
+impl Default for MixerRackVisibility {
+    fn default() -> Self {
+        Self {
+            input: true,
+            pre: true,
+            strip: true,
+            eq: true,
+            inserts: true,
+            sends: true,
+            cues: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct InsertSlot {
     pub name: String,
@@ -12,9 +74,132 @@ pub struct InsertSlot {
 }
 
 #[derive(Clone, Debug)]
+pub struct CueSend {
+    pub id: SendId,
+    pub name: String,
+    pub level: f32,
+    pub enabled: bool,
+    pub pre_fader: bool,
+}
+
+#[derive(Clone, Debug)]
 pub struct SendSlot {
     pub id: SendId, // index, rendered as 'A','B',...
     pub level: f32, // 0..1 linear
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EqFilterKind {
+    LowCut,
+    LowShelf,
+    Peak,
+    HighShelf,
+    HighCut,
+}
+
+impl EqFilterKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            EqFilterKind::LowCut => "LowCut",
+            EqFilterKind::LowShelf => "LowShelf",
+            EqFilterKind::Peak => "Peak",
+            EqFilterKind::HighShelf => "HighShelf",
+            EqFilterKind::HighCut => "HighCut",
+        }
+    }
+}
+
+impl Default for EqFilterKind {
+    fn default() -> Self {
+        Self::Peak
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct EqBand {
+    pub enabled: bool,
+    pub kind: EqFilterKind,
+    pub frequency_hz: f32,
+    pub gain_db: f32,
+    pub q: f32,
+}
+
+impl Default for EqBand {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            kind: EqFilterKind::Peak,
+            frequency_hz: 1000.0,
+            gain_db: 0.0,
+            q: 1.0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ChannelEq {
+    pub enabled: bool,
+    pub bands: Vec<EqBand>,
+    pub analyzer_enabled: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChannelStripModules {
+    pub drive: f32,
+    pub gate_enabled: bool,
+    pub compressor: f32,
+    pub saturation: f32,
+    pub limiter_enabled: bool,
+}
+
+impl Default for ChannelStripModules {
+    fn default() -> Self {
+        Self {
+            drive: 0.0,
+            gate_enabled: false,
+            compressor: 0.0,
+            saturation: 0.0,
+            limiter_enabled: true,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ChannelRackState {
+    pub input_expanded: bool,
+    pub pre_expanded: bool,
+    pub strip_expanded: bool,
+    pub eq_expanded: bool,
+    pub inserts_expanded: bool,
+    pub sends_expanded: bool,
+    pub cues_expanded: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AutomationMode {
+    Off,
+    Read,
+    Touch,
+    Latch,
+    Write,
+}
+
+impl AutomationMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            AutomationMode::Off => "Off",
+            AutomationMode::Read => "Read",
+            AutomationMode::Touch => "Touch",
+            AutomationMode::Latch => "Latch",
+            AutomationMode::Write => "Write",
+        }
+    }
+}
+
+impl Default for AutomationMode {
+    fn default() -> Self {
+        Self::Read
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +247,22 @@ pub struct Channel {
     pub meter: Meter,
     pub meter_history: VecDeque<f32>,
     pub is_master: bool,
+    pub visible: bool,
+    pub color: [u8; 3],
+    pub input_bus: String,
+    pub output_bus: String,
+    pub record_enable: bool,
+    pub monitor_enable: bool,
+    pub phase_invert: bool,
+    pub automation: AutomationMode,
+    pub pre_gain_db: f32,
+    pub low_cut_hz: f32,
+    pub high_cut_hz: f32,
+    pub quick_controls: [f32; 8],
+    pub cue_sends: Vec<CueSend>,
+    pub eq: ChannelEq,
+    pub strip_modules: ChannelStripModules,
+    pub rack_state: ChannelRackState,
 }
 
 impl Channel {
@@ -79,6 +280,10 @@ pub struct MixerState {
     pub selected: Option<ChannelId>,
     pub routing_visible: bool,
     pub routing: RoutingMatrix,
+    pub view_tab: MixerViewTab,
+    pub layout: MixerLayout,
+    pub rack_visibility: MixerRackVisibility,
+    pub channel_filter: String,
 }
 
 impl Default for MixerState {
@@ -88,6 +293,10 @@ impl Default for MixerState {
             selected: None,
             routing_visible: false,
             routing: RoutingMatrix::default(),
+            view_tab: MixerViewTab::default(),
+            layout: MixerLayout::default(),
+            rack_visibility: MixerRackVisibility::default(),
+            channel_filter: String::new(),
         }
     }
 }
@@ -156,6 +365,69 @@ impl MixerState {
                 meter: Meter::default(),
                 meter_history: Channel::new_meter_history(),
                 is_master: false,
+                visible: true,
+                color: [96, 156, 255],
+                input_bus: format!("Input {}", i + 1),
+                output_bus: "Stereo Out".into(),
+                record_enable: false,
+                monitor_enable: false,
+                phase_invert: false,
+                automation: AutomationMode::default(),
+                pre_gain_db: 0.0,
+                low_cut_hz: 20.0,
+                high_cut_hz: 20000.0,
+                quick_controls: [0.5; 8],
+                cue_sends: vec![CueSend {
+                    id: 0,
+                    name: "Cue 1".into(),
+                    level: 0.0,
+                    enabled: false,
+                    pre_fader: false,
+                }],
+                eq: ChannelEq {
+                    enabled: true,
+                    bands: vec![
+                        EqBand {
+                            kind: EqFilterKind::LowCut,
+                            frequency_hz: 60.0,
+                            gain_db: 0.0,
+                            q: 0.7,
+                            enabled: true,
+                        },
+                        EqBand {
+                            kind: EqFilterKind::Peak,
+                            frequency_hz: 200.0,
+                            gain_db: 0.0,
+                            q: 1.2,
+                            enabled: true,
+                        },
+                        EqBand {
+                            kind: EqFilterKind::Peak,
+                            frequency_hz: 1200.0,
+                            gain_db: 0.0,
+                            q: 1.0,
+                            enabled: true,
+                        },
+                        EqBand {
+                            kind: EqFilterKind::HighShelf,
+                            frequency_hz: 8000.0,
+                            gain_db: 0.0,
+                            q: 0.7,
+                            enabled: true,
+                        },
+                    ],
+                    analyzer_enabled: true,
+                },
+                strip_modules: ChannelStripModules::default(),
+                rack_state: ChannelRackState {
+                    input_expanded: true,
+                    pre_expanded: true,
+                    strip_expanded: true,
+                    eq_expanded: true,
+                    inserts_expanded: true,
+                    sends_expanded: true,
+                    cues_expanded: true,
+                },
             });
         }
         s.channels.push(Channel {
@@ -170,6 +442,40 @@ impl MixerState {
             meter: Meter::default(),
             meter_history: Channel::new_meter_history(),
             is_master: true,
+            visible: true,
+            color: [252, 200, 64],
+            input_bus: "MixBus".into(),
+            output_bus: "Main Out".into(),
+            record_enable: false,
+            monitor_enable: false,
+            phase_invert: false,
+            automation: AutomationMode::default(),
+            pre_gain_db: 0.0,
+            low_cut_hz: 20.0,
+            high_cut_hz: 20000.0,
+            quick_controls: [0.5; 8],
+            cue_sends: vec![],
+            eq: ChannelEq {
+                enabled: true,
+                bands: vec![EqBand {
+                    kind: EqFilterKind::HighShelf,
+                    frequency_hz: 12000.0,
+                    gain_db: 0.0,
+                    q: 0.8,
+                    enabled: true,
+                }],
+                analyzer_enabled: true,
+            },
+            strip_modules: ChannelStripModules::default(),
+            rack_state: ChannelRackState {
+                input_expanded: true,
+                pre_expanded: true,
+                strip_expanded: true,
+                eq_expanded: true,
+                inserts_expanded: true,
+                sends_expanded: true,
+                cues_expanded: false,
+            },
         });
         s
     }
