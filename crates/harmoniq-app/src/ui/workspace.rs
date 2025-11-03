@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum WorkspacePane {
     Browser,
+    Sequencer,
     PianoRoll,
     Inspector,
     Console,
@@ -13,6 +14,7 @@ impl WorkspacePane {
     pub fn title(&self) -> &'static str {
         match self {
             WorkspacePane::Browser => "Browser",
+            WorkspacePane::Sequencer => "Sequencer",
             WorkspacePane::PianoRoll => "Piano Roll",
             WorkspacePane::Inspector => "Inspector",
             WorkspacePane::Console => "Console",
@@ -21,7 +23,7 @@ impl WorkspacePane {
 }
 
 pub fn build_default_workspace() -> DockState<WorkspacePane> {
-    let mut dock = DockState::new(vec![WorkspacePane::PianoRoll]);
+    let mut dock = DockState::new(vec![WorkspacePane::Sequencer, WorkspacePane::PianoRoll]);
     {
         let surface = dock.main_surface_mut();
         let [_browser_node, center_node] =

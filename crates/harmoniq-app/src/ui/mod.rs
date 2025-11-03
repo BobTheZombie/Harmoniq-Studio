@@ -19,6 +19,7 @@ pub mod notifications;
 pub mod piano_roll;
 pub mod plugin_manager;
 pub mod plugins;
+pub mod sequencer;
 pub mod shortcuts;
 pub mod transport;
 pub mod workspace;
