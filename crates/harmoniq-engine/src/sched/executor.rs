@@ -11,7 +11,7 @@ use crate::sched::events;
 use super::{buffer, graph};
 
 #[derive(Clone, Copy, Default)]
-struct Job {
+pub(crate) struct Job {
     idx: u32,
 }
 
