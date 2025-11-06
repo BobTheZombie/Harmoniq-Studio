@@ -122,7 +122,8 @@ impl MixerUiState {
             info.name = if is_master {
                 "Master".to_string()
             } else {
-                format!("Track {idx:02}")
+                let track_number = idx + 1;
+                format!("Track {track_number:02}")
             };
             info.color_rgba = if is_master {
                 [0.32, 0.32, 0.38, 1.0]
