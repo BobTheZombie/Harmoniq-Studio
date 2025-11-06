@@ -44,7 +44,7 @@ pub struct PlaylistProps<'a> {
     pub import_audio_file: &'a mut dyn FnMut(PathBuf) -> AudioSourceId,
 }
 
-pub fn render(ui: &mut Ui, mut props: PlaylistProps<'_>) {
+pub fn render(ui: &mut Ui, props: PlaylistProps<'_>) {
     let ppq = props.playlist.ppq() as f32;
     let ppq_ticks = props.playlist.ppq() as u64;
     let total_beats = props
@@ -364,7 +364,7 @@ fn draw_inspector(
 }
 
 fn track_toggle_button(ui: &mut Ui, value: &mut bool, label: &str, on_color: Color32) {
-    let mut button = Button::new(
+    let button = Button::new(
         RichText::new(label)
             .size(12.0)
             .color(Color32::from_rgb(230, 230, 230)),
@@ -499,12 +499,12 @@ fn draw_timeline(
 
     for layout in layouts {
         let track = &tracks[layout.track_index];
-        let track_color = track_color(track.color, 40, 0.5);
+        let track_base_color = track_color(track.color, 40, 0.5);
         let accent_rect = Rect::from_min_max(
             Pos2::new(lanes_rect.left() - 6.0, layout.header_top),
             Pos2::new(lanes_rect.left(), layout.total_bottom),
         );
-        painter.rect_filled(accent_rect, 2.0, track_color);
+        painter.rect_filled(accent_rect, 2.0, track_base_color);
 
         for lane_row in &layout.lane_rows {
             let lane_rect = Rect::from_min_max(
@@ -620,7 +620,7 @@ fn draw_ruler(painter: &Painter, ruler_rect: Rect, total_beats: f32) {
                 Pos2::new(x + 4.0, ruler_rect.center().y - 8.0),
                 Align2::LEFT_CENTER,
                 format!("Bar {}", beat / 4 + 1),
-                text_style,
+                text_style.clone(),
                 Color32::from_rgb(240, 240, 240),
             );
         }
