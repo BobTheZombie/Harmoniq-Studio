@@ -2874,6 +2874,7 @@ impl App for HarmoniqStudioApp {
                         self.transport_clock,
                         self.transport_state,
                         None,
+                        self.event_bus,
                     );
                 });
         }
