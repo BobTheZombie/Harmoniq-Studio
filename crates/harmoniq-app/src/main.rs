@@ -2584,7 +2584,7 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
                         self.transport_clock,
                         self.transport_state,
                         Some(self.input_focus),
-                        self.event_bus,
+                        &self.event_bus,
                     );
                 }
             }
@@ -2874,7 +2874,7 @@ impl App for HarmoniqStudioApp {
                         self.transport_clock,
                         self.transport_state,
                         None,
-                        self.event_bus,
+                        &self.event_bus,
                     );
                 });
         }
