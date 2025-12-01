@@ -43,6 +43,24 @@ impl Default for StripMetrics {
     }
 }
 
+impl StripMetrics {
+    fn scaled(strip_w: f32) -> Self {
+        let base = Self::default();
+        let scale = (strip_w / base.strip_w).clamp(0.6, 2.0);
+
+        Self {
+            fader_h: base.fader_h * scale,
+            meter_w: base.meter_w * scale,
+            strip_w: strip_w.clamp(120.0, 360.0),
+            section_spacing: base.section_spacing * scale,
+            pan_knob_diameter: base.pan_knob_diameter * scale,
+            send_knob_diameter: base.send_knob_diameter * scale,
+            cue_knob_diameter: base.cue_knob_diameter * scale,
+            quick_control_width: base.quick_control_width * scale,
+        }
+    }
+}
+
 pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
     let crate::MixerProps {
         state,
@@ -232,7 +250,7 @@ fn channel_strip_view(
                 .iter_mut()
                 .find(|c| Some(c.id) == state.selected)
             {
-                let metrics = StripMetrics::default();
+                let metrics = StripMetrics::scaled(state.layout.strip_width);
                 strip_header(ui, channel, palette);
                 ui.add_space(12.0);
 
@@ -591,7 +609,7 @@ fn channel_area(
     callbacks: &mut crate::MixerCallbacks,
     palette: &HarmoniqPalette,
 ) {
-    let metrics = StripMetrics::default();
+    let metrics = StripMetrics::scaled(state.layout.strip_width);
     let filter_text = state.channel_filter.to_lowercase();
     let filter = filter_text.trim();
 
@@ -618,6 +636,7 @@ fn channel_area(
                         palette,
                         selected == Some(channel.id),
                         &metrics,
+                        &mut state.layout,
                     );
                     if let Some(reset) = events.reset {
                         reset_requests.push(reset);
@@ -664,6 +683,7 @@ fn channel_strip(
     palette: &HarmoniqPalette,
     is_selected: bool,
     metrics: &StripMetrics,
+    layout: &mut MixerLayout,
 ) -> StripEvents {
     let mut reset_request = None;
     let mut select = false;
@@ -743,6 +763,36 @@ fn channel_strip(
 
     if strip_response.clicked() {
         select = true;
+    }
+
+    let resize_width = 10.0;
+    let handle_rect = egui::Rect::from_min_max(
+        egui::pos2(
+            strip_response.rect.max.x - resize_width,
+            strip_response.rect.min.y,
+        ),
+        strip_response.rect.max,
+    );
+    let resize_id = ui.id().with(("mixer_strip_resize", channel.id));
+    let resize_response = ui.interact(handle_rect, resize_id, Sense::drag());
+
+    if resize_response.hovered() || resize_response.dragged() {
+        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
+    }
+
+    if let Some(pointer) = resize_response.interact_pointer_pos() {
+        let min_w = 120.0;
+        let max_w = 360.0;
+        let new_width = (pointer.x - strip_response.rect.min.x).clamp(min_w, max_w);
+        layout.strip_width = new_width;
+    }
+
+    if resize_response.hovered() {
+        ui.painter().rect_filled(
+            handle_rect,
+            8.0,
+            palette.mixer_strip_border.gamma_multiply(0.6),
+        );
     }
 
     strip_response.context_menu(|ui| {
@@ -1404,13 +1454,11 @@ fn sends_section(
 
         if ui.small_button("Add Send").clicked() {
             let id = channel.sends.last().map(|s| s.id + 1).unwrap_or(0);
-            channel
-                .sends
-                .push(crate::state::SendSlot {
-                    id,
-                    level: 0.0,
-                    pre_fader: false,
-                });
+            channel.sends.push(crate::state::SendSlot {
+                id,
+                level: 0.0,
+                pre_fader: false,
+            });
         }
     });
 }
