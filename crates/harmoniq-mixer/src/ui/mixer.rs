@@ -1406,7 +1406,11 @@ fn sends_section(
             let id = channel.sends.last().map(|s| s.id + 1).unwrap_or(0);
             channel
                 .sends
-                .push(crate::state::SendSlot { id, level: 0.0 });
+                .push(crate::state::SendSlot {
+                    id,
+                    level: 0.0,
+                    pre_fader: false,
+                });
         }
     });
 }
