@@ -4,6 +4,69 @@ pub type ChannelId = u32;
 pub type PatternId = u32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PluginFormat {
+    Vst3,
+    Clap,
+}
+
+#[derive(Clone, Debug)]
+pub struct MidiRouting {
+    pub input_channel: Option<u8>,
+    pub output_channel: Option<u8>,
+}
+
+impl Default for MidiRouting {
+    fn default() -> Self {
+        Self {
+            input_channel: None,
+            output_channel: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct InstrumentSlot {
+    pub id: u32,
+    pub name: String,
+    pub plugin_uid: String,
+    pub format: PluginFormat,
+    pub bypass: bool,
+    pub oversampling: Option<u32>,
+    pub key_range: (u8, u8),
+    pub velocity_range: (u8, u8),
+    pub midi_routing: MidiRouting,
+}
+
+impl InstrumentSlot {
+    pub fn new(id: u32, name: impl Into<String>, plugin_uid: String, format: PluginFormat) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            plugin_uid,
+            format,
+            bypass: false,
+            oversampling: None,
+            key_range: (0, 127),
+            velocity_range: (1, 127),
+            midi_routing: MidiRouting::default(),
+        }
+    }
+
+    pub fn bypass(&mut self, bypass: bool) {
+        self.bypass = bypass;
+    }
+
+    pub fn set_zones(&mut self, key_range: (u8, u8), velocity_range: (u8, u8)) {
+        self.key_range = key_range;
+        self.velocity_range = velocity_range;
+    }
+
+    pub fn set_oversampling(&mut self, factor: Option<u32>) {
+        self.oversampling = factor;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChannelKind {
     Instrument,
     Sample,
@@ -41,6 +104,7 @@ pub struct Channel {
     pub solo: bool,
     pub steps_per_bar: u32,
     pub steps: HashMap<PatternId, Vec<Step>>,
+    pub instrument_chain: Vec<InstrumentSlot>,
 }
 
 impl Channel {
@@ -56,6 +120,7 @@ impl Channel {
             solo: false,
             steps_per_bar: 16,
             steps: HashMap::new(),
+            instrument_chain: Vec::new(),
         }
     }
 }
@@ -136,5 +201,99 @@ impl RackState {
         }
 
         steps
+    }
+
+    pub fn add_instrument_slot(
+        &mut self,
+        channel: ChannelId,
+        name: impl Into<String>,
+        plugin_uid: String,
+        format: PluginFormat,
+    ) -> Option<u32> {
+        let channel = self.channels.iter_mut().find(|c| c.id == channel)?;
+        let next_id = channel
+            .instrument_chain
+            .iter()
+            .map(|slot| slot.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        channel
+            .instrument_chain
+            .push(InstrumentSlot::new(next_id, name, plugin_uid, format));
+        Some(next_id)
+    }
+
+    pub fn configure_instrument_slot(
+        &mut self,
+        channel: ChannelId,
+        slot_id: u32,
+        bypass: Option<bool>,
+        oversampling: Option<Option<u32>>,
+        key_range: Option<(u8, u8)>,
+        velocity_range: Option<(u8, u8)>,
+        midi_routing: Option<MidiRouting>,
+    ) {
+        if let Some(slot) = self
+            .channels
+            .iter_mut()
+            .find(|c| c.id == channel)
+            .and_then(|c| c.instrument_chain.iter_mut().find(|s| s.id == slot_id))
+        {
+            if let Some(bypass) = bypass {
+                slot.bypass(bypass);
+            }
+            if let Some(oversampling) = oversampling {
+                slot.set_oversampling(oversampling);
+            }
+            if let Some(key_range) = key_range {
+                slot.key_range = key_range;
+            }
+            if let Some(velocity_range) = velocity_range {
+                slot.velocity_range = velocity_range;
+            }
+            if let Some(midi_routing) = midi_routing {
+                slot.midi_routing = midi_routing;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn instrument_chain_supports_zones_and_bypass() {
+        let mut rack = RackState::new_default();
+        let channel = rack.add_channel("Keys".into(), ChannelKind::Instrument, None);
+        let slot_id = rack
+            .add_instrument_slot(channel, "Piano", "uid://piano".into(), PluginFormat::Clap)
+            .unwrap();
+
+        rack.configure_instrument_slot(
+            channel,
+            slot_id,
+            Some(true),
+            Some(Some(2)),
+            Some((21, 108)),
+            Some((10, 120)),
+            Some(MidiRouting {
+                input_channel: Some(1),
+                output_channel: Some(1),
+            }),
+        );
+
+        let channel_ref = rack.channels.iter().find(|c| c.id == channel).unwrap();
+        let slot = channel_ref
+            .instrument_chain
+            .iter()
+            .find(|s| s.id == slot_id)
+            .unwrap();
+        assert!(slot.bypass);
+        assert_eq!(slot.oversampling, Some(2));
+        assert_eq!(slot.key_range, (21, 108));
+        assert_eq!(slot.velocity_range, (10, 120));
+        assert_eq!(slot.midi_routing.input_channel, Some(1));
     }
 }

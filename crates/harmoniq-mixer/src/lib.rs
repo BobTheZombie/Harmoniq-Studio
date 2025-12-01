@@ -11,7 +11,9 @@ pub mod ui;
 
 #[cfg(feature = "egui")]
 use harmoniq_ui::HarmoniqPalette;
-use state::{ChannelId, MixerState, SendId};
+#[cfg(feature = "egui")]
+use state::MixerState;
+use state::{ChannelId, SendId};
 
 /// Callbacks provided by the host app (non-RT).
 pub struct MixerCallbacks {

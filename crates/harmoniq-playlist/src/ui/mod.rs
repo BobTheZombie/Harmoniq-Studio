@@ -180,14 +180,16 @@ pub fn render(ui: &mut Ui, props: PlaylistProps<'_>) {
                             {
                                 let dummy_path = PathBuf::from("import.wav");
                                 let source = AudioSourceId::from_path(dummy_path.as_path());
-                                let clip = Clip {
-                                    id: ClipId(rand::random::<u64>()),
-                                    name: "Audio Clip".into(),
-                                    start_ticks: ticks,
-                                    duration_ticks: ppq_ticks.max(1),
-                                    color: track.color,
-                                    kind: crate::state::ClipKind::Audio { source },
-                                };
+                                let mut clip = Clip::new(
+                                    ClipId(rand::random::<u64>()),
+                                    "Audio Clip",
+                                    ticks,
+                                    ppq_ticks.max(1),
+                                    track.color,
+                                    crate::state::ClipKind::Audio { source },
+                                );
+                                clip.fade_in_ticks = 0;
+                                clip.fade_out_ticks = 0;
                                 track.add_clip_to_lane(lane_id, clip);
                             }
                         }

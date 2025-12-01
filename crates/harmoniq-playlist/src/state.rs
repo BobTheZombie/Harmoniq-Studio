@@ -1,6 +1,7 @@
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
+use rand::random;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_TRACK_COLORS: &[[f32; 4]] = &[
@@ -54,11 +55,37 @@ pub struct Clip {
     pub duration_ticks: u64,
     pub color: [f32; 4],
     pub kind: ClipKind,
+    pub fade_in_ticks: u64,
+    pub fade_out_ticks: u64,
+    pub crossfade_with: Option<ClipId>,
+    pub time_stretch_enabled: bool,
 }
 
 impl Clip {
     pub fn end_ticks(&self) -> u64 {
         self.start_ticks + self.duration_ticks
+    }
+
+    pub fn new(
+        id: ClipId,
+        name: impl Into<String>,
+        start_ticks: u64,
+        duration_ticks: u64,
+        color: [f32; 4],
+        kind: ClipKind,
+    ) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            start_ticks,
+            duration_ticks,
+            color,
+            kind,
+            fade_in_ticks: 0,
+            fade_out_ticks: 0,
+            crossfade_with: None,
+            time_stretch_enabled: false,
+        }
     }
 }
 
@@ -334,6 +361,146 @@ impl Playlist {
         self.selection = None;
     }
 
+    fn track_lane_mut(&mut self, track: TrackId, lane_id: u32) -> Option<&mut TrackLane> {
+        self.tracks
+            .iter_mut()
+            .find(|t| t.id == track)
+            .and_then(|t| t.lane_mut(lane_id))
+    }
+
+    pub fn split_clip(
+        &mut self,
+        track: TrackId,
+        lane_id: u32,
+        clip_id: ClipId,
+        split_tick: u64,
+    ) -> Option<(ClipId, ClipId)> {
+        let lane = self.track_lane_mut(track, lane_id)?;
+        let index = lane.clips.iter().position(|c| c.id == clip_id)?;
+        let clip = lane.clips.remove(index);
+        if split_tick <= clip.start_ticks || split_tick >= clip.end_ticks() {
+            lane.clips.insert(index, clip);
+            return None;
+        }
+
+        let right_id = ClipId(random());
+        let left_duration = split_tick - clip.start_ticks;
+        let right_duration = clip.end_ticks() - split_tick;
+
+        let mut left = Clip {
+            duration_ticks: left_duration,
+            ..clip.clone()
+        };
+        left.fade_out_ticks = left.fade_out_ticks.min(left_duration);
+
+        let mut right = clip;
+        right.id = right_id;
+        right.start_ticks = split_tick;
+        right.duration_ticks = right_duration;
+        right.fade_in_ticks = right.fade_in_ticks.min(right_duration);
+        left.crossfade_with = Some(right_id);
+        right.crossfade_with = Some(left.id);
+        right.time_stretch_enabled = false;
+
+        lane.add_clip(left);
+        lane.add_clip(right);
+        Some((clip_id, right_id))
+    }
+
+    pub fn glue_clips(
+        &mut self,
+        track: TrackId,
+        lane_id: u32,
+        first: ClipId,
+        second: ClipId,
+    ) -> Option<ClipId> {
+        let lane = self.track_lane_mut(track, lane_id)?;
+        let first_idx = lane.clips.iter().position(|c| c.id == first)?;
+        let second_idx = lane.clips.iter().position(|c| c.id == second)?;
+        let (a, b) = if first_idx < second_idx {
+            (lane.take_clip(first)?, lane.take_clip(second)?)
+        } else {
+            (lane.take_clip(second)?, lane.take_clip(first)?)
+        };
+
+        if a.end_ticks() != b.start_ticks {
+            lane.add_clip(a);
+            lane.add_clip(b);
+            return None;
+        }
+
+        let merged_id = ClipId(random());
+        let mut merged = Clip::new(
+            merged_id,
+            format!("{} + {}", a.name, b.name),
+            a.start_ticks,
+            b.end_ticks() - a.start_ticks,
+            a.color,
+            a.kind.clone(),
+        );
+        merged.fade_in_ticks = a.fade_in_ticks;
+        merged.fade_out_ticks = b.fade_out_ticks;
+        merged.time_stretch_enabled = false;
+        lane.add_clip(merged);
+        Some(merged_id)
+    }
+
+    pub fn slip_clip(
+        &mut self,
+        track: TrackId,
+        lane_id: u32,
+        clip_id: ClipId,
+        delta: i64,
+    ) -> Option<()> {
+        let lane = self.track_lane_mut(track, lane_id)?;
+        let clip = lane.clips.iter_mut().find(|c| c.id == clip_id)?;
+        let start = clip.start_ticks as i64 + delta;
+        clip.start_ticks = start.max(0) as u64;
+        clip.fade_in_ticks = clip.fade_in_ticks.min(clip.duration_ticks);
+        clip.fade_out_ticks = clip.fade_out_ticks.min(clip.duration_ticks);
+        lane.clips.sort_by_key(|c| c.start_ticks);
+        Some(())
+    }
+
+    pub fn duplicate_clip(
+        &mut self,
+        track: TrackId,
+        lane_id: u32,
+        clip_id: ClipId,
+        target_start: u64,
+    ) -> Option<ClipId> {
+        let lane = self.track_lane_mut(track, lane_id)?;
+        let source = lane.clips.iter().find(|c| c.id == clip_id)?.clone();
+        let mut duplicate = source;
+        duplicate.id = ClipId(random());
+        duplicate.start_ticks = target_start;
+        duplicate.crossfade_with = None;
+        duplicate.time_stretch_enabled = false;
+        lane.add_clip(duplicate.clone());
+        Some(duplicate.id)
+    }
+
+    pub fn drop_clip_from_browser(
+        &mut self,
+        track: TrackId,
+        lane_id: u32,
+        name: impl Into<String>,
+        start_ticks: u64,
+        duration_ticks: u64,
+        color: [f32; 4],
+        kind: ClipKind,
+    ) -> ClipId {
+        let id = ClipId(random());
+        let mut clip = Clip::new(id, name, start_ticks, duration_ticks, color, kind);
+        clip.fade_in_ticks = 0;
+        clip.fade_out_ticks = 0;
+        clip.time_stretch_enabled = false;
+        if let Some(lane) = self.track_lane_mut(track, lane_id) {
+            lane.add_clip(clip);
+        }
+        id
+    }
+
     pub fn register_drop(&mut self, path: PathBuf) {
         self.dropped_files.push(path);
     }
@@ -353,40 +520,40 @@ impl Playlist {
             track.add_lane(TrackLane::new(1, "Automation"));
             track.add_clip_to_lane(
                 0,
-                Clip {
-                    id: ClipId((index as u64) * 10 + 1),
-                    name: format!("{} Pattern", name),
-                    start_ticks: 0,
-                    duration_ticks: 4 * ppq,
-                    color: track.color,
-                    kind: ClipKind::Pattern {
+                Clip::new(
+                    ClipId((index as u64) * 10 + 1),
+                    format!("{} Pattern", name),
+                    0,
+                    4 * ppq,
+                    track.color,
+                    ClipKind::Pattern {
                         pattern_id: (index as u32) + 1,
                     },
-                },
+                ),
             );
             track.add_clip_to_lane(
                 0,
-                Clip {
-                    id: ClipId((index as u64) * 10 + 2),
-                    name: format!("{} Variation", name),
-                    start_ticks: 6 * ppq,
-                    duration_ticks: 4 * ppq,
-                    color: track.color,
-                    kind: ClipKind::Pattern {
+                Clip::new(
+                    ClipId((index as u64) * 10 + 2),
+                    format!("{} Variation", name),
+                    6 * ppq,
+                    4 * ppq,
+                    track.color,
+                    ClipKind::Pattern {
                         pattern_id: (index as u32) + 101,
                     },
-                },
+                ),
             );
             track.add_clip_to_lane(
                 1,
-                Clip {
-                    id: ClipId((index as u64) * 10 + 3),
-                    name: "Filter Sweep".into(),
-                    start_ticks: ppq,
-                    duration_ticks: 5 * ppq,
-                    color: [track.color[0], track.color[1], track.color[2], 0.7],
-                    kind: ClipKind::Automation,
-                },
+                Clip::new(
+                    ClipId((index as u64) * 10 + 3),
+                    "Filter Sweep",
+                    ppq,
+                    5 * ppq,
+                    [track.color[0], track.color[1], track.color[2], 0.7],
+                    ClipKind::Automation,
+                ),
             );
             track.rack.push(RackSlot::new(
                 0,
@@ -401,5 +568,47 @@ impl Playlist {
                 .push(RackSlot::new(2, "Delay", RackSlotKind::Send));
             self.tracks.push(track);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_and_glue_clips_preserve_fades() {
+        let mut playlist = Playlist::new_default(960);
+        let track = TrackId(0);
+        let lane = 0;
+        let clip_id = playlist.tracks[0].lanes[0].clips[0].id;
+        let (_, right) = playlist.split_clip(track, lane, clip_id, 960).unwrap();
+        let lane_ref = &playlist.tracks[0].lanes[0];
+        assert!(lane_ref.clips.iter().any(|c| c.id == right));
+        let merged = playlist.glue_clips(track, lane, clip_id, right).unwrap();
+        let merged_clip = playlist.tracks[0].lanes[0]
+            .clips
+            .iter()
+            .find(|c| c.id == merged)
+            .unwrap();
+        assert_eq!(merged_clip.fade_in_ticks, 0);
+        assert_eq!(merged_clip.fade_out_ticks, 0);
+    }
+
+    #[test]
+    fn slip_and_duplicate_keep_ordering() {
+        let mut playlist = Playlist::new_default(960);
+        let track = TrackId(1);
+        let lane = 0;
+        let source = playlist.tracks[1].lanes[0].clips[0].id;
+        playlist.slip_clip(track, lane, source, 480).unwrap();
+        let dup = playlist
+            .duplicate_clip(track, lane, source, 960 * 8)
+            .unwrap();
+        let lane = &playlist.tracks[1].lanes[0];
+        assert!(lane.clips.iter().any(|c| c.id == dup));
+        assert!(lane
+            .clips
+            .windows(2)
+            .all(|w| w[0].start_ticks <= w[1].start_ticks));
     }
 }
