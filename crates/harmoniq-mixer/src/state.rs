@@ -5,6 +5,49 @@ pub type ChannelId = u32;
 pub type InsertSlotId = usize;
 pub type SendId = u8; // 0='A',1='B',...
 
+pub const MAX_INSERT_SLOTS: usize = 10;
+pub const MAX_SEND_SLOTS: usize = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PluginFormat {
+    Vst3,
+    Clap,
+}
+
+impl PluginFormat {
+    pub fn label(&self) -> &'static str {
+        match self {
+            PluginFormat::Vst3 => "VST3",
+            PluginFormat::Clap => "CLAP",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanLaw {
+    Linear,
+    ConstantPower,
+    Minus3Db,
+}
+
+impl Default for PanLaw {
+    fn default() -> Self {
+        Self::ConstantPower
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InsertPosition {
+    PreFader,
+    PostFader,
+}
+
+impl Default for InsertPosition {
+    fn default() -> Self {
+        Self::PreFader
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MixerViewTab {
     MixConsole,
@@ -71,6 +114,49 @@ impl Default for MixerRackVisibility {
 pub struct InsertSlot {
     pub name: String,
     pub bypass: bool,
+    pub plugin_uid: Option<String>,
+    pub format: Option<PluginFormat>,
+    pub position: InsertPosition,
+    pub sidechains: Vec<SidechainInput>,
+    pub delay_comp_samples: u32,
+}
+
+impl InsertSlot {
+    pub fn empty() -> Self {
+        Self {
+            name: "Empty".into(),
+            bypass: false,
+            plugin_uid: None,
+            format: None,
+            position: InsertPosition::default(),
+            sidechains: Vec::new(),
+            delay_comp_samples: 0,
+        }
+    }
+
+    pub fn with_plugin(
+        name: impl Into<String>,
+        uid: impl Into<String>,
+        format: PluginFormat,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            bypass: false,
+            plugin_uid: Some(uid.into()),
+            format: Some(format),
+            position: InsertPosition::default(),
+            sidechains: Vec::new(),
+            delay_comp_samples: 0,
+        }
+    }
+
+    pub fn add_sidechain(&mut self, source: ChannelId, bus: impl Into<String>, pre_fader: bool) {
+        self.sidechains.push(SidechainInput {
+            source,
+            bus: bus.into(),
+            pre_fader,
+        });
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -86,6 +172,14 @@ pub struct CueSend {
 pub struct SendSlot {
     pub id: SendId, // index, rendered as 'A','B',...
     pub level: f32, // 0..1 linear
+    pub pre_fader: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct SidechainInput {
+    pub source: ChannelId,
+    pub bus: String,
+    pub pre_fader: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -263,6 +357,8 @@ pub struct Channel {
     pub eq: ChannelEq,
     pub strip_modules: ChannelStripModules,
     pub rack_state: ChannelRackState,
+    pub inserts_delay_comp: u32,
+    pub pan_law: PanLaw,
 }
 
 impl Channel {
@@ -272,6 +368,49 @@ impl Channel {
         let mut history = VecDeque::with_capacity(Self::METER_HISTORY_CAPACITY);
         history.resize(Self::METER_HISTORY_CAPACITY, 0.0);
         history
+    }
+
+    pub fn ensure_insert_slot(&mut self, index: usize) {
+        while self.inserts.len() <= index && self.inserts.len() < MAX_INSERT_SLOTS {
+            self.inserts.push(InsertSlot::empty());
+        }
+    }
+
+    pub fn insert_plugin(
+        &mut self,
+        index: usize,
+        name: impl Into<String>,
+        uid: impl Into<String>,
+        format: PluginFormat,
+        position: InsertPosition,
+    ) -> Option<()> {
+        self.ensure_insert_slot(index);
+        let slot = self.inserts.get_mut(index)?;
+        *slot = InsertSlot::with_plugin(name, uid, format);
+        slot.position = position;
+        Some(())
+    }
+
+    pub fn toggle_insert_bypass(&mut self, index: usize) {
+        if let Some(slot) = self.inserts.get_mut(index) {
+            slot.bypass = !slot.bypass;
+        }
+    }
+
+    pub fn configure_send(&mut self, id: SendId, level: f32, pre_fader: bool) {
+        if self.sends.len() < MAX_SEND_SLOTS {
+            for new_id in self.sends.len() as u8..MAX_SEND_SLOTS as u8 {
+                self.sends.push(SendSlot {
+                    id: new_id,
+                    level: 0.0,
+                    pre_fader: false,
+                });
+            }
+        }
+        if let Some(slot) = self.sends.iter_mut().find(|s| s.id == id) {
+            slot.level = level.clamp(0.0, 1.0);
+            slot.pre_fader = pre_fader;
+        }
     }
 }
 
@@ -284,6 +423,8 @@ pub struct MixerState {
     pub layout: MixerLayout,
     pub rack_visibility: MixerRackVisibility,
     pub channel_filter: String,
+    pub master: MasterProcessing,
+    pub default_pan_law: PanLaw,
 }
 
 impl Default for MixerState {
@@ -297,6 +438,8 @@ impl Default for MixerState {
             layout: MixerLayout::default(),
             rack_visibility: MixerRackVisibility::default(),
             channel_filter: String::new(),
+            master: MasterProcessing::default(),
+            default_pan_law: PanLaw::default(),
         }
     }
 }
@@ -304,6 +447,23 @@ impl Default for MixerState {
 #[derive(Clone, Debug, Default)]
 pub struct RoutingMatrix {
     pub routes: HashMap<ChannelId, HashMap<String, f32>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct MasterProcessing {
+    pub gain_db: f32,
+    pub limiter_enabled: bool,
+    pub dither_on_export: bool,
+}
+
+impl Default for MasterProcessing {
+    fn default() -> Self {
+        Self {
+            gain_db: 0.0,
+            limiter_enabled: true,
+            dither_on_export: true,
+        }
+    }
 }
 
 impl RoutingMatrix {
@@ -357,11 +517,14 @@ impl MixerState {
                 pan: 0.0,
                 mute: false,
                 solo: false,
-                inserts: Vec::new(),
-                sends: vec![
-                    SendSlot { id: 0, level: 0.0 },
-                    SendSlot { id: 1, level: 0.0 },
-                ],
+                inserts: vec![InsertSlot::empty(); MAX_INSERT_SLOTS],
+                sends: (0..MAX_SEND_SLOTS)
+                    .map(|id| SendSlot {
+                        id: id as u8,
+                        level: 0.0,
+                        pre_fader: false,
+                    })
+                    .collect(),
                 meter: Meter::default(),
                 meter_history: Channel::new_meter_history(),
                 is_master: false,
@@ -428,6 +591,8 @@ impl MixerState {
                     sends_expanded: true,
                     cues_expanded: true,
                 },
+                inserts_delay_comp: 0,
+                pan_law: PanLaw::ConstantPower,
             });
         }
         s.channels.push(Channel {
@@ -437,7 +602,7 @@ impl MixerState {
             pan: 0.0,
             mute: false,
             solo: false,
-            inserts: Vec::new(),
+            inserts: vec![InsertSlot::empty(); MAX_INSERT_SLOTS],
             sends: vec![],
             meter: Meter::default(),
             meter_history: Channel::new_meter_history(),
@@ -476,6 +641,8 @@ impl MixerState {
                 sends_expanded: true,
                 cues_expanded: false,
             },
+            inserts_delay_comp: 0,
+            pan_law: PanLaw::ConstantPower,
         });
         s
     }
@@ -519,6 +686,12 @@ impl MixerState {
         }
     }
 
+    pub fn set_delay_comp_samples(&mut self, channel: ChannelId, samples: u32) {
+        if let Some(ch) = self.channels.iter_mut().find(|c| c.id == channel) {
+            ch.inserts_delay_comp = samples;
+        }
+    }
+
     pub fn reset_peaks_for(&mut self, channel: ChannelId) {
         if let Some(ch) = self.channels.iter_mut().find(|c| c.id == channel) {
             ch.meter.peak_hold_l = 0.0;
@@ -535,5 +708,61 @@ impl MixerState {
             ch.meter.clip_l = false;
             ch.meter.clip_r = false;
         }
+    }
+
+    pub fn set_default_pan_law(&mut self, pan_law: PanLaw) {
+        self.default_pan_law = pan_law;
+        for ch in &mut self.channels {
+            ch.pan_law = pan_law;
+        }
+    }
+
+    pub fn set_master_dither(&mut self, enabled: bool) {
+        self.master.dither_on_export = enabled;
+    }
+
+    pub fn set_master_gain(&mut self, gain_db: f32) {
+        self.master.gain_db = gain_db;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn insert_and_send_configuration_respects_limits() {
+        let mut state = MixerState::new_default();
+        let first = state.channels.first_mut().unwrap();
+        assert_eq!(first.inserts.len(), MAX_INSERT_SLOTS);
+        assert_eq!(first.sends.len(), MAX_SEND_SLOTS);
+
+        first
+            .insert_plugin(
+                5,
+                "Compressor",
+                "uid://comp",
+                PluginFormat::Vst3,
+                InsertPosition::PreFader,
+            )
+            .unwrap();
+        assert_eq!(first.inserts[5].name, "Compressor");
+        assert_eq!(first.inserts[5].format, Some(PluginFormat::Vst3));
+
+        first.configure_send(2, 0.75, true);
+        assert_eq!(first.sends[2].level, 0.75);
+        assert!(first.sends[2].pre_fader);
+    }
+
+    #[test]
+    fn master_processing_and_pan_law_can_be_changed() {
+        let mut state = MixerState::new_default();
+        state.set_default_pan_law(PanLaw::Minus3Db);
+        assert!(state.channels.iter().all(|c| c.pan_law == PanLaw::Minus3Db));
+
+        state.set_master_gain(-3.0);
+        state.set_master_dither(false);
+        assert_eq!(state.master.gain_db, -3.0);
+        assert!(!state.master.dither_on_export);
     }
 }
