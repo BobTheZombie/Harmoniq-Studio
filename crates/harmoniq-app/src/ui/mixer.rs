@@ -10,7 +10,7 @@ use harmoniq_engine::mixer::api::{MixerUiApi, UiStripInfo};
 use harmoniq_engine::{GuiMeterReceiver, MixerCommand};
 use harmoniq_mixer::state::{
     AutomationMode, Channel, ChannelEq, ChannelId, ChannelRackState, ChannelStripModules,
-    InsertSlot, Meter, MixerState, RoutingDelta, SendSlot,
+    InsertPosition, InsertSlot, Meter, MixerState, PanLaw, RoutingDelta, SendSlot,
 };
 use harmoniq_mixer::ui::{db_to_gain, gain_to_db};
 use harmoniq_mixer::{MixerCallbacks, MixerProps};
@@ -192,6 +192,8 @@ impl MixerView {
                 eq: ChannelEq::default(),
                 strip_modules: ChannelStripModules::default(),
                 rack_state: ChannelRackState::default(),
+                inserts_delay_comp: 0,
+                pan_law: PanLaw::default(),
             };
             self.state.channels.push(channel);
         }
@@ -250,6 +252,8 @@ impl MixerView {
             eq: ChannelEq::default(),
             strip_modules: ChannelStripModules::default(),
             rack_state: ChannelRackState::default(),
+            inserts_delay_comp: info.latency_samples,
+            pan_law: PanLaw::default(),
         };
 
         let mut insert_bypass = Vec::with_capacity(info.insert_count);
@@ -259,6 +263,11 @@ impl MixerView {
             channel.inserts.push(InsertSlot {
                 name: label,
                 bypass,
+                plugin_uid: None,
+                format: None,
+                position: InsertPosition::default(),
+                sidechains: Vec::new(),
+                delay_comp_samples: 0,
             });
             insert_bypass.push(bypass);
         }
@@ -270,6 +279,7 @@ impl MixerView {
             channel.sends.push(SendSlot {
                 id: slot as u8,
                 level,
+                pre_fader: self.api.send_is_pre(idx, slot),
             });
             send_levels_db.push(level_db);
         }

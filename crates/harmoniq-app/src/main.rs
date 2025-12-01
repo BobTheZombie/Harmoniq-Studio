@@ -2817,7 +2817,7 @@ impl App for HarmoniqStudioApp {
                         tracing::info!("Playlist import requested: {path:?}");
                         harmoniq_playlist::state::AudioSourceId::from_path(&path)
                     };
-                    let mut props = PlaylistUiProps {
+                    let props = PlaylistUiProps {
                         playlist: &mut self.playlist_view,
                         current_time_ticks: transport_ticks,
                         snap: &mut self.playlist_snap,
