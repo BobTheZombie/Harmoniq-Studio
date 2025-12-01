@@ -4,6 +4,7 @@ use eframe::egui::{
 use harmoniq_engine::TransportState;
 use harmoniq_ui::HarmoniqPalette;
 
+use crate::ui::event_bus::{AppEvent, EventBus};
 use crate::{TimeSignature, TransportClock};
 
 use super::focus::InputFocus;
@@ -121,6 +122,7 @@ impl SequencerPane {
         transport_clock: TransportClock,
         transport_state: TransportState,
         focus: Option<&mut InputFocus>,
+        event_bus: &EventBus,
     ) {
         let ctx = ui.ctx().clone();
         let mut root_rect = ui.min_rect();
@@ -181,7 +183,7 @@ impl SequencerPane {
             });
             ui.add_space(8.0);
 
-            self.draw_stock_arrangements(ui, palette);
+            self.draw_stock_arrangements(ui, palette, event_bus);
             ui.add_space(8.0);
 
             let scroll = egui::ScrollArea::both()
@@ -203,7 +205,12 @@ impl SequencerPane {
         }
     }
 
-    fn draw_stock_arrangements(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette) {
+    fn draw_stock_arrangements(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &HarmoniqPalette,
+        event_bus: &EventBus,
+    ) {
         egui::CollapsingHeader::new(
             RichText::new("Stock Sequencer Sounds").color(palette.text_primary),
         )
@@ -224,20 +231,32 @@ impl SequencerPane {
                     .stroke(egui::Stroke::new(1.0, palette.toolbar_outline))
                     .inner_margin(egui::Margin::symmetric(12.0, 8.0))
                     .show(ui, |ui| {
-                        let response = ui.selectable_label(
-                            selected,
-                            RichText::new(&arrangement.name)
-                                .color(palette.text_primary)
-                                .strong()
-                                .size(16.0),
-                        );
-                        if response.clicked() {
-                            if selected {
-                                self.selected_stock_arrangement = None;
-                            } else {
-                                self.selected_stock_arrangement = Some(index);
+                        ui.horizontal(|ui| {
+                            let response = ui.selectable_label(
+                                selected,
+                                RichText::new(&arrangement.name)
+                                    .color(palette.text_primary)
+                                    .strong()
+                                    .size(16.0),
+                            );
+                            if ui
+                                .add_sized(
+                                    [82.0, 26.0],
+                                    egui::Button::new(RichText::new("Preview").size(13.0)),
+                                )
+                                .clicked()
+                            {
+                                event_bus
+                                    .publish(AppEvent::PreviewStockSound(arrangement.name.clone()));
                             }
-                        }
+                            if response.clicked() {
+                                if selected {
+                                    self.selected_stock_arrangement = None;
+                                } else {
+                                    self.selected_stock_arrangement = Some(index);
+                                }
+                            }
+                        });
                         ui.label(RichText::new(arrangement.summary()).color(palette.text_muted));
                         ui.add_space(4.0);
                         ui.label(RichText::new(&arrangement.description).color(palette.text_muted));

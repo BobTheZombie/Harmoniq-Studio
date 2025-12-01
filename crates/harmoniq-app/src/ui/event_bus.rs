@@ -25,6 +25,7 @@ pub enum AppEvent {
     SetTimeSignature(TimeSignature),
     ToggleMetronome,
     TogglePatternMode,
+    PreviewStockSound(String),
     Layout(LayoutEvent),
     OpenFile(PathBuf),
     SaveProject,
