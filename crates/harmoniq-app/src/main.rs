@@ -26,8 +26,8 @@ use harmoniq_engine::{
     rt::metrics::BlockStat,
     rt_bridge::RtBridge,
     transport::Transport as EngineTransport,
-    AudioBuffer, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder, HarmoniqEngine,
-    PluginId, TransportState,
+    AudioBuffer, AudioClip, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder,
+    HarmoniqEngine, PluginId, TransportState,
 };
 use harmoniq_midi::config::{self as midi_config, MidiSettings};
 use harmoniq_plugin_db::PluginStore;
@@ -1839,12 +1839,23 @@ impl HarmoniqStudioApp {
     fn play_sound_test(&mut self) {
         let sample_rate = self.engine_runner.config().sample_rate;
         let clip = self.sound_test.prepare_clip(sample_rate);
+        self.queue_preview_clip(clip, "Playing sound test");
+    }
+
+    fn preview_stock_sound(&mut self, name: &str) {
+        let sample_rate = self.engine_runner.config().sample_rate;
+        let clip = self.sound_test.prepare_clip(sample_rate).with_gain(0.9);
+        let message = format!("Previewing {name}");
+        self.queue_preview_clip(clip, &message);
+    }
+
+    fn queue_preview_clip(&mut self, clip: AudioClip, message: &str) {
         match self
             .command_queue
             .try_send(EngineCommand::PlaySoundTest(clip))
         {
             Ok(()) => {
-                self.status_message = Some("Playing sound test".to_string());
+                self.status_message = Some(message.to_string());
             }
             Err(command) => {
                 self.status_message = Some(format!("Command queue full: {command:?}"));
@@ -1868,6 +1879,9 @@ impl HarmoniqStudioApp {
                 }
                 AppEvent::TogglePatternMode => {
                     self.pattern_mode = !self.pattern_mode;
+                }
+                AppEvent::PreviewStockSound(name) => {
+                    self.preview_stock_sound(&name);
                 }
                 AppEvent::Layout(event) => match event {
                     LayoutEvent::ToggleBrowser => {
@@ -2570,6 +2584,7 @@ impl<'a> TabViewer for WorkspaceTabViewer<'a> {
                         self.transport_clock,
                         self.transport_state,
                         Some(self.input_focus),
+                        self.event_bus,
                     );
                 }
             }
