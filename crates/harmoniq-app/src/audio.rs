@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::io::Cursor;
 use std::sync::atomic::Ordering as AtomicOrdering;
@@ -1120,8 +1121,13 @@ pub struct SoundTestSample {
 
 impl SoundTestSample {
     pub fn load() -> anyhow::Result<Self> {
-        let bytes = include_bytes!("../../../resources/audio/testing_harmoniq_stereo.wav");
-        let cursor = Cursor::new(&bytes[..]);
+        Self::from_bytes(include_bytes!(
+            "../../../resources/audio/testing_harmoniq_stereo.wav"
+        ))
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+        let cursor = Cursor::new(bytes);
         let mut reader =
             hound::WavReader::new(cursor).context("failed to open sound test audio")?;
         let spec = reader.spec();
@@ -1775,6 +1781,52 @@ mod linux_asio {
         }
     }
 }
+
+pub struct StockSoundLibrary {
+    sounds: HashMap<String, SoundTestSample>,
+}
+
+impl StockSoundLibrary {
+    pub fn load() -> anyhow::Result<Self> {
+        let mut sounds = HashMap::new();
+        for (name, bytes) in STOCK_SOUNDS {
+            let sample = SoundTestSample::from_bytes(bytes)
+                .with_context(|| format!("failed to load stock sound: {name}"))?;
+            sounds.insert(name.to_ascii_lowercase(), sample);
+        }
+
+        Ok(Self { sounds })
+    }
+
+    pub fn prepare_clip(&self, name: &str, target_sample_rate: f32) -> Option<AudioClip> {
+        let key = name.to_ascii_lowercase();
+        let sample = self.sounds.get(&key)?;
+        Some(sample.prepare_clip(target_sample_rate))
+    }
+}
+
+const STOCK_SOUNDS: &[(&str, &[u8])] = &[
+    (
+        "Sunrise Reverie",
+        include_bytes!("../../../resources/audio/stock/sunrise_reverie.wav"),
+    ),
+    (
+        "Midnight Drive",
+        include_bytes!("../../../resources/audio/stock/midnight_drive.wav"),
+    ),
+    (
+        "Neon Skies",
+        include_bytes!("../../../resources/audio/stock/neon_skies.wav"),
+    ),
+    (
+        "Lo-Fi Sketchbook",
+        include_bytes!("../../../resources/audio/stock/lofi_sketchbook.wav"),
+    ),
+    (
+        "Festival Sparks",
+        include_bytes!("../../../resources/audio/stock/festival_sparks.wav"),
+    ),
+];
 
 #[cfg(all(feature = "openasio", target_os = "linux"))]
 mod openasio_rt {

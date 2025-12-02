@@ -61,7 +61,7 @@ use crate::core::plugin_scanner::PluginScanner;
 use crate::rt::rt_event::RtEvent;
 use audio::{
     available_backends, describe_layout, AudioBackend, AudioRuntimeOptions, RealtimeAudio,
-    SoundTestSample,
+    SoundTestSample, StockSoundLibrary,
 };
 use config::qwerty::{QwertyConfig, VelocityCurveSetting};
 use harmoniq_pianoroll::{
@@ -1426,6 +1426,7 @@ struct HarmoniqStudioApp {
     midi_devices: MidiDevicesPanel,
     midi_settings: MidiSettings,
     sound_test: SoundTestSample,
+    stock_sounds: StockSoundLibrary,
     metrics_hud: MetricsHud,
     perf_hud: PerfHudState,
     event_bus: EventBus,
@@ -1601,6 +1602,7 @@ impl HarmoniqStudioApp {
         let midi_settings = midi_config::load();
         let midi_devices = MidiDevicesPanel::default();
         let sound_test = SoundTestSample::load().context("failed to load sound test sample")?;
+        let stock_sounds = StockSoundLibrary::load().context("failed to load stock sounds")?;
         let shortcuts = ShortcutMap::load();
         let (command_sender, command_receiver) = command_channel(256);
         let recent_projects = RecentProjects::load();
@@ -1649,6 +1651,7 @@ impl HarmoniqStudioApp {
             midi_devices,
             midi_settings,
             sound_test,
+            stock_sounds,
             metrics_hud,
             perf_hud: PerfHudState::default(),
             event_bus,
@@ -1844,7 +1847,12 @@ impl HarmoniqStudioApp {
 
     fn preview_stock_sound(&mut self, name: &str) {
         let sample_rate = self.engine_runner.config().sample_rate;
-        let clip = self.sound_test.prepare_clip(sample_rate).with_gain(0.9);
+        let fallback_clip = self.sound_test.prepare_clip(sample_rate);
+        let clip = self
+            .stock_sounds
+            .prepare_clip(name, sample_rate)
+            .unwrap_or(fallback_clip)
+            .with_gain(0.9);
         let message = format!("Previewing {name}");
         self.queue_preview_clip(clip, &message);
     }
