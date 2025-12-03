@@ -5,6 +5,7 @@
 //! workstations and live performance scenarios.
 
 pub mod api;
+pub mod audio_graph;
 pub mod automation;
 pub mod buffer;
 pub mod buffers;
@@ -12,6 +13,7 @@ pub mod clips;
 pub mod config;
 pub mod core;
 pub mod cpu_pinning;
+pub(crate) mod delay;
 pub mod dsp;
 pub mod engine;
 pub mod graph;
