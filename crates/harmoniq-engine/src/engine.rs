@@ -83,6 +83,7 @@ impl EngineCommandQueue {
 pub enum EngineCommand {
     SetTempo(f32),
     SetTransport(TransportState),
+    SetPatternMode(bool),
     ReplaceGraph(GraphHandle),
     SubmitMidi(Vec<MidiEvent>),
     PlaySoundTest(AudioClip),
@@ -97,6 +98,7 @@ pub struct HarmoniqEngine {
     tone_shaper: ToneShaper,
     next_plugin_id: AtomicU64,
     transport: RwLock<TransportState>,
+    pattern_mode: bool,
     transport_metrics: Arc<TransportMetrics>,
     command_queue: Arc<ArrayQueue<EngineCommand>>,
     pending_midi: Mutex<Vec<MidiEvent>>,
@@ -155,6 +157,7 @@ impl HarmoniqEngine {
             graph: RwLock::new(None),
             next_plugin_id: AtomicU64::new(1),
             transport: RwLock::new(TransportState::Stopped),
+            pattern_mode: true,
             transport_metrics: Arc::clone(&transport_metrics),
             command_queue,
             pending_midi: Mutex::new(Vec::new()),
@@ -523,6 +526,9 @@ impl HarmoniqEngine {
                 // Tempo will influence scheduling and clip triggering.
             }
             EngineCommand::SetTransport(state) => self.set_transport(state),
+            EngineCommand::SetPatternMode(enabled) => {
+                self.pattern_mode = enabled;
+            }
             EngineCommand::ReplaceGraph(graph) => self.replace_graph(graph)?,
             EngineCommand::SubmitMidi(events) => {
                 let mut pending = self.pending_midi.lock();
