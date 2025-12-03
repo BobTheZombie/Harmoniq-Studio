@@ -1,10 +1,13 @@
+use std::collections::HashMap;
+
 use eframe::egui::{
-    self, Align2, Color32, FontId, PointerButton, Pos2, Rect, RichText, Shape, Stroke,
+    self, popup, Align2, Color32, FontId, PointerButton, Pos2, Rect, RichText, Shape, Stroke,
 };
 use harmoniq_engine::TransportState;
 use harmoniq_ui::HarmoniqPalette;
 
 use crate::ui::event_bus::{AppEvent, EventBus};
+use crate::ui::piano_roll::{PianoRollNote, PianoRollPattern};
 use crate::{TimeSignature, TransportClock};
 
 use super::focus::InputFocus;
@@ -32,10 +35,12 @@ struct AutomationLane {
 
 #[derive(Clone)]
 struct SequencerClip {
+    id: u64,
     start: f32,
     length: f32,
     name: String,
     color: Color32,
+    pattern_id: u32,
 }
 
 impl SequencerClip {
@@ -79,6 +84,72 @@ impl StockArrangement {
     }
 }
 
+#[derive(Clone, Default)]
+struct PatternLibrary {
+    patterns: HashMap<u32, PianoRollPattern>,
+    next_id: u32,
+}
+
+impl PatternLibrary {
+    fn register_pattern(&mut self, mut pattern: PianoRollPattern) -> u32 {
+        if pattern.id == 0 {
+            pattern.id = self.allocate_id();
+        } else {
+            self.next_id = self.next_id.max(pattern.id + 1);
+        }
+        let id = pattern.id;
+        self.patterns.insert(id, pattern);
+        id
+    }
+
+    fn allocate_id(&mut self) -> u32 {
+        let id = self.next_id.max(1);
+        self.next_id = id + 1;
+        id
+    }
+
+    fn pattern(&self, id: u32) -> Option<PianoRollPattern> {
+        self.patterns.get(&id).cloned()
+    }
+
+    fn ensure_blank(&mut self, name: impl Into<String>) -> u32 {
+        let id = self.allocate_id();
+        let pattern = PianoRollPattern {
+            id,
+            name: name.into(),
+            notes: vec![PianoRollNote {
+                start: 0.0,
+                length: 1.0,
+                pitch: 60,
+                velocity: 0.8,
+            }],
+        };
+        self.patterns.insert(id, pattern);
+        id
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ClipDragState {
+    track_index: usize,
+    clip_id: u64,
+    grab_offset_beats: f32,
+}
+
+#[derive(Clone, Copy)]
+struct AutomationDragState {
+    track_index: usize,
+    lane_index: usize,
+    point_index: usize,
+}
+
+#[derive(Clone, Copy)]
+struct ContextMenuRequest {
+    track_index: usize,
+    beat: f32,
+    pointer: Pos2,
+}
+
 pub struct SequencerPane {
     tracks: Vec<SequencerTrack>,
     selected_track: Option<usize>,
@@ -92,12 +163,20 @@ pub struct SequencerPane {
     total_bars: u32,
     stock_arrangements: Vec<StockArrangement>,
     selected_stock_arrangement: Option<usize>,
+    pattern_library: PatternLibrary,
+    next_clip_id: u64,
+    pending_context_menu: Option<ContextMenuRequest>,
+    dragging_clip: Option<ClipDragState>,
+    dragging_automation: Option<AutomationDragState>,
 }
 
 impl Default for SequencerPane {
     fn default() -> Self {
+        let mut pattern_library = PatternLibrary::default();
+        let mut next_clip_id = 1;
+        let tracks = demo_tracks(&mut pattern_library, &mut next_clip_id);
         Self {
-            tracks: demo_tracks(),
+            tracks,
             selected_track: Some(0),
             selected_clip: Some((0, 0)),
             snap_enabled: true,
@@ -109,11 +188,26 @@ impl Default for SequencerPane {
             total_bars: 8,
             stock_arrangements: stock_arrangements(),
             selected_stock_arrangement: None,
+            pattern_library,
+            next_clip_id,
+            pending_context_menu: None,
+            dragging_clip: None,
+            dragging_automation: None,
         }
     }
 }
 
 impl SequencerPane {
+    pub fn pattern(&self, pattern_id: u32) -> Option<PianoRollPattern> {
+        self.pattern_library.pattern(pattern_id)
+    }
+
+    fn allocate_clip_id(&mut self) -> u64 {
+        let id = self.next_clip_id;
+        self.next_clip_id += 1;
+        id
+    }
+
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -195,6 +289,7 @@ impl SequencerPane {
                         time_signature,
                         transport_clock,
                         transport_state,
+                        event_bus,
                     )
                 });
             root_rect = root_rect.union(scroll.inner_rect);
@@ -283,6 +378,7 @@ impl SequencerPane {
         time_signature: TimeSignature,
         transport_clock: TransportClock,
         transport_state: TransportState,
+        event_bus: &EventBus,
     ) {
         let beats_per_bar = time_signature.numerator.max(1) as f32;
         let total_beats = self.total_bars as f32 * beats_per_bar;
@@ -436,12 +532,16 @@ impl SequencerPane {
         );
 
         self.handle_pointer_interaction(
+            ui,
             &response,
             track_list_rect,
             arrangement_rect,
             beat_width,
+            beats_per_bar,
             total_beats,
+            event_bus,
         );
+        self.show_context_menu(ui, beats_per_bar, total_beats);
     }
 
     fn draw_tracks(
@@ -717,14 +817,19 @@ impl SequencerPane {
 
     fn handle_pointer_interaction(
         &mut self,
+        ui: &egui::Ui,
         response: &egui::Response,
         track_list_rect: Rect,
         arrangement_rect: Rect,
         beat_width: f32,
+        beats_per_bar: f32,
         total_beats: f32,
+        event_bus: &EventBus,
     ) {
+        let pointer = response.interact_pointer_pos();
+
         if response.clicked_by(PointerButton::Primary) {
-            if let Some(pointer) = response.interact_pointer_pos() {
+            if let Some(pointer) = pointer {
                 if track_list_rect.contains(pointer) {
                     let track_index =
                         ((pointer.y - track_list_rect.top()) / TRACK_ROW_HEIGHT).floor() as usize;
@@ -743,14 +848,57 @@ impl SequencerPane {
                     let track_index =
                         ((pointer.y - arrangement_rect.top()) / TRACK_ROW_HEIGHT).floor() as usize;
                     if track_index < self.tracks.len() {
-                        if let Some(clip_index) =
+                        let lane_rect =
+                            self.automation_rect_for_track(track_index, arrangement_rect);
+                        if ui.input(|i| i.modifiers.alt) && lane_rect.contains(pointer) {
+                            self.insert_automation_point(
+                                track_index,
+                                0,
+                                pointer,
+                                lane_rect,
+                                beat_width,
+                            );
+                        } else if let Some((lane_index, point_index)) = self
+                            .hit_test_automation_point(
+                                track_index,
+                                pointer,
+                                arrangement_rect,
+                                beat_width,
+                            )
+                        {
+                            self.dragging_automation = Some(AutomationDragState {
+                                track_index,
+                                lane_index,
+                                point_index,
+                            });
+                        } else if let Some(clip_index) =
                             self.hit_test_clip(track_index, pointer, arrangement_rect, beat_width)
                         {
                             self.selected_track = Some(track_index);
                             self.selected_clip = Some((track_index, clip_index));
+                            if response.double_clicked() {
+                                self.open_clip_pattern(track_index, clip_index, event_bus);
+                            } else {
+                                let clip = self.tracks[track_index].clips[clip_index].clone();
+                                let grab_offset = ((pointer.x - arrangement_rect.left())
+                                    / beat_width)
+                                    - clip.start;
+                                self.dragging_clip = Some(ClipDragState {
+                                    track_index,
+                                    clip_id: clip.id,
+                                    grab_offset_beats: grab_offset,
+                                });
+                            }
                         } else {
                             self.selected_clip = None;
                             self.selected_track = Some(track_index);
+                            let beat = ((pointer.x - arrangement_rect.left()) / beat_width)
+                                .clamp(0.0, total_beats);
+                            self.pending_context_menu = Some(ContextMenuRequest {
+                                track_index,
+                                beat,
+                                pointer,
+                            });
                         }
                     } else {
                         self.selected_clip = None;
@@ -761,17 +909,234 @@ impl SequencerPane {
             }
         }
 
+        if let Some(drag_state) = self.dragging_clip {
+            if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
+                let mut new_start = ((pointer.x - arrangement_rect.left()) / beat_width)
+                    - drag_state.grab_offset_beats;
+                new_start = new_start.max(0.0);
+                if self.snap_enabled {
+                    new_start = self.snap_to_grid(new_start, beats_per_bar);
+                }
+                self.move_clip_to(
+                    drag_state.track_index,
+                    drag_state.clip_id,
+                    new_start,
+                    total_beats,
+                );
+            }
+        }
+
+        if response.drag_released_by(PointerButton::Primary) {
+            self.dragging_clip = None;
+            self.dragging_automation = None;
+        }
+
+        if let Some(drag_state) = self.dragging_automation {
+            if let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) {
+                self.update_automation_point(
+                    drag_state.track_index,
+                    drag_state.lane_index,
+                    drag_state.point_index,
+                    pointer,
+                    arrangement_rect,
+                    beat_width,
+                );
+            }
+        }
+
         if response.clicked_by(PointerButton::Secondary) {
-            if let Some(pointer) = response.interact_pointer_pos() {
+            if let Some(pointer) = pointer {
                 if arrangement_rect.contains(pointer) {
                     let beat = ((pointer.x - arrangement_rect.left()) / beat_width)
                         .clamp(0.0, total_beats);
+                    let track_index =
+                        ((pointer.y - arrangement_rect.top()) / TRACK_ROW_HEIGHT).floor() as usize;
+                    if track_index < self.tracks.len() {
+                        self.pending_context_menu = Some(ContextMenuRequest {
+                            track_index,
+                            beat,
+                            pointer,
+                        });
+                    }
+
                     let length = self
                         .loop_region
                         .map(|(start, end)| (end - start).max(1.0))
                         .unwrap_or(4.0);
                     self.loop_region = Some((beat, (beat + length).min(total_beats)));
                 }
+            }
+        }
+    }
+
+    fn show_context_menu(&mut self, ui: &egui::Ui, beats_per_bar: f32, total_beats: f32) {
+        if let Some(request) = self.pending_context_menu.take() {
+            popup::show_menu_at(ui.ctx(), ui.layer_id(), request.pointer, |ui| {
+                if ui
+                    .button("Add Clip (1 bar)")
+                    .on_hover_text("Insert a new clip at the clicked position")
+                    .clicked()
+                {
+                    self.insert_clip(request.track_index, request.beat, beats_per_bar);
+                    ui.close_menu();
+                }
+                if ui
+                    .button("Set Loop From Here")
+                    .on_hover_text("Move the loop to start from this beat")
+                    .clicked()
+                {
+                    let length = self
+                        .loop_region
+                        .map(|(start, end)| (end - start).max(1.0))
+                        .unwrap_or(beats_per_bar);
+                    self.loop_region =
+                        Some((request.beat, (request.beat + length).min(total_beats)));
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui
+                    .button("Cancel")
+                    .on_hover_text("Dismiss the menu without changes")
+                    .clicked()
+                {
+                    ui.close_menu();
+                }
+            });
+        }
+    }
+
+    fn automation_rect_for_track(&self, track_index: usize, arrangement_rect: Rect) -> Rect {
+        let top = arrangement_rect.top() + track_index as f32 * TRACK_ROW_HEIGHT;
+        let row_rect = Rect::from_min_max(
+            Pos2::new(arrangement_rect.left(), top),
+            Pos2::new(arrangement_rect.right(), top + TRACK_ROW_HEIGHT),
+        );
+        Rect::from_min_max(
+            Pos2::new(row_rect.left(), row_rect.bottom() - 28.0),
+            Pos2::new(row_rect.right(), row_rect.bottom() - 8.0),
+        )
+    }
+
+    fn insert_clip(&mut self, track_index: usize, beat: f32, beats_per_bar: f32) {
+        if let Some(track) = self.tracks.get_mut(track_index) {
+            let pattern_id = self
+                .pattern_library
+                .ensure_blank(format!("Pattern {}", track.clips.len() + 1));
+            let clip = SequencerClip {
+                id: self.allocate_clip_id(),
+                start: beat,
+                length: beats_per_bar,
+                name: "New Clip".into(),
+                color: track.color,
+                pattern_id,
+            };
+            track.clips.push(clip);
+            track.clips.sort_by(|a, b| a.start.total_cmp(&b.start));
+            self.selected_clip = track
+                .clips
+                .iter()
+                .position(|c| c.id == clip.id)
+                .map(|index| (track_index, index));
+        }
+    }
+
+    fn move_clip_to(&mut self, track_index: usize, clip_id: u64, new_start: f32, total_beats: f32) {
+        if let Some(track) = self.tracks.get_mut(track_index) {
+            if let Some(clip) = track.clips.iter_mut().find(|clip| clip.id == clip_id) {
+                clip.start = new_start.min((total_beats - clip.length).max(0.0));
+            }
+            track.clips.sort_by(|a, b| a.start.total_cmp(&b.start));
+            if let Some((track_sel, _)) = self.selected_clip {
+                if track_sel == track_index {
+                    if let Some(new_index) = track.clips.iter().position(|c| c.id == clip_id) {
+                        self.selected_clip = Some((track_index, new_index));
+                    }
+                }
+            }
+        }
+    }
+
+    fn snap_to_grid(&self, value: f32, beats_per_bar: f32) -> f32 {
+        let resolution = if self.show_sub_beats { 0.25 } else { 1.0 };
+        let snapped = (value / resolution).round() * resolution;
+        snapped.clamp(0.0, self.total_bars as f32 * beats_per_bar)
+    }
+
+    fn insert_automation_point(
+        &mut self,
+        track_index: usize,
+        lane_index: usize,
+        pointer: Pos2,
+        lane_rect: Rect,
+        beat_width: f32,
+    ) {
+        if let Some(track) = self.tracks.get_mut(track_index) {
+            if let Some(lane) = track.automation.get_mut(lane_index) {
+                let position = ((pointer.x - lane_rect.left()) / beat_width).max(0.0);
+                let value = ((lane_rect.bottom() - pointer.y) / lane_rect.height()).clamp(0.0, 1.0);
+                lane.points.push(AutomationPoint { position, value });
+                lane.points
+                    .sort_by(|a, b| a.position.total_cmp(&b.position));
+            }
+        }
+    }
+
+    fn hit_test_automation_point(
+        &self,
+        track_index: usize,
+        pointer: Pos2,
+        arrangement_rect: Rect,
+        beat_width: f32,
+    ) -> Option<(usize, usize)> {
+        let lane_rect = self.automation_rect_for_track(track_index, arrangement_rect);
+        let radius = 8.0;
+        if !lane_rect.contains(pointer) {
+            return None;
+        }
+        let track = self.tracks.get(track_index)?;
+        for (lane_index, lane) in track.automation.iter().enumerate() {
+            for (point_index, point) in lane.points.iter().enumerate() {
+                let x = lane_rect.left() + point.position * beat_width;
+                let y = lane_rect.bottom() - (lane_rect.height() * point.value);
+                let distance = (pointer - Pos2::new(x, y)).length();
+                if distance <= radius {
+                    return Some((lane_index, point_index));
+                }
+            }
+        }
+        None
+    }
+
+    fn update_automation_point(
+        &mut self,
+        track_index: usize,
+        lane_index: usize,
+        point_index: usize,
+        pointer: Pos2,
+        arrangement_rect: Rect,
+        beat_width: f32,
+    ) {
+        let lane_rect = self.automation_rect_for_track(track_index, arrangement_rect);
+        if let Some(track) = self.tracks.get_mut(track_index) {
+            if let Some(lane) = track.automation.get_mut(lane_index) {
+                if let Some(point) = lane.points.get_mut(point_index) {
+                    point.position = ((pointer.x - lane_rect.left()) / beat_width).max(0.0);
+                    point.value =
+                        ((lane_rect.bottom() - pointer.y) / lane_rect.height()).clamp(0.0, 1.0);
+                }
+                lane.points
+                    .sort_by(|a, b| a.position.total_cmp(&b.position));
+            }
+        }
+    }
+
+    fn open_clip_pattern(&mut self, track_index: usize, clip_index: usize, event_bus: &EventBus) {
+        if let Some(track) = self.tracks.get(track_index) {
+            if let Some(clip) = track.clips.get(clip_index) {
+                event_bus.publish(AppEvent::OpenPianoRollPattern {
+                    pattern_id: clip.pattern_id,
+                    clip_name: clip.name.clone(),
+                });
             }
         }
     }
@@ -883,23 +1248,212 @@ fn stock_arrangements() -> Vec<StockArrangement> {
     ]
 }
 
-fn demo_tracks() -> Vec<SequencerTrack> {
-    vec![
+fn demo_tracks(
+    pattern_library: &mut PatternLibrary,
+    next_clip_id: &mut u64,
+) -> Vec<SequencerTrack> {
+    let mut clip_id = *next_clip_id;
+    let mut take_clip_id = || {
+        let id = clip_id;
+        clip_id += 1;
+        id
+    };
+
+    let intro_pattern = pattern_library.register_pattern(PianoRollPattern {
+        id: 1,
+        name: "Intro Keys".into(),
+        notes: vec![
+            PianoRollNote {
+                start: 0.0,
+                length: 1.0,
+                pitch: 60,
+                velocity: 0.9,
+            },
+            PianoRollNote {
+                start: 1.5,
+                length: 0.5,
+                pitch: 64,
+                velocity: 0.6,
+            },
+            PianoRollNote {
+                start: 2.0,
+                length: 1.0,
+                pitch: 67,
+                velocity: 0.7,
+            },
+            PianoRollNote {
+                start: 3.0,
+                length: 0.75,
+                pitch: 72,
+                velocity: 0.8,
+            },
+        ],
+    });
+    let verse_pattern = pattern_library.register_pattern(PianoRollPattern {
+        id: 2,
+        name: "Verse Keys".into(),
+        notes: vec![
+            PianoRollNote {
+                start: 0.0,
+                length: 0.75,
+                pitch: 62,
+                velocity: 0.82,
+            },
+            PianoRollNote {
+                start: 0.75,
+                length: 0.5,
+                pitch: 65,
+                velocity: 0.7,
+            },
+            PianoRollNote {
+                start: 1.25,
+                length: 0.75,
+                pitch: 69,
+                velocity: 0.76,
+            },
+            PianoRollNote {
+                start: 3.0,
+                length: 0.5,
+                pitch: 72,
+                velocity: 0.78,
+            },
+        ],
+    });
+    let bass_pattern = pattern_library.register_pattern(PianoRollPattern {
+        id: 3,
+        name: "Bassline".into(),
+        notes: vec![
+            PianoRollNote {
+                start: 0.0,
+                length: 1.0,
+                pitch: 36,
+                velocity: 0.9,
+            },
+            PianoRollNote {
+                start: 1.0,
+                length: 1.0,
+                pitch: 38,
+                velocity: 0.82,
+            },
+            PianoRollNote {
+                start: 2.0,
+                length: 1.0,
+                pitch: 41,
+                velocity: 0.86,
+            },
+            PianoRollNote {
+                start: 3.0,
+                length: 1.0,
+                pitch: 43,
+                velocity: 0.84,
+            },
+        ],
+    });
+    let drums_pattern = pattern_library.register_pattern(PianoRollPattern {
+        id: 4,
+        name: "Drum Groove".into(),
+        notes: vec![
+            PianoRollNote {
+                start: 0.0,
+                length: 0.5,
+                pitch: 36,
+                velocity: 0.9,
+            },
+            PianoRollNote {
+                start: 1.0,
+                length: 0.5,
+                pitch: 38,
+                velocity: 0.8,
+            },
+            PianoRollNote {
+                start: 2.0,
+                length: 0.5,
+                pitch: 36,
+                velocity: 0.9,
+            },
+            PianoRollNote {
+                start: 3.0,
+                length: 0.5,
+                pitch: 43,
+                velocity: 0.75,
+            },
+        ],
+    });
+    let snare_fill_pattern = pattern_library.register_pattern(PianoRollPattern {
+        id: 5,
+        name: "Snare Fill".into(),
+        notes: vec![
+            PianoRollNote {
+                start: 0.5,
+                length: 0.25,
+                pitch: 38,
+                velocity: 0.78,
+            },
+            PianoRollNote {
+                start: 1.0,
+                length: 0.25,
+                pitch: 40,
+                velocity: 0.8,
+            },
+            PianoRollNote {
+                start: 1.5,
+                length: 0.5,
+                pitch: 38,
+                velocity: 0.82,
+            },
+        ],
+    });
+    let hat_loop_pattern = pattern_library.register_pattern(PianoRollPattern {
+        id: 6,
+        name: "Hat Loop".into(),
+        notes: vec![
+            PianoRollNote {
+                start: 0.0,
+                length: 0.25,
+                pitch: 44,
+                velocity: 0.62,
+            },
+            PianoRollNote {
+                start: 0.5,
+                length: 0.25,
+                pitch: 46,
+                velocity: 0.58,
+            },
+            PianoRollNote {
+                start: 1.0,
+                length: 0.25,
+                pitch: 44,
+                velocity: 0.6,
+            },
+            PianoRollNote {
+                start: 1.5,
+                length: 0.25,
+                pitch: 46,
+                velocity: 0.6,
+            },
+        ],
+    });
+
+    let tracks = vec![
         SequencerTrack {
             name: "Dream Piano".into(),
             color: Color32::from_rgb(82, 170, 255),
             clips: vec![
                 SequencerClip {
+                    id: take_clip_id(),
                     start: 0.0,
                     length: 4.0,
                     name: "Intro Keys".into(),
                     color: Color32::from_rgb(74, 140, 230),
+                    pattern_id: intro_pattern,
                 },
                 SequencerClip {
+                    id: take_clip_id(),
                     start: 4.0,
                     length: 4.0,
                     name: "Verse Keys".into(),
                     color: Color32::from_rgb(88, 155, 240),
+                    pattern_id: verse_pattern,
                 },
             ],
             automation: vec![AutomationLane {
@@ -931,10 +1485,12 @@ fn demo_tracks() -> Vec<SequencerTrack> {
             name: "Analog Bass".into(),
             color: Color32::from_rgb(244, 133, 101),
             clips: vec![SequencerClip {
+                id: take_clip_id(),
                 start: 0.0,
                 length: 8.0,
                 name: "Bassline".into(),
                 color: Color32::from_rgb(230, 110, 82),
+                pattern_id: bass_pattern,
             }],
             automation: vec![AutomationLane {
                 parameter: "Drive".into(),
@@ -966,22 +1522,28 @@ fn demo_tracks() -> Vec<SequencerTrack> {
             color: Color32::from_rgb(80, 224, 190),
             clips: vec![
                 SequencerClip {
+                    id: take_clip_id(),
                     start: 0.0,
                     length: 2.0,
                     name: "Hat Loop".into(),
                     color: Color32::from_rgb(70, 210, 175),
+                    pattern_id: hat_loop_pattern,
                 },
                 SequencerClip {
+                    id: take_clip_id(),
                     start: 2.0,
                     length: 2.0,
                     name: "Snare Fill".into(),
                     color: Color32::from_rgb(65, 200, 166),
+                    pattern_id: snare_fill_pattern,
                 },
                 SequencerClip {
+                    id: take_clip_id(),
                     start: 4.0,
                     length: 4.0,
                     name: "Full Kit".into(),
                     color: Color32::from_rgb(75, 215, 180),
+                    pattern_id: drums_pattern,
                 },
             ],
             automation: vec![AutomationLane {
@@ -1009,5 +1571,6 @@ fn demo_tracks() -> Vec<SequencerTrack> {
             muted: false,
             solo: false,
         },
-    ]
+    ] * next_clip_id = clip_id;
+    tracks
 }
