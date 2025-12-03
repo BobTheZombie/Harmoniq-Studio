@@ -23,6 +23,7 @@ use egui_dock::{DockArea, DockState, Style as DockStyle, TabViewer};
 use egui_extras::{image::load_svg_bytes, install_image_loaders};
 use harmoniq_engine::{
     automation::{AutomationCommand, CurveShape, ParameterSpec},
+    media::loader::MediaLoader,
     rt::metrics::BlockStat,
     rt_bridge::RtBridge,
     transport::Transport as EngineTransport,
@@ -72,8 +73,8 @@ use harmoniq_pianoroll::{
 use harmoniq_playlist::{
     state::{
         AudioSourceId as PlaylistAudioSourceId, ClipId as PlaylistClipId,
-        ClipKind as PlaylistClipKind, PatternNote, Playlist as PlaylistState, Snap as PlaylistSnap,
-        TrackId as PlaylistTrackId,
+        ClipKind as PlaylistClipKind, ImportedAudioSource, PatternNote, Playlist as PlaylistState,
+        Snap as PlaylistSnap, TrackId as PlaylistTrackId,
     },
     ui::{render as render_playlist_window, PlaylistProps as PlaylistUiProps},
 };
@@ -3215,9 +3216,33 @@ impl App for HarmoniqStudioApp {
 
                             piano_roll_requests.push((track, pattern_id, clip));
                         };
-                    let mut import_audio = |path: PathBuf| {
+                    let loader = MediaLoader::new();
+                    let tempo = self.tempo;
+                    let ppq = playlist_view.ppq();
+                    let mut import_audio = move |path: PathBuf| -> Option<ImportedAudioSource> {
                         tracing::info!("Playlist import requested: {path:?}");
-                        harmoniq_playlist::state::AudioSourceId::from_path(&path)
+                        let decoded = match loader.load_from_path(&path) {
+                            Ok(audio) => audio,
+                            Err(err) => {
+                                tracing::error!("Failed to import audio {path:?}: {err}");
+                                return None;
+                            }
+                        };
+
+                        let frames = decoded.channels.first().map(|c| c.len()).unwrap_or(0);
+                        if decoded.sample_rate == 0 {
+                            tracing::warn!("Skipping audio import with zero sample rate: {path:?}");
+                            return None;
+                        }
+
+                        let duration_seconds = frames as f32 / decoded.sample_rate as f32;
+                        let ticks_per_second = (ppq as f32) * (tempo.max(0.001) / 60.0);
+                        let duration_ticks = (duration_seconds * ticks_per_second).ceil() as u64;
+
+                        Some(ImportedAudioSource {
+                            id: harmoniq_playlist::state::AudioSourceId::from_path(&path),
+                            duration_ticks: duration_ticks.max(1),
+                        })
                     };
                     let props = PlaylistUiProps {
                         playlist: playlist_view,
