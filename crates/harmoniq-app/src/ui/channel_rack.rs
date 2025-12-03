@@ -1,5 +1,6 @@
 use eframe::egui::{self, Color32, RichText};
 use harmoniq_ui::{HarmoniqPalette, Knob, StepToggle};
+use tracing::debug;
 
 use crate::ui::event_bus::{AppEvent, EventBus};
 
@@ -25,14 +26,17 @@ impl Channel {
 }
 
 #[derive(Clone)]
-struct ChannelRackPattern {
-    steps: Vec<Vec<bool>>, // channel index -> steps
+pub struct ChannelRackPattern {
+    steps: Vec<Vec<bool>>,     // channel index -> steps
+    channel_volumes: Vec<f32>, // channel index -> volume
 }
 
 impl ChannelRackPattern {
-    fn new(channel_count: usize) -> Self {
+    fn new(channel_volumes: &[f32]) -> Self {
+        let channel_count = channel_volumes.len();
         Self {
             steps: vec![vec![false; DEFAULT_STEP_COUNT]; channel_count],
+            channel_volumes: channel_volumes.to_vec(),
         }
     }
 }
@@ -61,6 +65,10 @@ pub struct ChannelRackPane {
 }
 
 impl ChannelRackPane {
+    fn channel_volumes(&self) -> Vec<f32> {
+        self.channels.iter().map(|channel| channel.volume).collect()
+    }
+
     fn seed_channels() -> Vec<Channel> {
         vec![
             Channel::new("Kick", Color32::from_rgb(240, 170, 100)),
@@ -108,7 +116,7 @@ impl ChannelRackPane {
                     }
 
                     if ui.button("+ Add Pattern").clicked() {
-                        let pattern = ChannelRackPattern::new(self.channels.len());
+                        let pattern = ChannelRackPattern::new(&self.channel_volumes());
                         self.patterns.push(pattern);
                         self.active_pattern_index = self.patterns.len() - 1;
                     }
@@ -160,11 +168,11 @@ impl ChannelRackPane {
     pub fn ui(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette, event_bus: &EventBus) {
         if self.channels.is_empty() {
             self.channels = Self::seed_channels();
-            self.patterns = vec![ChannelRackPattern::new(self.channels.len())];
+            self.patterns = vec![ChannelRackPattern::new(&self.channel_volumes())];
             self.active_pattern_index = 0;
         }
         if self.patterns.is_empty() {
-            self.patterns = vec![ChannelRackPattern::new(self.channels.len())];
+            self.patterns = vec![ChannelRackPattern::new(&self.channel_volumes())];
             self.active_pattern_index = 0;
         }
         let mut clone_requests: Vec<(usize, Channel, Vec<Vec<bool>>)> = Vec::new();
@@ -239,6 +247,12 @@ impl ChannelRackPane {
                                     .changed()
                                 {
                                     channel.volume = volume;
+                                    for pattern in &mut self.patterns {
+                                        if let Some(target) = pattern.channel_volumes.get_mut(index)
+                                        {
+                                            *target = volume;
+                                        }
+                                    }
                                 }
                                 ui.label(RichText::new("Pan").color(palette.text_muted));
                                 let mut pan = channel.pan;
@@ -278,6 +292,7 @@ impl ChannelRackPane {
                 );
                 for pattern in &mut self.patterns {
                     pattern.steps.push(vec![false; DEFAULT_STEP_COUNT]);
+                    pattern.channel_volumes.push(channel.volume);
                 }
                 self.channels.push(channel);
             }
@@ -290,6 +305,9 @@ impl ChannelRackPane {
                 self.channels.insert(insert_at, channel);
                 for (pattern, template) in self.patterns.iter_mut().zip(templates) {
                     pattern.steps.insert(insert_at, template);
+                    pattern
+                        .channel_volumes
+                        .insert(insert_at, self.channels[insert_at].volume);
                 }
                 offset += 1;
             }
@@ -363,7 +381,8 @@ fn stock_drum_kits() -> Vec<DrumKit> {
 impl Default for ChannelRackPane {
     fn default() -> Self {
         let channels = Self::seed_channels();
-        let patterns = vec![ChannelRackPattern::new(channels.len())];
+        let volumes: Vec<f32> = channels.iter().map(|channel| channel.volume).collect();
+        let patterns = vec![ChannelRackPattern::new(&volumes)];
         Self {
             channels,
             stock_kits: stock_drum_kits(),
@@ -372,4 +391,42 @@ impl Default for ChannelRackPane {
             active_pattern_index: 0,
         }
     }
+}
+
+/// Schedule step events for the current 16th-note tick.
+///
+/// The audio engine is expected to call this every tick of the step sequencer.
+/// A standard 960 PPQ grid is used, so each 16th note advances by 240 ticks.
+pub fn schedule_step_events(pattern: &ChannelRackPattern, beat: usize) {
+    if pattern.steps.is_empty() {
+        return;
+    }
+
+    let steps_per_bar = pattern.steps[0].len();
+    if steps_per_bar == 0 {
+        return;
+    }
+
+    let step_index = beat % steps_per_bar;
+    let ticks_per_beat = 960u32;
+    let ticks_per_step = ticks_per_beat / 4;
+    let event_tick = (step_index as u32) * ticks_per_step;
+
+    let channel_count = pattern.steps.len().min(pattern.channel_volumes.len());
+    for channel_index in 0..channel_count {
+        if *pattern.steps[channel_index]
+            .get(step_index)
+            .unwrap_or(&false)
+        {
+            let volume = pattern.channel_volumes[channel_index];
+            trigger_channel_sound(channel_index, event_tick, volume);
+        }
+    }
+}
+
+fn trigger_channel_sound(channel_index: usize, tick: u32, volume: f32) {
+    debug!(
+        "Triggering step event for channel {channel_index} at tick {tick} with volume {:.3}",
+        volume
+    );
 }
