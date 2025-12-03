@@ -31,6 +31,7 @@ pub enum AppEvent {
     SaveProject,
     RequestRepaint,
     OpenAudioSettings,
+    OpenPianoRollPattern { pattern_id: u32, clip_name: String },
 }
 
 #[derive(Debug)]

@@ -1891,6 +1891,20 @@ impl HarmoniqStudioApp {
                 AppEvent::PreviewStockSound(name) => {
                     self.preview_stock_sound(&name);
                 }
+                AppEvent::OpenPianoRollPattern {
+                    pattern_id,
+                    clip_name,
+                } => {
+                    if let Some(pattern) = self.sequencer.pattern(pattern_id) {
+                        self.piano_roll.load_pattern(pattern);
+                    }
+                    self.piano_roll_window_open = true;
+                    self.piano_roll_hidden = false;
+                    self.console.log(
+                        LogLevel::Info,
+                        format!("Opening piano roll for {clip_name} (pattern #{pattern_id})"),
+                    );
+                }
                 AppEvent::Layout(event) => match event {
                     LayoutEvent::ToggleBrowser => {
                         self.browser_hidden = !self.browser_hidden;

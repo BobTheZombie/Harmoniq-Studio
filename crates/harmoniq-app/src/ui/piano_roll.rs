@@ -5,14 +5,15 @@ use crate::ui::event_bus::EventBus;
 use crate::ui::focus::InputFocus;
 use crate::ui::workspace::WorkspacePane;
 
-struct Note {
+#[derive(Clone, Debug)]
+pub struct PianoRollNote {
     start: f32,
     length: f32,
     pitch: i32,
     velocity: f32,
 }
 
-impl Note {
+impl PianoRollNote {
     fn color(&self) -> Color32 {
         if self.velocity > 0.8 {
             Color32::from_rgb(240, 150, 110)
@@ -20,6 +21,13 @@ impl Note {
             Color32::from_rgb(130, 180, 220)
         }
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct PianoRollPattern {
+    pub id: u32,
+    pub name: String,
+    pub notes: Vec<PianoRollNote>,
 }
 
 #[derive(Clone)]
@@ -40,7 +48,7 @@ impl PianoPattern {
 }
 
 pub struct PianoRollPane {
-    notes: Vec<Note>,
+    notes: Vec<PianoRollNote>,
     selected: Option<usize>,
     min_pitch: i32,
     max_pitch: i32,
@@ -51,31 +59,33 @@ pub struct PianoRollPane {
     insert_position: f32,
     stock_patterns: Vec<PianoPattern>,
     selected_stock_pattern: Option<usize>,
+    active_pattern_id: Option<u32>,
+    active_pattern_name: Option<String>,
 }
 
 impl Default for PianoRollPane {
     fn default() -> Self {
         Self {
             notes: vec![
-                Note {
+                PianoRollNote {
                     start: 0.0,
                     length: 1.0,
                     pitch: 60,
                     velocity: 0.9,
                 },
-                Note {
+                PianoRollNote {
                     start: 1.5,
                     length: 0.5,
                     pitch: 64,
                     velocity: 0.6,
                 },
-                Note {
+                PianoRollNote {
                     start: 2.0,
                     length: 1.0,
                     pitch: 67,
                     velocity: 0.7,
                 },
-                Note {
+                PianoRollNote {
                     start: 3.0,
                     length: 0.75,
                     pitch: 72,
@@ -92,11 +102,21 @@ impl Default for PianoRollPane {
             insert_position: 0.0,
             stock_patterns: stock_piano_patterns(),
             selected_stock_pattern: None,
+            active_pattern_id: None,
+            active_pattern_name: None,
         }
     }
 }
 
 impl PianoRollPane {
+    pub fn load_pattern(&mut self, pattern: PianoRollPattern) {
+        self.notes = pattern.notes;
+        self.selected = None;
+        self.insert_position = 0.0;
+        self.active_pattern_id = Some(pattern.id);
+        self.active_pattern_name = Some(pattern.name);
+    }
+
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -137,6 +157,9 @@ impl PianoRollPane {
                         .clamp_range(0.0..=beats)
                         .speed(0.25),
                 );
+                if let Some(name) = &self.active_pattern_name {
+                    ui.label(RichText::new(format!("Pattern: {name}")).color(palette.text_muted));
+                }
             });
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
@@ -345,7 +368,7 @@ impl PianoRollPane {
             if pitch < self.min_pitch || pitch > self.max_pitch {
                 continue;
             }
-            self.notes.push(Note {
+            self.notes.push(PianoRollNote {
                 start,
                 length,
                 pitch,
