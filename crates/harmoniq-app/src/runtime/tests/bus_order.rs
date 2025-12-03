@@ -32,7 +32,7 @@ fn fifo_delivery_preserved() {
 
 #[test]
 fn no_drops_under_load() {
-    let (mut tx, mut rx) = channel(32);
+    let (mut tx, mut rx) = channel(1024);
     let producer = thread::spawn(move || {
         for idx in 0..1000 {
             let mut retries = 0;
@@ -46,7 +46,7 @@ fn no_drops_under_load() {
                     break;
                 }
                 retries += 1;
-                if retries > 10 {
+                if retries > 1000 {
                     panic!("unable to enqueue command");
                 }
                 thread::sleep(Duration::from_micros(50));

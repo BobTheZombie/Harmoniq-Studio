@@ -793,7 +793,7 @@ impl HarmoniqEngine {
             samples_per_tick,
         );
 
-        for track in &playlist.tracks {
+        for (track_index, track) in playlist.tracks.iter().enumerate() {
             for lane in &track.lanes {
                 for clip in &lane.clips {
                     if block_start_tick >= clip.end_ticks() || block_end_tick <= clip.start_ticks {

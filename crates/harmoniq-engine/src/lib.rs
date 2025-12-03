@@ -93,7 +93,6 @@ pub use time::{
 pub use timeline::{ClipEvent, Timeline, TimelineError};
 pub use transport::Transport as RealtimeTransport;
 
-#[cfg(any(test, deny_alloc_in_rt))]
 pub use scratch::{
     allocation_count as rt_allocation_count, reset_allocation_count as reset_rt_allocation_count,
 };

@@ -45,7 +45,7 @@ pub struct PlaylistProps<'a> {
     pub import_audio_file: &'a mut dyn FnMut(PathBuf) -> Option<crate::state::ImportedAudioSource>,
 }
 
-pub fn render(ui: &mut Ui, props: PlaylistProps<'_>) {
+pub fn render(ui: &mut Ui, mut props: PlaylistProps<'_>) {
     let ppq = props.playlist.ppq() as f32;
     let ppq_ticks = props.playlist.ppq() as u64;
     let total_beats = props
@@ -244,9 +244,12 @@ fn handle_file_drop(
     snap: Snap,
     import_audio: &mut dyn FnMut(PathBuf) -> Option<crate::state::ImportedAudioSource>,
 ) {
-    let dropped = ui.input(|i| i.raw.dropped_files.clone());
+    let (dropped, pointer_pos) =
+        ui.input(|i| (i.raw.dropped_files.clone(), i.pointer.hover_pos()));
+    let Some(pos) = pointer_pos else { return; };
+
     for file in dropped {
-        let (Some(path), Some(pos)) = (file.path.clone(), file.pos) else {
+        let Some(path) = file.path.clone() else {
             continue;
         };
 
@@ -267,19 +270,27 @@ fn handle_file_drop(
         let snap_division = snap.division() as f32;
         let snapped_beats = (beat * snap_division).round() / snap_division;
         let start_ticks = (snapped_beats * playlist.ppq() as f32).round().max(0.0) as u64;
-        if let Some(track) = playlist.tracks.get_mut(track_index) {
-            track.ensure_audio_routing();
+        if playlist.tracks.get(track_index).is_some() {
+            let (track_id, track_color) = {
+                let track = playlist
+                    .tracks
+                    .get_mut(track_index)
+                    .expect("track should still exist");
+                track.ensure_audio_routing();
+                (track.id, track.color)
+            };
+
             let name = path
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .unwrap_or("Audio");
             playlist.drop_clip_from_browser(
-                track.id,
+                track_id,
                 lane_id,
                 name,
                 start_ticks,
                 imported.duration_ticks.max(1),
-                track.color,
+                track_color,
                 ClipKind::Audio {
                     source: imported.id,
                 },

@@ -3,9 +3,7 @@ use std::{marker::PhantomData, ptr};
 #[cfg(deny_alloc_in_rt)]
 use std::cell::Cell;
 
-#[cfg(any(test, deny_alloc_in_rt))]
 use std::alloc::{GlobalAlloc, Layout, System};
-#[cfg(any(test, deny_alloc_in_rt))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Scratch space reused across audio processing blocks. This allows temporary
@@ -91,23 +89,18 @@ fn on_alloc() {
     });
 }
 
-#[cfg(any(test, deny_alloc_in_rt))]
 pub struct GuardedAllocator;
 
-#[cfg(any(test, deny_alloc_in_rt))]
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
-#[cfg(any(test, deny_alloc_in_rt))]
 pub fn allocation_count() -> usize {
     ALLOCATIONS.load(Ordering::Relaxed)
 }
 
-#[cfg(any(test, deny_alloc_in_rt))]
 pub fn reset_allocation_count() {
     ALLOCATIONS.store(0, Ordering::Relaxed);
 }
 
-#[cfg(any(test, deny_alloc_in_rt))]
 unsafe impl GlobalAlloc for GuardedAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         #[cfg(deny_alloc_in_rt)]
