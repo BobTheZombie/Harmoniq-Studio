@@ -1,4 +1,5 @@
 use eframe::egui::{self, Color32, RichText};
+use harmoniq_engine::MidiEvent;
 use harmoniq_ui::{HarmoniqPalette, Knob, StepToggle};
 use tracing::debug;
 
@@ -14,6 +15,21 @@ struct Channel {
     pan: f32,
 }
 
+#[derive(Clone, Debug)]
+pub struct StepState {
+    pub on: bool,
+    pub velocity: f32,
+}
+
+impl Default for StepState {
+    fn default() -> Self {
+        Self {
+            on: false,
+            velocity: 1.0,
+        }
+    }
+}
+
 impl Channel {
     fn new(name: &str, color: Color32) -> Self {
         Self {
@@ -27,15 +43,15 @@ impl Channel {
 
 #[derive(Clone)]
 pub struct ChannelRackPattern {
-    pub steps: Vec<Vec<bool>>, // channel index -> steps
-    channel_volumes: Vec<f32>, // channel index -> volume
+    pub steps: Vec<Vec<StepState>>, // channel index -> steps
+    channel_volumes: Vec<f32>,      // channel index -> volume
 }
 
 impl ChannelRackPattern {
     fn new(channel_volumes: &[f32]) -> Self {
         let channel_count = channel_volumes.len();
         Self {
-            steps: vec![vec![false; DEFAULT_STEP_COUNT]; channel_count],
+            steps: vec![vec![StepState::default(); DEFAULT_STEP_COUNT]; channel_count],
             channel_volumes: channel_volumes.to_vec(),
         }
     }
@@ -187,7 +203,7 @@ impl ChannelRackPane {
             self.patterns = vec![ChannelRackPattern::new(&self.channel_volumes())];
             self.active_pattern_index = 0;
         }
-        let mut clone_requests: Vec<(usize, Channel, Vec<Vec<bool>>)> = Vec::new();
+        let mut clone_requests: Vec<(usize, Channel, Vec<Vec<StepState>>)> = Vec::new();
 
         ui.vertical(|ui| {
             ui.heading(RichText::new("Channel Rack").color(palette.text_primary));
@@ -247,13 +263,13 @@ impl ChannelRackPane {
                                             .gamma_multiply(if step % 4 == 0 { 0.9 } else { 0.7 });
                                         let toggle = ui.add(
                                             StepToggle::new(palette, accent)
-                                                .active(pattern.steps[index][step])
+                                                .active(pattern.steps[index][step].on)
                                                 .emphasise(step % 4 == 0)
                                                 .with_size(egui::vec2(20.0, 34.0)),
                                         );
                                         if toggle.clicked() {
-                                            pattern.steps[index][step] =
-                                                !pattern.steps[index][step];
+                                            let state = &mut pattern.steps[index][step];
+                                            state.on = !state.on;
                                             event_bus.publish(AppEvent::RequestRepaint);
                                         }
                                     }
@@ -296,7 +312,7 @@ impl ChannelRackPane {
                                         if ui.button("Clone").clicked() {
                                             let mut clone = channel.clone();
                                             clone.name = format!("{} Copy", channel.name);
-                                            let step_templates: Vec<Vec<bool>> = self
+                                            let step_templates: Vec<Vec<StepState>> = self
                                                 .patterns
                                                 .iter()
                                                 .map(|p| p.steps[index].clone())
@@ -316,7 +332,9 @@ impl ChannelRackPane {
                     palette.accent,
                 );
                 for pattern in &mut self.patterns {
-                    pattern.steps.push(vec![false; DEFAULT_STEP_COUNT]);
+                    pattern
+                        .steps
+                        .push(vec![StepState::default(); DEFAULT_STEP_COUNT]);
                     pattern.channel_volumes.push(channel.volume);
                 }
                 self.channels.push(channel);
@@ -422,14 +440,14 @@ impl Default for ChannelRackPane {
 ///
 /// The audio engine is expected to call this every tick of the step sequencer.
 /// A standard 960 PPQ grid is used, so each 16th note advances by 240 ticks.
-pub fn schedule_step_events(pattern: &ChannelRackPattern, beat: usize) {
+pub fn schedule_step_events(pattern: &ChannelRackPattern, beat: usize) -> Vec<MidiEvent> {
     if pattern.steps.is_empty() {
-        return;
+        return Vec::new();
     }
 
     let steps_per_bar = pattern.steps[0].len();
     if steps_per_bar == 0 {
-        return;
+        return Vec::new();
     }
 
     let step_index = beat % steps_per_bar;
@@ -437,21 +455,26 @@ pub fn schedule_step_events(pattern: &ChannelRackPattern, beat: usize) {
     let ticks_per_step = ticks_per_beat / 4;
     let event_tick = (step_index as u32) * ticks_per_step;
 
+    let mut events = Vec::new();
     let channel_count = pattern.steps.len().min(pattern.channel_volumes.len());
     for channel_index in 0..channel_count {
-        if *pattern.steps[channel_index]
-            .get(step_index)
-            .unwrap_or(&false)
-        {
-            let volume = pattern.channel_volumes[channel_index];
-            trigger_channel_sound(channel_index, event_tick, volume);
+        let Some(step_state) = pattern.steps[channel_index].get(step_index) else {
+            continue;
+        };
+        if !step_state.on {
+            continue;
         }
-    }
-}
 
-fn trigger_channel_sound(channel_index: usize, tick: u32, volume: f32) {
-    debug!(
-        "Triggering step event for channel {channel_index} at tick {tick} with volume {:.3}",
-        volume
-    );
+        let volume = pattern.channel_volumes[channel_index];
+        let scaled_velocity = (step_state.velocity.clamp(0.0, 1.0) * 127.0)
+            .round()
+            .clamp(1.0, 127.0) as u8;
+        debug!(
+            "Triggering step event for channel {channel_index} at tick {event_tick} with volume {:.3} and velocity {scaled_velocity}",
+            volume
+        );
+        events.push(MidiEvent::new(0, [0x90, 60, scaled_velocity]));
+    }
+
+    events
 }

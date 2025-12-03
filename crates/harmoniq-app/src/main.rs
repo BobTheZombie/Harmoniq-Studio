@@ -1468,6 +1468,7 @@ struct HarmoniqStudioApp {
     time_signature: TimeSignature,
     transport_state: TransportState,
     transport_clock: TransportClock,
+    last_step_tick: u64,
     metronome: bool,
     pattern_mode: bool,
     transport_loop_enabled: bool,
@@ -1702,6 +1703,7 @@ impl HarmoniqStudioApp {
             time_signature: initial_time_signature,
             transport_state: TransportState::Stopped,
             transport_clock: TransportClock::default(),
+            last_step_tick: 0,
             metronome: false,
             pattern_mode: true,
             transport_loop_enabled: false,
@@ -1957,8 +1959,8 @@ impl HarmoniqStudioApp {
         let step_len = (clip.loop_len_ppq / steps.len() as i64).max(1);
         let mut next_id = 0u64;
 
-        for (step_index, active) in steps.iter().enumerate() {
-            if !*active {
+        for (step_index, state) in steps.iter().enumerate() {
+            if !state.on {
                 continue;
             }
 
@@ -1968,7 +1970,7 @@ impl HarmoniqStudioApp {
                 start_ppq,
                 dur_ppq: step_len,
                 pitch: 72,
-                vel: 100,
+                vel: (state.velocity * 127.0).round() as u8,
                 chan: 0,
                 selected: false,
             });
@@ -2037,10 +2039,10 @@ impl HarmoniqStudioApp {
         if let Some(pattern) = self.channel_rack.pattern_mut(pattern_index) {
             if let Some(steps) = pattern.steps.get_mut(channel_index) {
                 if steps.len() != step_count {
-                    steps.resize(step_count, false);
+                    steps.resize(step_count, ui::channel_rack::StepState::default());
                 }
                 for step in steps.iter_mut() {
-                    *step = false;
+                    step.on = false;
                 }
 
                 for note in &self.piano_roll_widget.state().clip.notes {
@@ -2048,7 +2050,7 @@ impl HarmoniqStudioApp {
                         .clamp(0, step_count.saturating_sub(1) as i64)
                         as usize;
                     if let Some(slot) = steps.get_mut(step) {
-                        *slot = true;
+                        slot.on = true;
                     }
                 }
             }
@@ -2149,6 +2151,8 @@ impl HarmoniqStudioApp {
                 }
                 AppEvent::TogglePatternMode => {
                     self.pattern_mode = !self.pattern_mode;
+                    self.last_step_tick = self.transport_clock.total_ticks(self.time_signature);
+                    self.send_command(EngineCommand::SetPatternMode(self.pattern_mode));
                 }
                 AppEvent::PreviewStockSound(name) => {
                     self.preview_stock_sound(&name);
@@ -2303,11 +2307,13 @@ impl HarmoniqStudioApp {
                 self.transport_state = TransportState::Playing;
                 self.transport.sample_pos.store(0, AtomicOrdering::Relaxed);
                 self.send_command(EngineCommand::SetTransport(TransportState::Playing));
+                self.last_step_tick = 0;
             }
             TransportEvent::Stop => {
                 self.transport_state = TransportState::Stopped;
                 self.transport.sample_pos.store(0, AtomicOrdering::Relaxed);
                 self.send_command(EngineCommand::SetTransport(TransportState::Stopped));
+                self.last_step_tick = 0;
             }
             TransportEvent::Record(armed) => {
                 self.record_armed = armed;
@@ -2339,6 +2345,38 @@ impl HarmoniqStudioApp {
         ctx.cpu_usage = self.mixer.cpu_estimate();
         ctx.clock = self.transport_clock;
         ctx.master_meter = self.mixer.master_meter();
+    }
+
+    fn process_step_sequencer(&mut self) {
+        if !self.pattern_mode
+            || !matches!(
+                self.transport_state,
+                TransportState::Playing | TransportState::Recording
+            )
+        {
+            self.last_step_tick = self.transport_clock.total_ticks(self.time_signature);
+            return;
+        }
+
+        let Some(pattern) = self.channel_rack.current_pattern() else {
+            return;
+        };
+
+        let current_tick = self.transport_clock.total_ticks(self.time_signature);
+        let ticks_per_step = 960u64 / 4;
+
+        if self.last_step_tick == 0 {
+            self.last_step_tick = current_tick.saturating_sub(current_tick % ticks_per_step);
+        }
+
+        while self.last_step_tick <= current_tick {
+            let beat = (self.last_step_tick / ticks_per_step) as usize;
+            let events = ui::channel_rack::schedule_step_events(pattern, beat);
+            if !events.is_empty() {
+                self.send_command(EngineCommand::SubmitMidi(events));
+            }
+            self.last_step_tick = self.last_step_tick.saturating_add(ticks_per_step);
+        }
     }
 
     fn handle_library_action(&mut self, action: LibraryAction) {
@@ -2929,6 +2967,7 @@ impl App for HarmoniqStudioApp {
         self.process_events();
         self.poll_rt_events();
         self.update_engine_context();
+        self.process_step_sequencer();
         self.input_focus.maybe_release_on_escape(ctx);
         self.plugin_manager.tick();
         if let Some(status) = self.plugin_manager.progress() {
