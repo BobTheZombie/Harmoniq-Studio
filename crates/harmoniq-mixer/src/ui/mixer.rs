@@ -1541,16 +1541,26 @@ fn inserts_panel(
         let pointer_pos = ui.ctx().pointer_interact_pos();
         let mut drop_target: Option<usize> = None;
         let mut pending_move: Option<(usize, usize)> = None;
+        let total_slots = 8;
+        for index in 0..total_slots {
+            channel.ensure_insert_slot(index);
+        }
         let insert_count = channel.inserts.len();
 
-        for (index, slot) in channel.inserts.iter_mut().enumerate() {
+        for index in 0..total_slots {
+            channel.ensure_insert_slot(index);
+            let slot = channel
+                .inserts
+                .get_mut(index)
+                .expect("insert slot ensured above");
+            let is_empty = slot.plugin_uid.is_none();
             let title = if slot.name.is_empty() {
                 "Empty".to_string()
             } else {
                 slot.name.clone()
             };
 
-            let slot_fill = if slot.name.is_empty() {
+            let slot_fill = if is_empty {
                 palette.mixer_slot_bg
             } else {
                 palette.mixer_slot_active
@@ -1600,10 +1610,10 @@ fn inserts_panel(
                             ),
                         );
                         if insert_button.clicked() {
-                            if slot.plugin_uid.is_some() {
-                                (callbacks.open_insert_ui)(channel.id, index);
-                            } else {
+                            if is_empty {
                                 (callbacks.open_insert_browser)(channel.id, Some(index));
+                            } else {
+                                (callbacks.open_insert_ui)(channel.id, index);
                             }
                         }
                         insert_button.context_menu(|ui| {
@@ -1657,22 +1667,6 @@ fn inserts_panel(
                 channel.inserts.insert(destination, slot);
                 (callbacks.reorder_insert)(channel.id, from, destination);
             }
-        }
-
-        if ui
-            .add_sized(
-                [metrics.strip_w - 12.0, 32.0],
-                egui::Button::new(
-                    RichText::new("+ Add Insert")
-                        .small()
-                        .color(palette.text_primary),
-                )
-                .fill(palette.toolbar_highlight)
-                .stroke(Stroke::new(1.0, palette.toolbar_outline)),
-            )
-            .clicked()
-        {
-            (callbacks.open_insert_browser)(channel.id, None);
         }
     });
 }
