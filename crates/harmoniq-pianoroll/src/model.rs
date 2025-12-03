@@ -304,6 +304,16 @@ impl EditorState {
             .collect()
     }
 
+    pub fn remove_note(&mut self, id: u64) -> Option<Note> {
+        if let Some(pos) = self.clip.notes.iter().position(|n| n.id == id) {
+            let note = self.clip.notes.remove(pos);
+            self.selection.retain(|selected| *selected != id);
+            Some(note)
+        } else {
+            None
+        }
+    }
+
     pub fn clear_selection(&mut self) {
         self.selection.clear();
         for note in &mut self.clip.notes {
@@ -337,7 +347,11 @@ impl EditorState {
         for edit in edits {
             match edit {
                 Edit::Add(note) => {
-                    self.clip.notes.push(note.clone());
+                    if let Some(existing) = self.clip.notes.iter_mut().find(|n| n.id == note.id) {
+                        *existing = note.clone();
+                    } else {
+                        self.clip.notes.push(note.clone());
+                    }
                 }
                 Edit::Remove(id) => {
                     if let Some(pos) = self.clip.notes.iter().position(|n| n.id == *id) {
@@ -394,27 +408,38 @@ impl EditorState {
         self.clip.sort_notes();
     }
 
-    pub fn register_history(&mut self, edits: Vec<Edit>) {
-        if edits.is_empty() {
-            return;
+    pub fn register_history_snapshot(&mut self, snapshot: Clip) {
+        self.history.push(snapshot);
+    }
+
+    pub fn undo(&mut self) -> bool {
+        if let Some(previous) = self.history.undo(&self.clip) {
+            self.clip = previous;
+            self.clear_selection();
+            self.clip.sort_notes();
+            true
+        } else {
+            false
         }
-        self.history.push(edits);
     }
 
-    pub fn undo(&mut self) -> Option<Vec<Edit>> {
-        self.history.undo()
-    }
-
-    pub fn redo(&mut self) -> Option<Vec<Edit>> {
-        self.history.redo()
+    pub fn redo(&mut self) -> bool {
+        if let Some(next) = self.history.redo(&self.clip) {
+            self.clip = next;
+            self.clear_selection();
+            self.clip.sort_notes();
+            true
+        } else {
+            false
+        }
     }
 }
 
 /// Simple undo/redo history storing edit batches.
 #[derive(Clone, Debug)]
 pub struct History {
-    undo: SmallVec<[Vec<Edit>; 8]>,
-    redo: SmallVec<[Vec<Edit>; 8]>,
+    undo: SmallVec<[Clip; 8]>,
+    redo: SmallVec<[Clip; 8]>,
     capacity: usize,
 }
 
@@ -432,26 +457,26 @@ impl History {
         self.redo.clear();
     }
 
-    pub fn push(&mut self, edits: Vec<Edit>) {
+    pub fn push(&mut self, snapshot: Clip) {
         if self.undo.len() >= self.capacity {
             if !self.undo.is_empty() {
                 self.undo.remove(0);
             }
         }
-        self.undo.push(edits);
+        self.undo.push(snapshot);
         self.redo.clear();
     }
 
-    pub fn undo(&mut self) -> Option<Vec<Edit>> {
-        let edits = self.undo.pop()?;
-        self.redo.push(edits.clone());
-        Some(edits)
+    pub fn undo(&mut self, current: &Clip) -> Option<Clip> {
+        let previous = self.undo.pop()?;
+        self.redo.push(current.clone());
+        Some(previous)
     }
 
-    pub fn redo(&mut self) -> Option<Vec<Edit>> {
-        let edits = self.redo.pop()?;
-        self.undo.push(edits.clone());
-        Some(edits)
+    pub fn redo(&mut self, current: &Clip) -> Option<Clip> {
+        let next = self.redo.pop()?;
+        self.undo.push(current.clone());
+        Some(next)
     }
 }
 
@@ -483,6 +508,19 @@ pub mod grid {
                 swing,
                 timebase,
             }
+        }
+
+        pub fn step_ppq(&self) -> i64 {
+            let snap = match self.snap {
+                None => return 1,
+                Some(s) => s,
+            };
+            let base_div = snap.divisions_per_beat();
+            let mut step_ppq = (self.ppq_per_beat as i64) / (base_div as i64).max(1);
+            if self.triplets {
+                step_ppq = (self.ppq_per_beat as i64) * 2 / (base_div as i64 * 3).max(1);
+            }
+            step_ppq.max(1)
         }
 
         pub fn snap_ppq(&self, value: i64) -> i64 {

@@ -212,6 +212,7 @@ impl ToolController {
             }
             Tool::Erase => {
                 if let Some(hit) = hit {
+                    ctx.remove_note(hit.id);
                     output.edits.push(Edit::Remove(hit.id));
                 }
             }

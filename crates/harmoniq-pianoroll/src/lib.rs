@@ -39,6 +39,8 @@ pub struct PianoRoll {
     hovered_note: Option<u64>,
     marquee_rect: Option<Rect>,
     gesture_edits: Vec<Edit>,
+    history_snapshot: Option<Clip>,
+    history_dirty: bool,
 }
 
 impl PianoRoll {
@@ -60,6 +62,8 @@ impl PianoRoll {
             hovered_note: None,
             marquee_rect: None,
             gesture_edits: Vec::new(),
+            history_snapshot: None,
+            history_dirty: false,
         }
     }
 
@@ -157,7 +161,7 @@ impl PianoRoll {
     fn top_toolbar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             let tool_buttons = [
-                ("Arrow", Tool::Arrow),
+                ("Select", Tool::Arrow),
                 ("Draw", Tool::Draw),
                 ("Erase", Tool::Erase),
                 ("Split", Tool::Split),
@@ -202,6 +206,30 @@ impl PianoRoll {
             ui.toggle_value(&mut self.state.triplets, "Triplet");
             ui.toggle_value(&mut self.state.follow_playhead, "Follow");
             ui.separator();
+            let mut loop_beats = self.state.clip.loop_len_ppq as f32 / self.state.ppq() as f32;
+            let len_response = ui
+                .add(
+                    egui::DragValue::new(&mut loop_beats)
+                        .clamp_range(1.0..=512.0)
+                        .speed(0.25)
+                        .suffix(" beats"),
+                )
+                .on_hover_text("Pattern length");
+            if len_response.changed() {
+                let new_len = (loop_beats * self.state.ppq() as f32).round().max(1.0) as i64;
+                self.begin_history_snapshot();
+                self.state.clip.loop_len_ppq = new_len;
+                self.history_dirty = true;
+                let edit = Edit::LoopChanged {
+                    start_ppq: self.state.clip.loop_start_ppq,
+                    len_ppq: self.state.clip.loop_len_ppq,
+                };
+                self.pending_edits.push(edit.clone());
+                self.gesture_edits.push(edit);
+                self.commit_history_snapshot();
+                self.gesture_edits.clear();
+            }
+            ui.separator();
             ui.label("Quantize");
             ui.add(
                 egui::Slider::new(&mut self.state.quantize_strength, 0.0..=1.0).text("Strength"),
@@ -230,6 +258,9 @@ impl PianoRoll {
     fn handle_input(&mut self, ui: &Ui, keyboard_rect: Rect, grid_rect: Rect, response: &Response) {
         self.handle_scroll_and_zoom(ui, grid_rect);
         let modifiers = ui.ctx().input(|i| i.modifiers);
+        if response.clicked() {
+            response.request_focus();
+        }
         if response.clicked_by(egui::PointerButton::Primary) {
             if let Some(pos) = response.interact_pointer_pos() {
                 if keyboard_rect.contains(pos) {
@@ -254,6 +285,7 @@ impl PianoRoll {
                     });
                     return;
                 }
+                self.begin_history_snapshot();
                 self.gesture_edits.clear();
                 let pointer = self.pointer_position(grid_rect, pos);
                 let hit = self.hit_test(grid_rect, pos);
@@ -275,12 +307,27 @@ impl PianoRoll {
                 self.handle_tool_output(output);
             }
         }
+        if response.clicked_by(egui::PointerButton::Secondary) {
+            if let Some(pos) = response.interact_pointer_pos() {
+                if let Some(hit) = self.hit_test(grid_rect, pos) {
+                    self.begin_history_snapshot();
+                    if self.state.remove_note(hit.id).is_some() {
+                        self.pending_edits.push(Edit::Remove(hit.id));
+                        self.gesture_edits.push(Edit::Remove(hit.id));
+                        self.history_dirty = true;
+                    }
+                }
+            }
+        }
         if response.drag_stopped() || response.clicked_elsewhere() {
             self.finalize_marquee(grid_rect);
             self.tool_controller.on_pointer_released();
             if !self.gesture_edits.is_empty() {
-                self.state
-                    .register_history(std::mem::take(&mut self.gesture_edits));
+                self.commit_history_snapshot();
+                self.gesture_edits.clear();
+            } else {
+                self.history_snapshot = None;
+                self.history_dirty = false;
             }
         }
         if response.hovered() {
@@ -288,6 +335,8 @@ impl PianoRoll {
                 self.hovered_note = self.hit_test(grid_rect, pos).map(|hit| hit.id);
             }
         }
+
+        self.handle_keyboard(response, grid_rect);
     }
 
     fn handle_scroll_and_zoom(&mut self, ui: &Ui, grid_rect: Rect) {
@@ -317,6 +366,7 @@ impl PianoRoll {
         if !output.edits.is_empty() {
             self.pending_edits.extend(output.edits.clone());
             self.gesture_edits.extend(output.edits);
+            self.history_dirty = true;
         }
         if let Some(selection) = output.selection {
             self.state.clear_selection();
@@ -351,6 +401,147 @@ impl PianoRoll {
                 self.state.select_note(id, true);
             }
         }
+    }
+
+    fn begin_history_snapshot(&mut self) {
+        if self.history_snapshot.is_none() {
+            self.history_snapshot = Some(self.state.clip.clone());
+        }
+    }
+
+    fn commit_history_snapshot(&mut self) {
+        if self.history_dirty {
+            if let Some(snapshot) = self.history_snapshot.take() {
+                self.state.register_history_snapshot(snapshot);
+            }
+        }
+        self.history_dirty = false;
+    }
+
+    fn handle_keyboard(&mut self, response: &Response, _grid_rect: Rect) {
+        if !response.has_focus() {
+            return;
+        }
+
+        let mut left = false;
+        let mut right = false;
+        let mut up = false;
+        let mut down = false;
+        let mut delete = false;
+        let mut undo = false;
+        let mut redo = false;
+        let mut modifiers = egui::Modifiers::default();
+
+        response.ctx.input(|input| {
+            modifiers = input.modifiers;
+            left = input.key_pressed(egui::Key::ArrowLeft);
+            right = input.key_pressed(egui::Key::ArrowRight);
+            up = input.key_pressed(egui::Key::ArrowUp);
+            down = input.key_pressed(egui::Key::ArrowDown);
+            delete =
+                input.key_pressed(egui::Key::Delete) || input.key_pressed(egui::Key::Backspace);
+            undo = input.key_pressed(egui::Key::Z)
+                && (input.modifiers.ctrl || input.modifiers.command);
+            redo = input.key_pressed(egui::Key::Y)
+                || (input.key_pressed(egui::Key::Z)
+                    && (input.modifiers.ctrl || input.modifiers.command)
+                    && input.modifiers.shift);
+        });
+
+        if undo {
+            let before = self.state.clip.clone();
+            if self.state.undo() {
+                let after = self.state.clip.clone();
+                self.emit_clip_diff(before, after);
+            }
+        } else if redo {
+            let before = self.state.clip.clone();
+            if self.state.redo() {
+                let after = self.state.clip.clone();
+                self.emit_clip_diff(before, after);
+            }
+        }
+
+        let mut edits = Vec::new();
+        if left || right || up || down {
+            let step = if modifiers.alt {
+                1
+            } else {
+                self.tool_controller.snapper.step_ppq()
+            };
+            let mut moved = false;
+            for note in &mut self.state.clip.notes {
+                if !note.selected {
+                    continue;
+                }
+                moved = true;
+                if left {
+                    note.start_ppq = (note.start_ppq - step).max(0);
+                }
+                if right {
+                    note.start_ppq = (note.start_ppq + step).max(0);
+                }
+                if up {
+                    note.pitch = note.pitch.saturating_add(1).min(127);
+                }
+                if down {
+                    note.pitch = note.pitch.saturating_sub(1);
+                }
+                edits.push(Edit::Update {
+                    id: note.id,
+                    start_ppq: note.start_ppq,
+                    dur_ppq: note.dur_ppq,
+                    pitch: note.pitch,
+                    vel: note.vel,
+                    chan: note.chan,
+                });
+            }
+            if moved {
+                self.state.clip.sort_notes();
+                self.begin_history_snapshot();
+                self.history_dirty = true;
+            }
+        }
+
+        if delete {
+            let selection: Vec<u64> = self.state.selection.clone();
+            if !selection.is_empty() {
+                self.begin_history_snapshot();
+                for id in selection {
+                    if self.state.remove_note(id).is_some() {
+                        edits.push(Edit::Remove(id));
+                    }
+                }
+                self.history_dirty = true;
+            }
+        }
+
+        if !edits.is_empty() {
+            self.pending_edits.extend(edits.clone());
+            self.gesture_edits.extend(edits);
+            self.commit_history_snapshot();
+            self.gesture_edits.clear();
+        }
+    }
+
+    fn emit_clip_diff(&mut self, before: Clip, after: Clip) {
+        let mut edits = Vec::new();
+        for note in before.notes {
+            edits.push(Edit::Remove(note.id));
+        }
+        for note in &after.notes {
+            edits.push(Edit::Add(note.clone()));
+        }
+        if before.loop_start_ppq != after.loop_start_ppq
+            || before.loop_len_ppq != after.loop_len_ppq
+        {
+            edits.push(Edit::LoopChanged {
+                start_ppq: after.loop_start_ppq,
+                len_ppq: after.loop_len_ppq,
+            });
+        }
+        self.pending_edits.extend(edits.clone());
+        self.gesture_edits.extend(edits);
     }
 
     fn pointer_position(&self, grid_rect: Rect, pos: Pos2) -> PointerPosition {
