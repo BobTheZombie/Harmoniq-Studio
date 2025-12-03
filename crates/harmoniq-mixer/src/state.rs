@@ -333,6 +333,7 @@ impl Default for Meter {
 #[derive(Clone, Debug)]
 pub struct Channel {
     pub id: ChannelId,
+    pub track_number: u16,
     pub name: String,
     pub gain_db: f32, // -60..+12
     pub pan: f32,     // -1..1
@@ -428,6 +429,7 @@ pub struct MixerState {
     pub channel_filter: String,
     pub master: MasterProcessing,
     pub default_pan_law: PanLaw,
+    pub rack_routes: HashMap<u16, usize>,
 }
 
 impl Default for MixerState {
@@ -443,6 +445,7 @@ impl Default for MixerState {
             channel_filter: String::new(),
             master: MasterProcessing::default(),
             default_pan_law: PanLaw::default(),
+            rack_routes: HashMap::new(),
         }
     }
 }
