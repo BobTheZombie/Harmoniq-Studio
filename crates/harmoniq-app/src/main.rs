@@ -27,7 +27,7 @@ use harmoniq_engine::{
     rt_bridge::RtBridge,
     transport::Transport as EngineTransport,
     AudioBuffer, AudioClip, BufferConfig, ChannelLayout, EngineCommand, GraphBuilder,
-    HarmoniqEngine, PluginId, TransportState,
+    HarmoniqEngine, MidiEvent, PluginId, TransportState,
 };
 use harmoniq_midi::config::{self as midi_config, MidiSettings};
 use harmoniq_plugin_db::PluginStore;
@@ -2045,6 +2045,41 @@ impl HarmoniqStudioApp {
                 );
             }
             None => {}
+        }
+
+        self.sync_engine_pattern_notes();
+    }
+
+    fn sync_engine_pattern_notes(&mut self) {
+        let sample_rate = self.engine_runner.config().sample_rate as f32;
+        let tempo = self.tempo.max(1.0);
+        let ppq = self.piano_roll_widget.state().ppq() as f32;
+        let seconds_per_tick = (60.0 / tempo) / ppq.max(1.0);
+
+        let mut events = Vec::new();
+        for note in &self.piano_roll_widget.state().clip.notes {
+            let channel = note.chan.min(15);
+            let pitch = note.pitch;
+            let start_samples = ((note.start_ppq as f32 * seconds_per_tick) * sample_rate)
+                .round()
+                .max(0.0) as u32;
+            let end_samples = (((note.start_ppq + note.dur_ppq).max(note.start_ppq) as f32)
+                * seconds_per_tick
+                * sample_rate)
+                .round()
+                .max(0.0) as u32;
+
+            events.push(MidiEvent::new(
+                start_samples,
+                [0x90 | channel, pitch, note.vel],
+            ));
+            events.push(MidiEvent::new(end_samples, [0x80 | channel, pitch, 0]));
+        }
+
+        events.sort_by_key(|event| event.sample_offset);
+
+        if !events.is_empty() {
+            self.send_command(EngineCommand::SubmitMidi(events));
         }
     }
 
