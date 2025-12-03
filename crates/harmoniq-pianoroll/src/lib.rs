@@ -511,7 +511,7 @@ impl PianoRoll {
             if note_rect.max.y < rect.top() || note_rect.min.y > rect.bottom() {
                 continue;
             }
-            let fill = if note.selected {
+            let base_fill = if note.selected {
                 self.theme.note_selected_fill
             } else {
                 self.theme.note_fill
@@ -521,10 +521,19 @@ impl PianoRoll {
             } else {
                 self.theme.note_border
             };
+            let fill = apply_velocity_tint(base_fill, note.vel);
             self.note_shapes
                 .push(Shape::rect_filled(note_rect, 3.0, fill));
             self.note_shapes
                 .push(Shape::rect_stroke(note_rect, 3.0, stroke));
+            let velocity_height =
+                (note_rect.height() * (note.vel as f32 / 127.0)).clamp(3.0, note_rect.height());
+            let vel_rect = Rect::from_min_max(
+                pos2(note_rect.left() + 1.0, note_rect.bottom() - velocity_height),
+                pos2(note_rect.left() + 3.0, note_rect.bottom() - 2.0),
+            );
+            self.note_shapes
+                .push(Shape::rect_filled(vel_rect, 2.0, stroke.color));
         }
         painter.extend(self.ghost_shapes.drain(..));
         painter.extend(self.note_shapes.drain(..));
@@ -593,6 +602,14 @@ impl PianoRoll {
 
 fn is_black_key(pitch: u8) -> bool {
     matches!(pitch % 12, 1 | 3 | 6 | 8 | 10)
+}
+
+fn apply_velocity_tint(color: Color32, velocity: u8) -> Color32 {
+    let factor = 0.55 + (velocity as f32 / 127.0) * 0.45;
+    let r = (color.r() as f32 * factor).clamp(0.0, 255.0) as u8;
+    let g = (color.g() as f32 * factor).clamp(0.0, 255.0) as u8;
+    let b = (color.b() as f32 * factor).clamp(0.0, 255.0) as u8;
+    Color32::from_rgba_unmultiplied(r, g, b, color.a())
 }
 
 #[cfg(feature = "demo-app")]
