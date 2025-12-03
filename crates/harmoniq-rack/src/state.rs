@@ -172,8 +172,12 @@ impl RackState {
         state
     }
 
+    fn next_pattern_id(&self) -> PatternId {
+        self.patterns.iter().map(|p| p.id).max().unwrap_or(0) + 1
+    }
+
     pub fn add_pattern(&mut self) -> PatternId {
-        let id = self.patterns.iter().map(|p| p.id).max().unwrap_or(0) + 1;
+        let id = self.next_pattern_id();
         self.patterns.push(PatternMeta {
             id,
             name: format!("Pattern {id}"),
@@ -181,6 +185,59 @@ impl RackState {
         });
         self.current_pattern = id;
         id
+    }
+
+    pub fn clone_pattern(&mut self, pat: PatternId) -> Option<PatternId> {
+        let source_meta = self.patterns.iter().find(|p| p.id == pat)?.clone();
+        let new_id = self.next_pattern_id();
+        self.patterns.push(PatternMeta {
+            id: new_id,
+            name: format!("{} (Copy)", source_meta.name),
+            bars: source_meta.bars,
+        });
+
+        for channel in &mut self.channels {
+            if let Some(steps) = channel.steps.get(&pat).cloned() {
+                channel.steps.insert(new_id, steps);
+            }
+        }
+
+        self.current_pattern = new_id;
+        Some(new_id)
+    }
+
+    pub fn select_pattern(&mut self, pat: PatternId) {
+        if self.patterns.iter().any(|p| p.id == pat) {
+            self.current_pattern = pat;
+        }
+    }
+
+    pub fn select_next_pattern(&mut self) {
+        if let Some((idx, _)) = self
+            .patterns
+            .iter()
+            .enumerate()
+            .find(|(_, meta)| meta.id == self.current_pattern)
+        {
+            let next_idx = (idx + 1) % self.patterns.len().max(1);
+            self.current_pattern = self.patterns[next_idx].id;
+        }
+    }
+
+    pub fn select_previous_pattern(&mut self) {
+        if let Some((idx, _)) = self
+            .patterns
+            .iter()
+            .enumerate()
+            .find(|(_, meta)| meta.id == self.current_pattern)
+        {
+            let prev_idx = if idx == 0 {
+                self.patterns.len().saturating_sub(1)
+            } else {
+                idx - 1
+            };
+            self.current_pattern = self.patterns[prev_idx].id;
+        }
     }
 
     pub fn add_channel(
@@ -349,5 +406,43 @@ mod tests {
         assert_eq!(slot.key_range, (21, 108));
         assert_eq!(slot.velocity_range, (10, 120));
         assert_eq!(slot.midi_routing.input_channel, Some(1));
+    }
+
+    #[test]
+    fn cloning_pattern_copies_steps_per_channel() {
+        let mut rack = RackState::new_default();
+        let instrument = rack.add_channel("Keys".into(), ChannelKind::Instrument, None);
+        let sample = rack.add_channel("Snare".into(), ChannelKind::Sample, None);
+
+        let steps = rack.steps_mut(rack.current_pattern, instrument);
+        steps[0].on = true;
+        steps[1].velocity = 64;
+
+        let sample_steps = rack.steps_mut(rack.current_pattern, sample);
+        sample_steps[3].on = true;
+
+        let cloned_id = rack
+            .clone_pattern(rack.current_pattern)
+            .expect("clone succeeds");
+
+        assert_eq!(rack.patterns.len(), 2);
+        assert_eq!(rack.current_pattern, cloned_id);
+
+        let instrument_steps = rack
+            .channels
+            .iter()
+            .find(|c| c.id == instrument)
+            .and_then(|c| c.steps.get(&cloned_id))
+            .expect("instrument steps cloned");
+        assert!(instrument_steps[0].on);
+        assert_eq!(instrument_steps[1].velocity, 64);
+
+        let sample_steps = rack
+            .channels
+            .iter()
+            .find(|c| c.id == sample)
+            .and_then(|c| c.steps.get(&cloned_id))
+            .expect("sample steps cloned");
+        assert!(sample_steps[3].on);
     }
 }
