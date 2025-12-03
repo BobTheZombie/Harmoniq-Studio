@@ -7,10 +7,10 @@ use crate::ui::workspace::WorkspacePane;
 
 #[derive(Clone, Debug)]
 pub struct PianoRollNote {
-    start: f32,
-    length: f32,
-    pitch: i32,
-    velocity: f32,
+    pub start: f32,
+    pub length: f32,
+    pub pitch: i32,
+    pub velocity: f32,
 }
 
 impl PianoRollNote {
