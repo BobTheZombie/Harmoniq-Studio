@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 pub type ChannelId = u32;
 pub type PatternId = u32;
+pub type InstrumentId = u64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PluginFormat {
@@ -98,6 +99,8 @@ pub struct Channel {
     pub name: String,
     pub kind: ChannelKind,
     pub plugin_uid: Option<String>,
+    pub instrument_id: Option<InstrumentId>,
+    pub instrument_name: Option<String>,
     pub mixer_track: Option<u32>,
     pub gain_db: f32,
     pub pan: f32,
@@ -115,6 +118,8 @@ impl Channel {
             name,
             kind,
             plugin_uid,
+            instrument_id: None,
+            instrument_name: None,
             mixer_track: None,
             gain_db: 0.0,
             pan: 0.0,
@@ -124,6 +129,20 @@ impl Channel {
             steps: HashMap::new(),
             instrument_chain: Vec::new(),
         }
+    }
+
+    /// Attach an instrument handle from the audio engine to this channel.
+    ///
+    /// The UI can use this to reflect the selected instrument name while the
+    /// engine connection can map the `InstrumentId` to a plugin instance.
+    pub fn set_instrument(&mut self, instrument: InstrumentId) {
+        self.instrument_id = Some(instrument);
+
+        // In a real integration the engine would return a human-friendly name.
+        // For now we keep a placeholder derived from the identifier so the UI
+        // can show that something is loaded.
+        let fallback_name = format!("Instrument #{instrument}");
+        self.instrument_name = Some(fallback_name);
     }
 }
 
@@ -173,6 +192,39 @@ impl RackState {
         let id = self.channels.iter().map(|ch| ch.id).max().unwrap_or(0) + 1;
         self.channels.push(Channel::new(id, name, kind, plugin_uid));
         id
+    }
+
+    /// Called when the user has picked a plugin instrument for a channel.
+    ///
+    /// The engine integration can map `InstrumentId` back to a running plugin
+    /// instance; the rack keeps a friendly name for display.
+    pub fn attach_plugin_instrument(
+        &mut self,
+        channel: ChannelId,
+        instrument: InstrumentId,
+        plugin_uid: impl Into<String>,
+        display_name: impl Into<String>,
+    ) {
+        if let Some(ch) = self.channels.iter_mut().find(|c| c.id == channel) {
+            ch.set_instrument(instrument);
+            ch.instrument_name = Some(display_name.into());
+            ch.plugin_uid = Some(plugin_uid.into());
+        }
+    }
+
+    /// Called when the user has selected a sample file for the channel.
+    ///
+    /// This keeps UI state in sync and lets the engine bridge hook up the
+    /// sample to the channel's playback node.
+    pub fn attach_sample_to_channel(&mut self, channel: ChannelId, path: PathBuf) {
+        if let Some(ch) = self.channels.iter_mut().find(|c| c.id == channel) {
+            ch.kind = ChannelKind::Sample;
+            ch.instrument_name = path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().to_string())
+                .or_else(|| ch.instrument_name.clone());
+            ch.plugin_uid = Some(path.to_string_lossy().to_string());
+        }
     }
 
     pub fn remove_channel(&mut self, id: ChannelId) {

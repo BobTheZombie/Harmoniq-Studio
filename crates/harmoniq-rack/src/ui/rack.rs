@@ -132,6 +132,9 @@ fn channel_row(
         ui.label(egui::RichText::new(kind_badge(ch)).weak());
 
         ui.separator();
+        ui.label(egui::RichText::new(instrument_label(ch)).italics().weak());
+
+        ui.separator();
         ui.add(
             egui::Slider::new(&mut ch.gain_db, -24.0..=12.0)
                 .text("Vol (dB)")
@@ -171,6 +174,17 @@ fn channel_row(
         }
 
         ui.menu_button("⋮", |ui| {
+            if matches!(ch.kind, ChannelKind::Instrument | ChannelKind::Sample) {
+                if ui.button("Load Plugin…").clicked() {
+                    (callbacks.open_plugin_browser)(Some(ch.id));
+                    ui.close_menu();
+                }
+                if ui.button("Load Sample…").clicked() {
+                    (callbacks.import_sample_file)(Some(ch.id), None);
+                    ui.close_menu();
+                }
+                ui.separator();
+            }
             if matches!(ch.kind, ChannelKind::Instrument | ChannelKind::Sample) {
                 if ui.button("Edit in Piano Roll").clicked() {
                     (callbacks.open_piano_roll)(ch.id, pat);
@@ -265,6 +279,21 @@ fn step_grid(ui: &mut egui::Ui, pat: PatternId, ch: &mut Channel) {
         }
     } else if let Some(value) = painting {
         ui.memory_mut(|m| m.data.insert_temp::<bool>(id_base, value));
+    }
+}
+
+fn instrument_label(ch: &Channel) -> String {
+    match ch.kind {
+        ChannelKind::Automation => "Automation".into(),
+        ChannelKind::Sample => ch
+            .instrument_name
+            .clone()
+            .unwrap_or_else(|| "No sample loaded".into()),
+        ChannelKind::Instrument => ch
+            .instrument_name
+            .clone()
+            .or_else(|| ch.plugin_uid.as_ref().map(|uid| short_uid(uid)))
+            .unwrap_or_else(|| "No instrument loaded".into()),
     }
 }
 
