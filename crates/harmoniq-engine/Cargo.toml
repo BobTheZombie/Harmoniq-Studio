@@ -19,6 +19,7 @@ rayon = "1.8"
 petgraph = "0.6"
 harmoniq-dsp = { path = "../harmoniq-dsp" }
 harmoniq-rt = { path = "../harmoniq-rt" }
+harmoniq-playlist = { path = "../harmoniq-playlist" }
 arrayvec = "0.7"
 cpal = { version = "0.16", optional = true }
 openasio_sdk = { git = "https://github.com/BobTheZombie/OpenASIO-SDK", package = "openasio", optional = true }

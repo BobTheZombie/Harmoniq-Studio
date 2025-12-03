@@ -1470,7 +1470,6 @@ struct HarmoniqStudioApp {
     transport_state: TransportState,
     transport_clock: TransportClock,
     last_step_tick: u64,
-    last_playlist_tick: u64,
     metronome: bool,
     pattern_mode: bool,
     transport_loop_enabled: bool,
@@ -1706,7 +1705,6 @@ impl HarmoniqStudioApp {
             transport_state: TransportState::Stopped,
             transport_clock: TransportClock::default(),
             last_step_tick: 0,
-            last_playlist_tick: 0,
             metronome: false,
             pattern_mode: true,
             transport_loop_enabled: false,
@@ -2175,7 +2173,6 @@ impl HarmoniqStudioApp {
                 AppEvent::TogglePatternMode => {
                     self.pattern_mode = !self.pattern_mode;
                     self.last_step_tick = self.transport_clock.total_ticks(self.time_signature);
-                    self.last_playlist_tick = self.transport_clock.total_ticks(self.time_signature);
                     self.send_command(EngineCommand::SetPatternMode(self.pattern_mode));
                 }
                 AppEvent::PreviewStockSound(name) => {
@@ -2332,14 +2329,12 @@ impl HarmoniqStudioApp {
                 self.transport.sample_pos.store(0, AtomicOrdering::Relaxed);
                 self.send_command(EngineCommand::SetTransport(TransportState::Playing));
                 self.last_step_tick = 0;
-                self.last_playlist_tick = 0;
             }
             TransportEvent::Stop => {
                 self.transport_state = TransportState::Stopped;
                 self.transport.sample_pos.store(0, AtomicOrdering::Relaxed);
                 self.send_command(EngineCommand::SetTransport(TransportState::Stopped));
                 self.last_step_tick = 0;
-                self.last_playlist_tick = 0;
             }
             TransportEvent::Record(armed) => {
                 self.record_armed = armed;
@@ -2417,58 +2412,14 @@ impl HarmoniqStudioApp {
                 TransportState::Playing | TransportState::Recording
             )
         {
-            self.last_playlist_tick = self.transport_clock.total_ticks(self.time_signature);
             return;
         }
 
-        let current_tick = self.transport_clock.total_ticks(self.time_signature);
-        let tick_step = ((self.playlist_view.ppq().max(1) as u64) / 4).max(1);
-
-        if self.last_playlist_tick == 0 {
-            self.last_playlist_tick = current_tick.saturating_sub(current_tick % tick_step);
-        }
-
-        let mut tick = self.last_playlist_tick;
-        while tick <= current_tick {
-            self.schedule_playlist_events_at_tick(tick, tick_step);
-            tick = tick.saturating_add(tick_step);
-        }
-
-        self.last_playlist_tick = tick;
-    }
-
-    fn schedule_playlist_events_at_tick(&mut self, tick: u64, tick_step: u64) {
-        let mut midi_batch = Vec::new();
-
-        for track in &self.playlist_view.tracks {
-            for lane in &track.lanes {
-                for clip in &lane.clips {
-                    if tick < clip.start_ticks || tick >= clip.end_ticks() {
-                        continue;
-                    }
-
-                    match clip.kind {
-                        PlaylistClipKind::Pattern { pattern_id } => {
-                            let local_tick = tick.saturating_sub(clip.start_ticks);
-                            let beat = (local_tick / tick_step) as usize;
-                            midi_batch.extend(
-                                self.channel_rack
-                                    .schedule_pattern_step_events(pattern_id, beat),
-                            );
-                        }
-                        PlaylistClipKind::Audio { source } => {
-                            if tick == clip.start_ticks {
-                                self.play_audio_source(source);
-                            }
-                        }
-                        PlaylistClipKind::Automation => {}
-                    }
-                }
-            }
-        }
-
-        if !midi_batch.is_empty() {
-            self.send_command(EngineCommand::SubmitMidi(midi_batch));
+        if let Err(command) = self
+            .command_queue
+            .try_send(EngineCommand::SetPlaylist(self.playlist_view.clone()))
+        {
+            debug!(?command, "Failed to enqueue playlist state for engine");
         }
     }
 

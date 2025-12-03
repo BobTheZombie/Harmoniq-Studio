@@ -849,31 +849,31 @@ fn strip_header(
         .stroke(Stroke::new(1.0, palette.toolbar_outline))
         .show(ui, |ui| {
             ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        let color =
-                            Color32::from_rgb(channel.color[0], channel.color[1], channel.color[2]);
-                        let (rect, _) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
-                        ui.painter().rect_filled(rect, 3.0, color);
-                        ui.add_space(6.0);
-                        let mut name = channel.name.clone();
-                        let response = ui
-                            .scope(|ui| {
-                                if routed_from_rack {
-                                    ui.visuals_mut().override_text_color = Some(palette.accent);
-                                }
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut name)
-                                        .desired_width(ui.available_width())
-                                        .font(TextStyle::Monospace),
-                                )
-                            })
-                            .response;
-                        if response.lost_focus() {
-                            channel.name = name;
-                        }
-                    });
-
+                ui.horizontal(|ui| {
+                    let color =
+                        Color32::from_rgb(channel.color[0], channel.color[1], channel.color[2]);
+                    let (rect, _) = ui.allocate_exact_size(Vec2::splat(14.0), Sense::hover());
+                    ui.painter().rect_filled(rect, 3.0, color);
                     ui.add_space(6.0);
+                    let mut name = channel.name.clone();
+                    let response = ui
+                        .scope(|ui| {
+                            if routed_from_rack {
+                                ui.visuals_mut().override_text_color = Some(palette.accent);
+                            }
+                            ui.add(
+                                egui::TextEdit::singleline(&mut name)
+                                    .desired_width(ui.available_width())
+                                    .font(TextStyle::Monospace),
+                            )
+                        })
+                        .response;
+                    if response.lost_focus() {
+                        channel.name = name;
+                    }
+                });
+
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
                     ui.label(

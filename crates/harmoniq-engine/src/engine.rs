@@ -25,6 +25,7 @@ use crate::{
     transport::Transport as TransportMetrics,
     AudioBuffer, AudioClip, AudioProcessor, BufferConfig,
 };
+use harmoniq_playlist::state::{AudioSourceId, ClipKind, PatternNote, Playlist};
 use harmoniq_rt::RtEvent;
 #[cfg(feature = "mixer_api")]
 use log::debug;
@@ -84,6 +85,8 @@ pub enum EngineCommand {
     SetTempo(f32),
     SetTransport(TransportState),
     SetPatternMode(bool),
+    SetPlaylist(Playlist),
+    RegisterAudioSource(AudioSourceId, AudioClip),
     ReplaceGraph(GraphHandle),
     SubmitMidi(Vec<MidiEvent>),
     PlaySoundTest(AudioClip),
@@ -99,6 +102,10 @@ pub struct HarmoniqEngine {
     next_plugin_id: AtomicU64,
     transport: RwLock<TransportState>,
     pattern_mode: bool,
+    tempo: f32,
+    playlist: RwLock<Option<Playlist>>,
+    playlist_last_tick: u64,
+    playlist_audio: RwLock<HashMap<AudioSourceId, AudioClip>>,
     transport_metrics: Arc<TransportMetrics>,
     command_queue: Arc<ArrayQueue<EngineCommand>>,
     pending_midi: Mutex<Vec<MidiEvent>>,
@@ -106,7 +113,7 @@ pub struct HarmoniqEngine {
     latencies: RwLock<HashMap<PluginId, usize>>,
     delay_lines: HashMap<PluginId, DelayCompensator>,
     scratch_buffers: Vec<AudioBuffer>,
-    sound_test: Option<ClipPlayback>,
+    sound_tests: Vec<ClipPlayback>,
     metrics: AudioMetricsCollector,
     block_period_ns: u64,
     automation_cursor: u64,
@@ -158,6 +165,10 @@ impl HarmoniqEngine {
             next_plugin_id: AtomicU64::new(1),
             transport: RwLock::new(TransportState::Stopped),
             pattern_mode: true,
+            tempo: 120.0,
+            playlist: RwLock::new(None),
+            playlist_last_tick: 0,
+            playlist_audio: RwLock::new(HashMap::new()),
             transport_metrics: Arc::clone(&transport_metrics),
             command_queue,
             pending_midi: Mutex::new(Vec::new()),
@@ -167,7 +178,7 @@ impl HarmoniqEngine {
             latencies: RwLock::new(HashMap::new()),
             delay_lines: HashMap::new(),
             scratch_buffers: Vec::new(),
-            sound_test: None,
+            sound_tests: Vec::new(),
             metrics,
             block_period_ns,
             automation_cursor: 0,
@@ -229,7 +240,8 @@ impl HarmoniqEngine {
         self.last_reported_xruns = 0;
         self.last_reported_engine_load = 0;
         self.last_reported_max_block_us = 0;
-        self.sound_test = None;
+        self.sound_tests.clear();
+        self.playlist_last_tick = 0;
         self.master_buffer.lock().clear();
         for buffer in &mut self.scratch_buffers {
             buffer.clear();
@@ -336,7 +348,7 @@ impl HarmoniqEngine {
         }
 
         self.delay_lines.clear();
-        self.sound_test = None;
+        self.sound_tests.clear();
         let graph = { self.graph.read().clone() };
         if let Some(graph) = graph {
             self.configure_mixer_for_graph(&graph);
@@ -386,11 +398,13 @@ impl HarmoniqEngine {
                 .sample_pos
                 .store(0, Ordering::Relaxed);
             self.automation_cursor = 0;
+            self.playlist_last_tick = 0;
         }
         if !now_playing {
             self.transport_metrics
                 .playing
                 .store(false, Ordering::Relaxed);
+            self.playlist_last_tick = 0;
         }
     }
 
@@ -522,12 +536,20 @@ impl HarmoniqEngine {
 
     fn handle_command(&mut self, command: EngineCommand) -> anyhow::Result<()> {
         match command {
-            EngineCommand::SetTempo(_tempo) => {
-                // Tempo will influence scheduling and clip triggering.
+            EngineCommand::SetTempo(tempo) => {
+                self.tempo = tempo.max(1.0);
             }
             EngineCommand::SetTransport(state) => self.set_transport(state),
             EngineCommand::SetPatternMode(enabled) => {
                 self.pattern_mode = enabled;
+                self.playlist_last_tick = 0;
+            }
+            EngineCommand::SetPlaylist(playlist) => {
+                *self.playlist.write() = Some(playlist);
+                self.playlist_last_tick = 0;
+            }
+            EngineCommand::RegisterAudioSource(id, clip) => {
+                self.playlist_audio.write().insert(id, clip);
             }
             EngineCommand::ReplaceGraph(graph) => self.replace_graph(graph)?,
             EngineCommand::SubmitMidi(events) => {
@@ -535,7 +557,7 @@ impl HarmoniqEngine {
                 pending.extend(events);
             }
             EngineCommand::PlaySoundTest(clip) => {
-                self.sound_test = Some(ClipPlayback::new(clip));
+                self.sound_tests.push(ClipPlayback::new(clip));
             }
         }
         Ok(())
@@ -560,6 +582,8 @@ impl HarmoniqEngine {
         let period_ns = self.block_period_ns;
         let block_start = self.automation_cursor;
         let block_len = self.config.block_size as u32;
+        let block_start_samples = self.transport_metrics.sample_pos.load(Ordering::Relaxed);
+        let block_len_samples = self.config.block_size as u64;
 
         let result = (|| -> anyhow::Result<R> {
             self.drain_command_queue()?;
@@ -570,6 +594,17 @@ impl HarmoniqEngine {
                 } else {
                     std::mem::take(&mut *queue)
                 }
+            };
+            let mut pending_midi = if !self.pattern_mode
+                && matches!(
+                    self.transport(),
+                    TransportState::Playing | TransportState::Recording
+                ) {
+                let mut batch = pending_midi;
+                self.process_playlist_block(block_start_samples, block_len_samples, &mut batch);
+                batch
+            } else {
+                pending_midi
             };
             #[cfg(feature = "mixer_api")]
             {
@@ -672,11 +707,8 @@ impl HarmoniqEngine {
                 let _guard = RtAllocGuard::enter();
                 self.tone_shaper.process(master);
 
-                if let Some(player) = self.sound_test.as_mut() {
-                    if player.mix_into(master) {
-                        self.sound_test = None;
-                    }
-                }
+                self.sound_tests
+                    .retain_mut(|player| !player.mix_into(master));
 
                 #[cfg(feature = "mixer_api")]
                 {
@@ -734,6 +766,151 @@ impl HarmoniqEngine {
             bridge.push(RtEvent::MaxBlockMicros { us: max_block_us });
             self.last_reported_max_block_us = max_block_us;
         }
+    }
+
+    fn process_playlist_block(
+        &mut self,
+        block_start_samples: u64,
+        block_len_samples: u64,
+        pending_midi: &mut Vec<MidiEvent>,
+    ) {
+        let Some(playlist) = self.playlist.read().clone() else {
+            return;
+        };
+
+        let ppq = playlist.ppq().max(1);
+        let samples_per_tick = self.samples_per_tick(ppq);
+        if samples_per_tick <= 0.0 {
+            return;
+        }
+
+        let block_start_tick = self.samples_to_ticks(block_start_samples, samples_per_tick);
+        let block_end_tick = self.samples_to_ticks(
+            block_start_samples.saturating_add(block_len_samples),
+            samples_per_tick,
+        );
+
+        for track in &playlist.tracks {
+            for lane in &track.lanes {
+                for clip in &lane.clips {
+                    if block_start_tick >= clip.end_ticks() || block_end_tick <= clip.start_ticks {
+                        continue;
+                    }
+
+                    match clip.kind {
+                        ClipKind::Pattern { pattern_id } => {
+                            if let Some(pattern) = playlist.pattern(pattern_id) {
+                                self.schedule_pattern_clip(
+                                    clip.start_ticks,
+                                    pattern,
+                                    block_start_tick,
+                                    block_end_tick,
+                                    samples_per_tick,
+                                    pending_midi,
+                                    block_len_samples as u32,
+                                );
+                            }
+                        }
+                        ClipKind::Audio { source } => {
+                            if block_start_tick <= clip.start_ticks
+                                && clip.start_ticks < block_end_tick
+                            {
+                                self.trigger_audio_clip(source);
+                            }
+                        }
+                        ClipKind::Automation => {}
+                    }
+                }
+            }
+        }
+
+        self.playlist_last_tick = block_end_tick;
+    }
+
+    fn schedule_pattern_clip(
+        &self,
+        clip_start_tick: u64,
+        pattern: &harmoniq_playlist::state::Pattern,
+        block_start_tick: u64,
+        block_end_tick: u64,
+        samples_per_tick: f64,
+        pending_midi: &mut Vec<MidiEvent>,
+        block_len_samples: u32,
+    ) {
+        for note in &pattern.notes {
+            if note.duration_ticks <= 0 {
+                continue;
+            }
+
+            let note_start_tick = clip_start_tick.saturating_add(note.start_ticks.max(0) as u64);
+            let note_end_tick = note_start_tick.saturating_add(note.duration_ticks as u64);
+
+            if note_start_tick >= block_start_tick && note_start_tick < block_end_tick {
+                if let Some(offset) = self.tick_to_offset(
+                    note_start_tick,
+                    block_start_tick,
+                    samples_per_tick,
+                    block_len_samples,
+                ) {
+                    pending_midi.push(Self::note_event(note, offset, true));
+                }
+            }
+
+            if note_end_tick > block_start_tick && note_end_tick <= block_end_tick {
+                if let Some(offset) = self.tick_to_offset(
+                    note_end_tick,
+                    block_start_tick,
+                    samples_per_tick,
+                    block_len_samples,
+                ) {
+                    pending_midi.push(Self::note_event(note, offset, false));
+                }
+            }
+        }
+    }
+
+    fn tick_to_offset(
+        &self,
+        tick: u64,
+        block_start_tick: u64,
+        samples_per_tick: f64,
+        block_len_samples: u32,
+    ) -> Option<u32> {
+        let relative_ticks = tick.checked_sub(block_start_tick)? as f64;
+        let sample_offset = (relative_ticks * samples_per_tick).round();
+        if sample_offset < 0.0 {
+            return None;
+        }
+        let offset = sample_offset as u64;
+        if offset >= block_len_samples as u64 {
+            None
+        } else {
+            Some(offset as u32)
+        }
+    }
+
+    fn samples_per_tick(&self, ppq: u32) -> f64 {
+        let tempo = self.tempo.max(f32::EPSILON) as f64;
+        let sr = self.config.sample_rate.max(f32::EPSILON) as f64;
+        (60.0 * sr) / (tempo * ppq as f64)
+    }
+
+    fn samples_to_ticks(&self, samples: u64, samples_per_tick: f64) -> u64 {
+        (samples as f64 / samples_per_tick).floor() as u64
+    }
+
+    fn note_event(note: &PatternNote, sample_offset: u32, on: bool) -> MidiEvent {
+        let channel = note.channel & 0x0F;
+        let status = if on { 0x90 } else { 0x80 } | channel;
+        let velocity = if on { note.velocity } else { 0 };
+        MidiEvent::new(sample_offset, [status, note.pitch, velocity])
+    }
+
+    fn trigger_audio_clip(&mut self, source: AudioSourceId) {
+        let Some(clip) = self.playlist_audio.read().get(&source).cloned() else {
+            return;
+        };
+        self.sound_tests.push(ClipPlayback::new(clip));
     }
 
     fn process_mixer_block(
