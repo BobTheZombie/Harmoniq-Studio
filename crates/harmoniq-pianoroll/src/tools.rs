@@ -65,6 +65,11 @@ enum GestureState {
         start_pos: Pos2,
         start_scroll: Vec2,
     },
+    AdjustVelocity {
+        ids: Vec<u64>,
+        origin: HashMap<u64, u8>,
+        start_pointer: PointerPosition,
+    },
 }
 
 /// Result of processing pointer events.
@@ -134,17 +139,31 @@ impl ToolController {
                     for id in &ids {
                         ctx.select_note(*id, true);
                     }
-                    let mut origin = HashMap::new();
-                    for note in &ctx.clip.notes {
-                        if ids.contains(&note.id) {
-                            origin.insert(note.id, (note.start_ppq, note.pitch));
+                    if modifiers.alt && modifiers.shift {
+                        let mut origin = HashMap::new();
+                        for note in &ctx.clip.notes {
+                            if ids.contains(&note.id) {
+                                origin.insert(note.id, note.vel);
+                            }
                         }
+                        self.gesture = Some(GestureState::AdjustVelocity {
+                            ids: ids.clone(),
+                            origin,
+                            start_pointer: pointer,
+                        });
+                    } else {
+                        let mut origin = HashMap::new();
+                        for note in &ctx.clip.notes {
+                            if ids.contains(&note.id) {
+                                origin.insert(note.id, (note.start_ppq, note.pitch));
+                            }
+                        }
+                        self.gesture = Some(GestureState::DragNotes {
+                            ids: ids.clone(),
+                            origin,
+                            start_pointer: pointer,
+                        });
                     }
-                    self.gesture = Some(GestureState::DragNotes {
-                        ids: ids.clone(),
-                        origin,
-                        start_pointer: pointer,
-                    });
                     output.selection = Some(ids);
                     if let Some(note) = ctx.clip.notes.iter().find(|note| note.id == hit.id) {
                         output.preview = Some(NotePreview {
@@ -298,6 +317,32 @@ impl ToolController {
                 } => {
                     let delta = pointer.pos - *start_pos;
                     output.request_pan = Some(*start_scroll - delta);
+                }
+                GestureState::AdjustVelocity {
+                    ids,
+                    origin,
+                    start_pointer,
+                } => {
+                    let delta_y = pointer.pos.y - start_pointer.pos.y;
+                    let delta_vel = (-delta_y * 0.5).round() as i16;
+                    for id in ids.iter().copied() {
+                        if let Some(note) = ctx.clip.notes.iter_mut().find(|n| n.id == id) {
+                            if let Some(start_vel) = origin.get(&id) {
+                                let new_vel = (*start_vel as i16 + delta_vel).clamp(1, 127) as u8;
+                                if new_vel != note.vel {
+                                    note.vel = new_vel;
+                                    output.edits.push(Edit::Update {
+                                        id,
+                                        start_ppq: note.start_ppq,
+                                        dur_ppq: note.dur_ppq,
+                                        pitch: note.pitch,
+                                        vel: note.vel,
+                                        chan: note.chan,
+                                    });
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
