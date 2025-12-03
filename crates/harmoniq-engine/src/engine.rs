@@ -3,9 +3,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use arc_swap::ArcSwap;
 use crossbeam::queue::ArrayQueue;
 use parking_lot::{Mutex, RwLock};
-use rayon::prelude::*;
 
 use crate::mixer::api::{MixerUiApi, MixerUiState};
 #[cfg(feature = "mixer_api")]
@@ -95,6 +95,17 @@ pub enum EngineCommand {
     PlaySoundTest(AudioClip),
 }
 
+#[derive(Default)]
+struct RtBlockSnapshot {
+    graph: Option<GraphHandle>,
+    plugin_ids: Vec<PluginId>,
+    processors: Vec<Arc<Mutex<Box<dyn AudioProcessor>>>>,
+    latencies: Vec<usize>,
+    automation: Vec<Vec<AutomationEvent>>,
+    pending_midi: Vec<MidiEvent>,
+    max_latency: usize,
+}
+
 /// Central Harmoniq engine responsible for orchestrating the processing graph.
 pub struct HarmoniqEngine {
     config: BufferConfig,
@@ -112,6 +123,9 @@ pub struct HarmoniqEngine {
     transport_metrics: Arc<TransportMetrics>,
     command_queue: Arc<ArrayQueue<EngineCommand>>,
     pending_midi: Mutex<Vec<MidiEvent>>,
+    rt_snapshot: ArcSwap<RtBlockSnapshot>,
+    automation_block: Vec<Vec<AutomationEvent>>,
+    midi_block: Vec<MidiEvent>,
     automations: RwLock<HashMap<PluginId, AutomationLane>>,
     latencies: RwLock<HashMap<PluginId, usize>>,
     delay_lines: HashMap<PluginId, DelayCompensator>,
@@ -175,6 +189,9 @@ impl HarmoniqEngine {
             transport_metrics: Arc::clone(&transport_metrics),
             command_queue,
             pending_midi: Mutex::new(Vec::new()),
+            rt_snapshot: ArcSwap::from_pointee(RtBlockSnapshot::default()),
+            automation_block: Vec::new(),
+            midi_block: Vec::new(),
             config,
             tone_shaper,
             automations: RwLock::new(HashMap::new()),
@@ -244,6 +261,8 @@ impl HarmoniqEngine {
         self.last_reported_engine_load = 0;
         self.last_reported_max_block_us = 0;
         self.sound_tests.clear();
+        self.automation_block.clear();
+        self.midi_block.clear();
         self.playlist_last_tick = 0;
         self.master_buffer.lock().clear();
         for buffer in &mut self.scratch_buffers {
@@ -352,6 +371,8 @@ impl HarmoniqEngine {
 
         self.delay_lines.clear();
         self.sound_tests.clear();
+        self.automation_block.clear();
+        self.midi_block.clear();
         let graph = { self.graph.read().clone() };
         if let Some(graph) = graph {
             self.configure_mixer_for_graph(&graph);
@@ -567,10 +588,15 @@ impl HarmoniqEngine {
     }
 
     pub fn process_block(&mut self, output: &mut AudioBuffer) -> anyhow::Result<()> {
+        if output.channel_count() != self.config.layout.channels() as usize
+            || output.len() != self.config.block_size as usize
+        {
+            return Err(anyhow::anyhow!(
+                "Output buffer does not match engine configuration"
+            ));
+        }
+
         self.render_block_with(|master, _| {
-            if output.channel_count() != master.channel_count() || output.len() != master.len() {
-                output.resize(master.channel_count(), master.len());
-            }
             for (target_channel, source_channel) in output.channels_mut().zip(master.channels()) {
                 target_channel.copy_from_slice(source_channel);
             }
@@ -589,138 +615,21 @@ impl HarmoniqEngine {
         let block_len_samples = self.config.block_size as u64;
 
         let result = (|| -> anyhow::Result<R> {
-            self.drain_command_queue()?;
-            let pending_midi = {
-                let mut queue = self.pending_midi.lock();
-                if queue.is_empty() {
-                    Vec::new()
-                } else {
-                    std::mem::take(&mut *queue)
-                }
-            };
-            let mut pending_midi = if !self.pattern_mode
-                && matches!(
-                    self.transport(),
-                    TransportState::Playing | TransportState::Recording
-                ) {
-                let mut batch = pending_midi;
-                self.process_playlist_block(block_start_samples, block_len_samples, &mut batch);
-                batch
-            } else {
-                pending_midi
-            };
-            #[cfg(feature = "mixer_api")]
-            {
-                let mut adapter = MixerUiBridge::new(
-                    Arc::clone(&self.mixer_ui),
-                    &self.mixer_command_tx,
-                    &self.mixer_channel_to_track,
-                );
-                self.mixer_handle.drain_commands_and_apply(&mut adapter);
-            }
-            let graph = match self.graph.read().clone() {
-                Some(graph) => graph,
-                None => {
-                    let mut master = self.master_buffer.lock();
-                    master.clear();
-                    return Ok(visitor(&master, &[]));
-                }
-            };
+            self.prepare_block_snapshot(
+                block_start,
+                block_len,
+                block_start_samples,
+                block_len_samples,
+            )?;
 
-            let plugin_ids = graph.plugin_ids();
-            if plugin_ids.is_empty() {
+            let snapshot = self.rt_snapshot.load();
+            if snapshot.graph.is_none() || snapshot.plugin_ids.is_empty() {
                 let mut master = self.master_buffer.lock();
                 master.clear();
                 return Ok(visitor(&master, &[]));
             }
 
-            let processors_guard = self.processors.read();
-            let processor_handles: Vec<_> = plugin_ids
-                .iter()
-                .map(|plugin_id| {
-                    processors_guard.get(plugin_id).cloned().ok_or_else(|| {
-                        anyhow::anyhow!("Missing processor for plugin ID: {:?}", plugin_id)
-                    })
-                })
-                .collect::<anyhow::Result<_>>()?;
-            drop(processors_guard);
-
-            let latencies_guard = self.latencies.read();
-            let latencies: Vec<usize> = plugin_ids
-                .iter()
-                .map(|plugin_id| *latencies_guard.get(plugin_id).unwrap_or(&0))
-                .collect();
-            drop(latencies_guard);
-
-            let max_latency = latencies.iter().copied().max().unwrap_or(0);
-            let automation_by_index =
-                self.automation_events_for_block(&plugin_ids, block_start, block_len);
-
-            let scratch_len = processor_handles.len();
-            self.ensure_scratch_buffers(scratch_len);
-
-            {
-                let scratch_buffers = &mut self.scratch_buffers[..scratch_len];
-                scratch_buffers.iter_mut().for_each(|buffer| buffer.clear());
-
-                scratch_buffers.par_iter_mut().enumerate().try_for_each(
-                    |(index, buffer)| -> anyhow::Result<()> {
-                        let processor_handle = &processor_handles[index];
-                        let mut processor = processor_handle.lock();
-
-                        if let Some(events) = automation_by_index.get(index) {
-                            for event in events {
-                                processor.handle_automation_event(
-                                    event.parameter,
-                                    event.value,
-                                    event.sample_offset as usize,
-                                )?;
-                            }
-                        }
-
-                        if !pending_midi.is_empty() {
-                            processor.process_midi(&pending_midi)?;
-                        }
-                        let _guard = RtAllocGuard::enter();
-                        processor.process(buffer)?;
-                        Ok(())
-                    },
-                )?;
-            }
-
-            {
-                self.apply_delay_compensation(&plugin_ids, &latencies, scratch_len, max_latency);
-            }
-
-            let result = {
-                let scratch_buffers = &self.scratch_buffers[..scratch_len];
-                let master = self.master_buffer.get_mut();
-
-                #[allow(unused_variables)]
-                let active_tracks = {
-                    Self::process_mixer_block(
-                        &mut self.mixer,
-                        self.mixer_cfg,
-                        self.config.block_size,
-                        scratch_buffers,
-                        master,
-                    )
-                };
-
-                let _guard = RtAllocGuard::enter();
-                self.tone_shaper.process(master);
-
-                self.sound_tests
-                    .retain_mut(|player| !player.mix_into(master));
-
-                #[cfg(feature = "mixer_api")]
-                {
-                    self.publish_mixer_track_meters(active_tracks);
-                    self.publish_master_meter(master);
-                }
-
-                visitor(master, scratch_buffers)
-            };
+            let result = self.render_prepared_block(&snapshot, visitor)?;
 
             Ok(result)
         })();
@@ -1131,25 +1040,202 @@ impl HarmoniqEngine {
         }
     }
 
-    fn automation_events_for_block(
+    fn fill_automation_events_for_block(
         &mut self,
         plugin_ids: &[PluginId],
         block_start: u64,
         block_len: u32,
-    ) -> Vec<Vec<AutomationEvent>> {
-        let mut buckets = vec![Vec::new(); plugin_ids.len()];
-        if plugin_ids.is_empty() || block_len == 0 {
-            return buckets;
+    ) {
+        if block_len == 0 {
+            self.automation_block.clear();
+            return;
+        }
+
+        self.automation_block
+            .resize_with(plugin_ids.len(), Vec::new);
+        for bucket in &mut self.automation_block {
+            bucket.clear();
         }
 
         let mut lanes = self.automations.write();
         for (index, plugin_id) in plugin_ids.iter().enumerate() {
             if let Some(lane) = lanes.get_mut(plugin_id) {
-                lane.render(block_start, block_len, &mut buckets[index]);
+                lane.render(block_start, block_len, &mut self.automation_block[index]);
+            }
+        }
+    }
+
+    fn prepare_block_snapshot(
+        &mut self,
+        block_start: u64,
+        block_len: u32,
+        block_start_samples: u64,
+        block_len_samples: u64,
+    ) -> anyhow::Result<()> {
+        self.drain_command_queue()?;
+
+        self.midi_block.clear();
+        {
+            let mut queue = self.pending_midi.lock();
+            self.midi_block.extend(queue.drain(..));
+        }
+
+        if !self.pattern_mode
+            && matches!(
+                self.transport(),
+                TransportState::Playing | TransportState::Recording
+            )
+        {
+            self.process_playlist_block(
+                block_start_samples,
+                block_len_samples,
+                &mut self.midi_block,
+            );
+        }
+
+        #[cfg(feature = "mixer_api")]
+        {
+            let mut adapter = MixerUiBridge::new(
+                Arc::clone(&self.mixer_ui),
+                &self.mixer_command_tx,
+                &self.mixer_channel_to_track,
+            );
+            self.mixer_handle.drain_commands_and_apply(&mut adapter);
+        }
+
+        let graph = self.graph.read().clone();
+        let Some(graph) = graph else {
+            self.rt_snapshot.store(Arc::new(RtBlockSnapshot::default()));
+            return Ok(());
+        };
+
+        let plugin_ids = graph.plugin_ids();
+        if plugin_ids.is_empty() {
+            self.rt_snapshot.store(Arc::new(RtBlockSnapshot::default()));
+            return Ok(());
+        }
+
+        let processors_guard = self.processors.read();
+        let processor_handles: Vec<_> = plugin_ids
+            .iter()
+            .map(|plugin_id| {
+                processors_guard.get(plugin_id).cloned().ok_or_else(|| {
+                    anyhow::anyhow!("Missing processor for plugin ID: {:?}", plugin_id)
+                })
+            })
+            .collect::<anyhow::Result<_>>()?;
+        drop(processors_guard);
+
+        let latencies_guard = self.latencies.read();
+        let mut latencies: Vec<usize> = plugin_ids
+            .iter()
+            .map(|plugin_id| *latencies_guard.get(plugin_id).unwrap_or(&0))
+            .collect();
+        drop(latencies_guard);
+
+        self.fill_automation_events_for_block(&plugin_ids, block_start, block_len);
+        let max_latency = latencies.iter().copied().max().unwrap_or(0);
+        self.ensure_scratch_buffers(processor_handles.len());
+
+        let snapshot = RtBlockSnapshot {
+            graph: Some(graph),
+            plugin_ids,
+            processors: processor_handles,
+            latencies,
+            automation: self.automation_block.clone(),
+            pending_midi: self.midi_block.clone(),
+            max_latency,
+        };
+
+        self.rt_snapshot.store(Arc::new(snapshot));
+        Ok(())
+    }
+
+    fn render_prepared_block<R, F>(
+        &mut self,
+        snapshot: &RtBlockSnapshot,
+        mut visitor: F,
+    ) -> anyhow::Result<R>
+    where
+        F: FnMut(&AudioBuffer, &[AudioBuffer]) -> R,
+    {
+        let scratch_len = snapshot.processors.len();
+        if scratch_len == 0 {
+            let mut master = self.master_buffer.lock();
+            master.clear();
+            return Ok(visitor(&master, &[]));
+        }
+
+        self.ensure_scratch_buffers(scratch_len);
+        let scratch_buffers = &mut self.scratch_buffers[..scratch_len];
+        for buffer in scratch_buffers.iter_mut() {
+            buffer.clear();
+        }
+
+        for (index, buffer) in scratch_buffers.iter_mut().enumerate() {
+            let events = snapshot
+                .automation
+                .get(index)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let processor_handle = &snapshot.processors[index];
+            let mut processor = processor_handle.lock();
+
+            for event in events {
+                processor.handle_automation_event(
+                    event.parameter,
+                    event.value,
+                    event.sample_offset as usize,
+                )?;
+            }
+
+            if !snapshot.pending_midi.is_empty() {
+                processor.process_midi(&snapshot.pending_midi)?;
+            }
+            let _guard = RtAllocGuard::enter();
+            processor.process(buffer)?;
+        }
+
+        self.apply_delay_compensation(
+            &snapshot.plugin_ids,
+            &snapshot.latencies,
+            scratch_len,
+            snapshot.max_latency,
+        );
+
+        let scratch_buffers = &self.scratch_buffers[..scratch_len];
+        let master = self.master_buffer.get_mut();
+
+        #[allow(unused_variables)]
+        let active_tracks = {
+            Self::process_mixer_block(
+                &mut self.mixer,
+                self.mixer_cfg,
+                self.config.block_size,
+                scratch_buffers,
+                master,
+            )
+        };
+
+        let _guard = RtAllocGuard::enter();
+        self.tone_shaper.process(master);
+
+        let mut index = 0;
+        while index < self.sound_tests.len() {
+            if self.sound_tests[index].mix_into(master) {
+                self.sound_tests.remove(index);
+            } else {
+                index += 1;
             }
         }
 
-        buckets
+        #[cfg(feature = "mixer_api")]
+        {
+            self.publish_mixer_track_meters(active_tracks);
+            self.publish_master_meter(master);
+        }
+
+        Ok(visitor(master, scratch_buffers))
     }
 
     fn apply_delay_compensation(
