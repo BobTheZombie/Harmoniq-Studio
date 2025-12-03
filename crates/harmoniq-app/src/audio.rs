@@ -1,8 +1,10 @@
+use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::Cursor;
-use std::sync::atomic::Ordering as AtomicOrdering;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Once};
+use std::thread::{self, JoinHandle};
 
 #[cfg(target_os = "linux")]
 use std::env;
@@ -14,6 +16,7 @@ use clap::builder::PossibleValue;
 use clap::ValueEnum;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, FromSample, SampleFormat, SizedSample, StreamConfig};
+use crossbeam::queue::ArrayQueue;
 #[cfg(target_os = "linux")]
 use harmoniq_engine::sound_server::alsa_devices_available;
 #[cfg(all(target_os = "linux", feature = "openasio"))]
@@ -42,6 +45,267 @@ pub enum AudioBackend {
     Asio4All,
     Wasapi,
     CoreAudio,
+}
+
+struct RealtimeEngineFacade {
+    state: Arc<AudioThreadState>,
+    render_thread: Option<JoinHandle<()>>,
+}
+
+impl RealtimeEngineFacade {
+    fn new(
+        engine: Arc<Mutex<HarmoniqEngine>>,
+        config: BufferConfig,
+        channels: usize,
+    ) -> anyhow::Result<Self> {
+        let state = Arc::new(AudioThreadState::new(config.block_size, channels));
+        let render_state = Arc::clone(&state);
+        let render_engine = Arc::clone(&engine);
+        let render_config = config.clone();
+        let render_thread = thread::Builder::new()
+            .name("harmoniq-cpal-render".into())
+            .spawn(move || {
+                run_engine_render_loop(render_engine, render_config, render_state);
+            })
+            .context("failed to spawn realtime engine render thread")?;
+
+        Ok(Self {
+            state,
+            render_thread: Some(render_thread),
+        })
+    }
+
+    fn callback_handle(&mut self) -> AudioCallbackHandle {
+        AudioCallbackHandle::new(Arc::clone(&self.state))
+    }
+
+    fn render_output<T>(&self, handle: &mut AudioCallbackHandle, output: &mut [T])
+    where
+        T: SizedSample + FromSample<f32>,
+    {
+        handle.render_into(output);
+    }
+}
+
+impl Drop for RealtimeEngineFacade {
+    fn drop(&mut self) {
+        self.state.running.store(false, AtomicOrdering::Relaxed);
+        if let Some(handle) = self.render_thread.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum AudioThreadNotification {
+    EngineError(String),
+}
+
+struct AudioThreadState {
+    buffers: [UnsafeCell<Vec<f32>>; 2],
+    frames_per_buffer: usize,
+    channels: usize,
+    ready_index: AtomicUsize,
+    ready_frames: AtomicUsize,
+    running: AtomicBool,
+    notifications: Arc<ArrayQueue<AudioThreadNotification>>,
+}
+
+unsafe impl Sync for AudioThreadState {}
+
+impl AudioThreadState {
+    fn new(frames_per_buffer: usize, channels: usize) -> Self {
+        let frames = frames_per_buffer.max(1);
+        let channel_count = channels.max(1);
+        let samples = frames.saturating_mul(channel_count);
+        Self {
+            buffers: [
+                UnsafeCell::new(vec![0.0; samples]),
+                UnsafeCell::new(vec![0.0; samples]),
+            ],
+            frames_per_buffer: frames,
+            channels: channel_count,
+            ready_index: AtomicUsize::new(0),
+            ready_frames: AtomicUsize::new(frames),
+            running: AtomicBool::new(true),
+            notifications: Arc::new(ArrayQueue::new(32)),
+        }
+    }
+}
+
+struct AudioCallbackHandle {
+    state: Arc<AudioThreadState>,
+    active_buffer: usize,
+    cursor: usize,
+}
+
+impl AudioCallbackHandle {
+    fn new(state: Arc<AudioThreadState>) -> Self {
+        let active_buffer = state.ready_index.load(AtomicOrdering::Acquire).min(1);
+        Self {
+            state,
+            active_buffer,
+            cursor: 0,
+        }
+    }
+
+    fn render_into<T>(&mut self, output: &mut [T])
+    where
+        T: SizedSample + FromSample<f32>,
+    {
+        RT_DENORM_INIT.call_once(|| harmoniq_engine::rt::enable_denorm_mode());
+
+        let channels = self.state.channels;
+        if channels == 0 {
+            return;
+        }
+
+        let mut offset = 0usize;
+        let silence = T::from_sample(0.0);
+        while offset < output.len() {
+            let ready_index = self.state.ready_index.load(AtomicOrdering::Acquire);
+            let available_frames = self.state.ready_frames.load(AtomicOrdering::Acquire);
+            if ready_index != self.active_buffer
+                && self.cursor >= available_frames.saturating_mul(channels)
+            {
+                self.active_buffer = ready_index;
+                self.cursor = 0;
+            }
+
+            let available_samples = available_frames
+                .saturating_mul(channels)
+                .saturating_sub(self.cursor);
+            if available_samples == 0 {
+                for sample in &mut output[offset..] {
+                    *sample = silence;
+                }
+                break;
+            }
+
+            let samples_to_copy = (output.len() - offset).min(available_samples);
+            let buffer = unsafe { &*self.state.buffers[self.active_buffer].get() };
+            let end = self.cursor.saturating_add(samples_to_copy);
+            for (dst, src) in output[offset..offset + samples_to_copy]
+                .iter_mut()
+                .zip(&buffer[self.cursor..end])
+            {
+                *dst = T::from_sample(*src);
+            }
+
+            self.cursor = end;
+            offset += samples_to_copy;
+
+            if self.cursor >= available_frames.saturating_mul(channels) {
+                let next_ready = self.state.ready_index.load(AtomicOrdering::Acquire);
+                if next_ready != self.active_buffer {
+                    self.active_buffer = next_ready;
+                    self.cursor = 0;
+                }
+            }
+        }
+    }
+}
+
+fn run_engine_render_loop(
+    engine: Arc<Mutex<HarmoniqEngine>>,
+    config: BufferConfig,
+    state: Arc<AudioThreadState>,
+) {
+    let mut buffer = AudioBuffer::from_config(&config);
+    let mut interleaved = vec![0.0f32; state.frames_per_buffer.saturating_mul(state.channels)];
+    refill_audio_buffer(
+        &engine,
+        &mut buffer,
+        &mut interleaved,
+        state.channels,
+        &state,
+    );
+
+    while state.running.load(AtomicOrdering::Relaxed) {
+        refill_audio_buffer(
+            &engine,
+            &mut buffer,
+            &mut interleaved,
+            state.channels,
+            &state,
+        );
+    }
+}
+
+fn refill_audio_buffer(
+    engine: &Arc<Mutex<HarmoniqEngine>>,
+    buffer: &mut AudioBuffer,
+    interleaved: &mut [f32],
+    channels: usize,
+    state: &Arc<AudioThreadState>,
+) {
+    buffer.clear();
+    let process_result = {
+        let mut guard = engine.lock();
+        guard.process_block(buffer)
+    };
+
+    let mut frames = buffer.len().min(state.frames_per_buffer);
+    if let Err(err) = process_result {
+        frames = 0;
+        push_rt_notice(
+            &state.notifications,
+            AudioThreadNotification::EngineError(err.to_string()),
+        );
+    }
+
+    let samples_to_copy = frames.saturating_mul(channels);
+    interleave_into(interleaved, buffer, channels, samples_to_copy);
+
+    let target_buffer = state.ready_index.load(AtomicOrdering::Acquire) ^ 1;
+    if target_buffer < state.buffers.len() {
+        let dest = unsafe { &mut *state.buffers[target_buffer].get() };
+        dest[..samples_to_copy].copy_from_slice(&interleaved[..samples_to_copy]);
+        for sample in &mut dest[samples_to_copy..] {
+            *sample = 0.0;
+        }
+    }
+
+    state
+        .ready_frames
+        .store(frames.min(state.frames_per_buffer), AtomicOrdering::Release);
+    state
+        .ready_index
+        .store(target_buffer.min(1), AtomicOrdering::Release);
+}
+
+fn interleave_into(target: &mut [f32], buffer: &AudioBuffer, channels: usize, samples: usize) {
+    let frames = buffer.len();
+    let channel_count = buffer.channel_count();
+    let mut index = 0usize;
+    let max_samples = target.len().min(samples);
+    for frame in 0..frames {
+        for channel in 0..channels {
+            if index >= max_samples {
+                return;
+            }
+            let value = if channel < channel_count {
+                buffer.channel(channel)[frame]
+            } else {
+                0.0
+            };
+            target[index] = value;
+            index += 1;
+        }
+    }
+
+    for slot in &mut target[index..max_samples] {
+        *slot = 0.0;
+    }
+}
+
+fn push_rt_notice(
+    queue: &Arc<ArrayQueue<AudioThreadNotification>>,
+    notice: AudioThreadNotification,
+) {
+    if let Err(notice) = queue.push(notice) {
+        let _ = queue.force_push(notice);
+    }
 }
 
 impl ValueEnum for AudioBackend {
@@ -1037,79 +1301,17 @@ impl RealtimeAudio {
         T: SizedSample + FromSample<f32>,
     {
         let channels = stream_config.channels as usize;
-        let mut local_buffer = AudioBuffer::from_config(&buffer_config);
+        let mut facade = RealtimeEngineFacade::new(engine, buffer_config, channels)?;
+        let mut callback_handle = facade.callback_handle();
         let stream = device.build_output_stream(
             stream_config,
             move |output: &mut [T], _| {
-                Self::render_output(&engine, &mut local_buffer, channels, output);
+                facade.render_output(&mut callback_handle, output);
             },
             err_fn,
             None,
         )?;
         Ok(stream)
-    }
-
-    fn render_output<T>(
-        engine: &Arc<Mutex<HarmoniqEngine>>,
-        buffer: &mut AudioBuffer,
-        channels: usize,
-        output: &mut [T],
-    ) where
-        T: SizedSample + FromSample<f32>,
-    {
-        RT_DENORM_INIT.call_once(|| harmoniq_engine::rt::enable_denorm_mode());
-
-        if channels == 0 {
-            return;
-        }
-        let mut frame_cursor = 0usize;
-        let total_frames = output.len() / channels;
-        let silence = T::from_sample(0.0);
-
-        while frame_cursor < total_frames {
-            buffer.clear();
-            let result = {
-                let mut engine = engine.lock();
-                engine.process_block(buffer)
-            };
-            if let Err(err) = result {
-                warn!(?err, "engine processing failed during audio callback");
-                for sample in output.iter_mut() {
-                    *sample = silence;
-                }
-                return;
-            }
-
-            let available_frames = buffer.len();
-            let channel_count = buffer.channel_count();
-            let mut copied = 0usize;
-            while copied < available_frames && frame_cursor < total_frames {
-                for channel in 0..channels {
-                    let value = if channel < channel_count {
-                        buffer.channel(channel).get(copied).copied().unwrap_or(0.0)
-                    } else {
-                        0.0
-                    };
-                    let sample_index = (frame_cursor * channels) + channel;
-                    if sample_index < output.len() {
-                        output[sample_index] = T::from_sample(value);
-                    }
-                }
-                frame_cursor += 1;
-                copied += 1;
-            }
-
-            if copied == 0 {
-                break;
-            }
-        }
-
-        let produced_samples = total_frames * channels;
-        if produced_samples < output.len() {
-            for sample in &mut output[produced_samples..] {
-                *sample = silence;
-            }
-        }
     }
 }
 
