@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::ptr::NonNull;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use crate::automation::AutomationEvent;
 use crate::buffer::AudioBuffer;
