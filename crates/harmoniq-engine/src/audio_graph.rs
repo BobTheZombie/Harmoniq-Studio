@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::ptr::NonNull;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::automation::AutomationEvent;
 use crate::buffer::AudioBuffer;
@@ -93,18 +93,27 @@ impl GraphRunner {
         }
 
         for index in &self.order {
-            let node = &mut self.nodes[*index];
-            node.buffer.resize(self.channels, frames);
-            node.buffer.clear();
+            let (before, after) = self.nodes.split_at_mut(*index);
+            let (node, after) = after.split_first_mut().expect("index must be valid");
 
             let inputs: Vec<&AudioBuffer> = node
                 .spec
                 .inputs
                 .iter()
-                .filter_map(|idx| self.nodes.get(*idx))
+                .filter_map(|idx| {
+                    if *idx < *index {
+                        before.get(*idx)
+                    } else if *idx > *index {
+                        after.get(idx - index - 1)
+                    } else {
+                        None
+                    }
+                })
                 .map(|node| &node.buffer)
                 .collect();
 
+            node.buffer.resize(self.channels, frames);
+            node.buffer.clear();
             node.spec.node.process(&inputs, &mut node.buffer, frames)?;
         }
 
