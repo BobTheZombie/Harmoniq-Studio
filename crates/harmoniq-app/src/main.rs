@@ -46,6 +46,7 @@ use tracing_subscriber::EnvFilter;
 use winit::keyboard::{KeyCode, ModifiersState};
 
 const RT_RING_CAPACITY: usize = 1024;
+const NOTE_PREVIEW_DURATION: Duration = Duration::from_millis(420);
 
 mod audio;
 mod config;
@@ -66,7 +67,7 @@ use audio::{
 use config::qwerty::{QwertyConfig, VelocityCurveSetting};
 use harmoniq_pianoroll::{
     model::{Clip as PianoRollClip, Edit, EditorState as PianoRollEditorState, Note, SnapUnit},
-    PianoRoll as PianoRollWidget,
+    NotePreview, PianoRoll as PianoRollWidget,
 };
 use harmoniq_playlist::{
     state::{
@@ -1485,6 +1486,7 @@ struct HarmoniqStudioApp {
     piano_roll_window_open: bool,
     piano_roll_target: Option<PianoRollTarget>,
     piano_roll_widget: PianoRollWidget,
+    pending_note_offs: Vec<PendingNoteOff>,
     fullscreen: bool,
     fullscreen_dirty: bool,
     last_screen_rect: egui::Rect,
@@ -1497,6 +1499,13 @@ struct HarmoniqStudioApp {
     startup_progress: Option<f32>,
     startup_msg: String,
     startup_shown_at: Option<Instant>,
+}
+
+#[derive(Clone, Copy)]
+struct PendingNoteOff {
+    pitch: u8,
+    channel: u8,
+    off_at: Instant,
 }
 
 impl HarmoniqStudioApp {
@@ -1711,6 +1720,7 @@ impl HarmoniqStudioApp {
             piano_roll_window_open: false,
             piano_roll_target: None,
             piano_roll_widget,
+            pending_note_offs: Vec::new(),
             fullscreen: false,
             fullscreen_dirty: false,
             last_screen_rect: egui::Rect::from_min_size(
@@ -1889,6 +1899,46 @@ impl HarmoniqStudioApp {
                 self.status_message = Some(format!("Command queue full: {command:?}"));
             }
         }
+    }
+
+    fn preview_note(&mut self, preview: NotePreview) {
+        let pitch = preview.pitch.min(127);
+        let channel = preview.channel.min(15);
+        let velocity = preview.velocity.min(127);
+        let event = MidiEvent::new(0, [0x90 | channel, pitch, velocity]);
+        if self
+            .command_queue
+            .try_send(EngineCommand::SubmitMidi(vec![event]))
+            .is_ok()
+        {
+            self.pending_note_offs.push(PendingNoteOff {
+                pitch,
+                channel,
+                off_at: Instant::now() + NOTE_PREVIEW_DURATION,
+            });
+        }
+    }
+
+    fn drain_note_offs(&mut self, now: Instant) {
+        let mut due = Vec::new();
+        self.pending_note_offs.retain(|pending| {
+            if pending.off_at <= now {
+                due.push(*pending);
+                false
+            } else {
+                true
+            }
+        });
+        if due.is_empty() {
+            return;
+        }
+        let events: Vec<MidiEvent> = due
+            .into_iter()
+            .map(|pending| MidiEvent::new(0, [0x80 | pending.channel, pending.pitch, 0]))
+            .collect();
+        let _ = self
+            .command_queue
+            .try_send(EngineCommand::SubmitMidi(events));
     }
 
     fn open_channel_piano_roll(&mut self, channel_index: usize) {
@@ -2864,6 +2914,7 @@ impl App for HarmoniqStudioApp {
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame_instant);
         self.last_frame_instant = now;
+        self.drain_note_offs(now);
         perf_hud::perf_hud_tick(&mut self.perf_hud, dt.as_millis() as u64);
         self.last_screen_rect = ctx.input(|i| i.screen_rect);
         self.shortcuts.handle_input(ctx, &self.command_sender);
@@ -3145,6 +3196,10 @@ impl App for HarmoniqStudioApp {
                 .default_pos(egui::pos2(160.0, 100.0))
                 .show(ctx, |ui| {
                     self.piano_roll_widget.ui(ui);
+                    let previews = self.piano_roll_widget.take_note_previews();
+                    for preview in previews {
+                        self.preview_note(preview);
+                    }
                     let edits = self.piano_roll_widget.take_edits();
                     self.apply_piano_roll_edits(edits);
                 });

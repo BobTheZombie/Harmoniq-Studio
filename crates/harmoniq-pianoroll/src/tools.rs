@@ -39,6 +39,13 @@ pub struct PointerPosition {
     pub pitch: u8,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct NotePreview {
+    pub pitch: u8,
+    pub velocity: u8,
+    pub channel: u8,
+}
+
 #[derive(Clone, Debug)]
 enum GestureState {
     DragNotes {
@@ -67,6 +74,7 @@ pub struct ToolOutput {
     pub selection: Option<Vec<u64>>,
     pub marquee: Option<Rect>,
     pub request_pan: Option<Vec2>,
+    pub preview: Option<NotePreview>,
 }
 
 /// Manages gesture state for the different editing tools.
@@ -138,6 +146,13 @@ impl ToolController {
                         start_pointer: pointer,
                     });
                     output.selection = Some(ids);
+                    if let Some(note) = ctx.clip.notes.iter().find(|note| note.id == hit.id) {
+                        output.preview = Some(NotePreview {
+                            pitch: note.pitch,
+                            velocity: note.vel,
+                            channel: note.chan,
+                        });
+                    }
                 } else {
                     self.gesture = Some(GestureState::Marquee {
                         start_pos: pointer.pos,
@@ -170,6 +185,11 @@ impl ToolController {
                     start_pointer: pointer,
                 });
                 output.edits.push(Edit::Add(note));
+                output.preview = Some(NotePreview {
+                    pitch: pointer.pitch,
+                    velocity: 100,
+                    channel: 0,
+                });
             }
             Tool::Erase => {
                 if let Some(hit) = hit {

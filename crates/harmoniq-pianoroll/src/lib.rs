@@ -11,6 +11,8 @@ pub mod theme;
 pub mod tools;
 pub mod transport;
 
+pub use tools::NotePreview;
+
 use std::ops::RangeInclusive;
 
 use controller_lanes::lanes_ui;
@@ -33,6 +35,7 @@ pub struct PianoRoll {
     ghost_shapes: Vec<Shape>,
     grid_shapes: Vec<Shape>,
     pending_edits: Vec<Edit>,
+    pending_previews: Vec<NotePreview>,
     hovered_note: Option<u64>,
     marquee_rect: Option<Rect>,
     gesture_edits: Vec<Edit>,
@@ -53,6 +56,7 @@ impl PianoRoll {
             ghost_shapes: Vec::new(),
             grid_shapes: Vec::new(),
             pending_edits: Vec::new(),
+            pending_previews: Vec::new(),
             hovered_note: None,
             marquee_rect: None,
             gesture_edits: Vec::new(),
@@ -91,6 +95,11 @@ impl PianoRoll {
         self.pending_edits.drain(..).collect()
     }
 
+    /// Drains the accumulated note preview requests.
+    pub fn take_note_previews(&mut self) -> Vec<NotePreview> {
+        self.pending_previews.drain(..).collect()
+    }
+
     /// Renders the piano roll inside the provided `egui::Ui`.
     pub fn ui(&mut self, ui: &mut Ui) {
         let width = ui.available_width();
@@ -123,7 +132,7 @@ impl PianoRoll {
         let grid_rect =
             Rect::from_min_max(pos2(keyboard_rect.right(), rect.top()), rect.right_bottom());
 
-        self.handle_input(ui, grid_rect, &response);
+        self.handle_input(ui, keyboard_rect, grid_rect, &response);
         self.paint_keyboard(ui.painter_at(keyboard_rect), keyboard_rect);
         self.paint_grid(ui.painter_at(grid_rect), grid_rect);
         self.paint_notes(ui.painter_at(grid_rect), grid_rect);
@@ -218,11 +227,33 @@ impl PianoRoll {
         });
     }
 
-    fn handle_input(&mut self, ui: &Ui, grid_rect: Rect, response: &Response) {
+    fn handle_input(&mut self, ui: &Ui, keyboard_rect: Rect, grid_rect: Rect, response: &Response) {
         self.handle_scroll_and_zoom(ui, grid_rect);
         let modifiers = ui.ctx().input(|i| i.modifiers);
         if response.clicked_by(egui::PointerButton::Primary) {
             if let Some(pos) = response.interact_pointer_pos() {
+                if keyboard_rect.contains(pos) {
+                    let pitch = tools::pointer_to_pitch(
+                        self.state.zoom_y,
+                        self.state.scroll_px.y,
+                        keyboard_rect,
+                        pos.y,
+                    );
+                    let channel = self
+                        .state
+                        .clip
+                        .notes
+                        .iter()
+                        .find(|note| note.selected)
+                        .map(|note| note.chan)
+                        .unwrap_or(0);
+                    self.pending_previews.push(NotePreview {
+                        pitch,
+                        velocity: 100,
+                        channel,
+                    });
+                    return;
+                }
                 self.gesture_edits.clear();
                 let pointer = self.pointer_position(grid_rect, pos);
                 let hit = self.hit_test(grid_rect, pos);
@@ -292,6 +323,9 @@ impl PianoRoll {
             for id in selection {
                 self.state.select_note(id, true);
             }
+        }
+        if let Some(preview) = output.preview {
+            self.pending_previews.push(preview);
         }
         if let Some(rect) = output.marquee {
             self.marquee_rect = Some(rect);
