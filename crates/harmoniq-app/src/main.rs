@@ -65,7 +65,7 @@ use audio::{
 };
 use config::qwerty::{QwertyConfig, VelocityCurveSetting};
 use harmoniq_pianoroll::{
-    model::{Clip as PianoRollClip, EditorState as PianoRollEditorState, SnapUnit},
+    model::{Clip as PianoRollClip, EditorState as PianoRollEditorState, Note, SnapUnit},
     PianoRoll as PianoRollWidget,
 };
 use harmoniq_playlist::{
@@ -1871,6 +1871,46 @@ impl HarmoniqStudioApp {
         }
     }
 
+    fn open_channel_piano_roll(&mut self, channel_index: usize) {
+        let Some(pattern) = self.channel_rack.current_pattern() else {
+            return;
+        };
+        let Some(steps) = pattern.steps.get(channel_index) else {
+            return;
+        };
+        if steps.is_empty() {
+            return;
+        }
+
+        let ppq = self.piano_roll_widget.state().ppq();
+        let mut clip = PianoRollClip::new(ppq);
+        let step_len = (clip.loop_len_ppq / steps.len() as i64).max(1);
+        let mut next_id = 0u64;
+
+        for (step_index, active) in steps.iter().enumerate() {
+            if !*active {
+                continue;
+            }
+
+            let start_ppq = (step_index as i64) * step_len;
+            clip.notes.push(Note {
+                id: next_id,
+                start_ppq,
+                dur_ppq: step_len,
+                pitch: 72,
+                vel: 100,
+                chan: 0,
+                selected: false,
+            });
+            next_id += 1;
+        }
+
+        clip.sort_notes();
+        self.piano_roll_widget.set_clip(clip);
+        self.piano_roll_window_open = true;
+        self.piano_roll_hidden = false;
+    }
+
     fn process_events(&mut self) {
         for event in self.event_bus.drain() {
             match event {
@@ -1890,6 +1930,9 @@ impl HarmoniqStudioApp {
                 }
                 AppEvent::PreviewStockSound(name) => {
                     self.preview_stock_sound(&name);
+                }
+                AppEvent::OpenChannelPianoRoll { channel_index } => {
+                    self.open_channel_piano_roll(channel_index);
                 }
                 AppEvent::OpenPianoRollPattern {
                     pattern_id,
