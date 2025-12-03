@@ -1457,16 +1457,20 @@ fn sends_section(
                         .color(palette.text_primary),
                 );
                 let mut level = send.level;
-                let response = ui.add(
-                    Knob::new(&mut level, 0.0, 1.0, 0.0, "", palette)
-                        .with_diameter(metrics.send_knob_diameter),
+                let response = ui.add_sized(
+                    egui::vec2(metrics.send_knob_diameter * 3.0, 20.0),
+                    egui::Slider::new(&mut level, 0.0..=1.0)
+                        .clamp_to_range(true)
+                        .show_value(false),
                 );
+                ui.label(format!("{:.0}%", level * 100.0));
                 let level_changed = response.changed();
                 if level_changed {
                     send.level = level;
+                    (callbacks.configure_send)(channel.id, send.id, send.level, send.pre_fader);
                 }
                 let pre_changed = ui.checkbox(&mut send.pre_fader, "Pre").changed();
-                if level_changed || pre_changed {
+                if pre_changed {
                     (callbacks.configure_send)(channel.id, send.id, send.level, send.pre_fader);
                 }
             });
