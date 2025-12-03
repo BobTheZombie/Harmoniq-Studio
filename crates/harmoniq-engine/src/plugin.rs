@@ -133,6 +133,56 @@ impl MidiEvent {
             | MidiEvent::PitchBend { timestamp, .. } => *timestamp,
         }
     }
+
+    /// Helper to construct a MIDI event from raw bytes.
+    ///
+    /// The `sample_offset` is interpreted as microseconds to align with
+    /// [`MidiTimestamp`], preserving approximate ordering when events are
+    /// sorted by time.
+    pub fn new(sample_offset: u32, data: [u8; 3]) -> Self {
+        let timestamp = MidiTimestamp::from_micros(sample_offset as u64);
+        let status = data[0] & 0xF0;
+        let channel = data[0] & 0x0F;
+
+        match status {
+            0x80 => MidiEvent::NoteOff {
+                channel,
+                note: data[1],
+                timestamp,
+            },
+            0x90 => MidiEvent::NoteOn {
+                channel,
+                note: data[1],
+                velocity: data[2],
+                timestamp,
+            },
+            0xB0 => MidiEvent::ControlChange {
+                channel,
+                control: data[1],
+                value: data[2],
+                timestamp,
+            },
+            0xE0 => MidiEvent::PitchBend {
+                channel,
+                lsb: data[1],
+                msb: data[2],
+                timestamp,
+            },
+            _ => MidiEvent::NoteOff {
+                channel,
+                note: data[1],
+                timestamp,
+            },
+        }
+    }
+
+    /// Returns the timestamp expressed as an approximate sample offset.
+    pub fn sample_offset(&self) -> u32 {
+        self.timestamp()
+            .as_duration()
+            .as_micros()
+            .min(u32::MAX as u128) as u32
+    }
 }
 
 /// Errors that can be returned by plugin operations.

@@ -2126,7 +2126,7 @@ impl HarmoniqStudioApp {
             events.push(MidiEvent::new(end_samples, [0x80 | channel, pitch, 0]));
         }
 
-        events.sort_by_key(|event| event.sample_offset);
+        events.sort_by_key(|event| event.sample_offset());
 
         if !events.is_empty() {
             self.send_command(EngineCommand::SubmitMidi(events));

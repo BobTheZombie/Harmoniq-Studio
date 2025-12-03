@@ -27,7 +27,7 @@ impl Channel {
 
 #[derive(Clone)]
 pub struct ChannelRackPattern {
-    steps: Vec<Vec<bool>>,     // channel index -> steps
+    pub steps: Vec<Vec<bool>>,     // channel index -> steps
     channel_volumes: Vec<f32>, // channel index -> volume
 }
 
@@ -78,11 +78,11 @@ impl ChannelRackPane {
         ]
     }
 
-    fn current_pattern_mut(&mut self) -> &mut ChannelRackPattern {
+    pub fn current_pattern_mut(&mut self) -> &mut ChannelRackPattern {
         &mut self.patterns[self.active_pattern_index]
     }
 
-    fn current_pattern(&self) -> Option<&ChannelRackPattern> {
+    pub fn current_pattern(&self) -> Option<&ChannelRackPattern> {
         self.patterns.get(self.active_pattern_index)
     }
 
