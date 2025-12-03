@@ -166,6 +166,7 @@ impl MixerView {
                 .unwrap_or_else(|| (Meter::default(), Channel::new_meter_history()));
             let channel = Channel {
                 id: MASTER_CHANNEL_ID,
+                track_number: 0,
                 name: "MASTER".to_string(),
                 gain_db: 0.0,
                 pan: 0.0,
@@ -220,6 +221,11 @@ impl MixerView {
     ) -> StripSnapshot {
         let mut channel = Channel {
             id: info.id,
+            track_number: if info.is_master {
+                0
+            } else {
+                (idx as u16).saturating_add(1)
+            },
             name: info.name.clone(),
             gain_db: info.fader_db,
             pan: info.pan,

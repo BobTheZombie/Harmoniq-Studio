@@ -27,7 +27,7 @@ impl Channel {
 
 #[derive(Clone)]
 pub struct ChannelRackPattern {
-    pub steps: Vec<Vec<bool>>,     // channel index -> steps
+    pub steps: Vec<Vec<bool>>, // channel index -> steps
     channel_volumes: Vec<f32>, // channel index -> volume
 }
 
@@ -238,14 +238,13 @@ impl ChannelRackPane {
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 4.0;
-                                if let Some(pattern) = self.patterns.get_mut(self.active_pattern_index)
+                                if let Some(pattern) =
+                                    self.patterns.get_mut(self.active_pattern_index)
                                 {
                                     for step in 0..pattern.steps[index].len() {
-                                        let accent = channel.color.gamma_multiply(if step % 4 == 0 {
-                                            0.9
-                                        } else {
-                                            0.7
-                                        });
+                                        let accent = channel
+                                            .color
+                                            .gamma_multiply(if step % 4 == 0 { 0.9 } else { 0.7 });
                                         let toggle = ui.add(
                                             StepToggle::new(palette, accent)
                                                 .active(pattern.steps[index][step])
@@ -253,7 +252,8 @@ impl ChannelRackPane {
                                                 .with_size(egui::vec2(20.0, 34.0)),
                                         );
                                         if toggle.clicked() {
-                                            pattern.steps[index][step] = !pattern.steps[index][step];
+                                            pattern.steps[index][step] =
+                                                !pattern.steps[index][step];
                                             event_bus.publish(AppEvent::RequestRepaint);
                                         }
                                     }

@@ -251,7 +251,11 @@ fn channel_strip_view(
                 .find(|c| Some(c.id) == state.selected)
             {
                 let metrics = StripMetrics::scaled(state.layout.strip_width);
-                strip_header(ui, channel, palette);
+                let routed_from_rack = state
+                    .rack_routes
+                    .get(&channel.track_number)
+                    .map_or(false, |count| *count > 0);
+                strip_header(ui, channel, palette, routed_from_rack);
                 ui.add_space(12.0);
 
                 let reset_request = egui::ScrollArea::vertical()
@@ -628,6 +632,10 @@ fn channel_area(
                     if !channel_matches(filter, channel) {
                         continue;
                     }
+                    let routed_from_rack = state
+                        .rack_routes
+                        .get(&channel.track_number)
+                        .map_or(false, |count| *count > 0);
                     let events = channel_strip(
                         ui,
                         &state.rack_visibility,
@@ -635,6 +643,7 @@ fn channel_area(
                         callbacks,
                         palette,
                         selected == Some(channel.id),
+                        routed_from_rack,
                         &metrics,
                         &mut state.layout,
                     );
@@ -682,6 +691,7 @@ fn channel_strip(
     callbacks: &mut crate::MixerCallbacks,
     palette: &HarmoniqPalette,
     is_selected: bool,
+    routed_from_rack: bool,
     metrics: &StripMetrics,
     layout: &mut MixerLayout,
 ) -> StripEvents {
@@ -697,7 +707,7 @@ fn channel_strip(
             ui.set_width(metrics.strip_w);
             ui.spacing_mut().item_spacing = egui::vec2(10.0, metrics.section_spacing);
 
-            strip_header(ui, channel, palette);
+            strip_header(ui, channel, palette, routed_from_rack);
 
             if rack_visibility.input {
                 let mut expanded = channel.rack_state.input_expanded;
@@ -826,7 +836,12 @@ fn strip_fill(palette: &HarmoniqPalette, is_selected: bool, channel: &Channel) -
     }
 }
 
-fn strip_header(ui: &mut egui::Ui, channel: &mut Channel, palette: &HarmoniqPalette) {
+fn strip_header(
+    ui: &mut egui::Ui,
+    channel: &mut Channel,
+    palette: &HarmoniqPalette,
+    routed_from_rack: bool,
+) {
     Frame::none()
         .fill(palette.toolbar_highlight)
         .rounding(Rounding::same(8.0))
@@ -841,12 +856,17 @@ fn strip_header(ui: &mut egui::Ui, channel: &mut Channel, palette: &HarmoniqPale
                     ui.painter().rect_filled(rect, 3.0, color);
                     ui.add_space(6.0);
                     let mut name = channel.name.clone();
-                    let response = egui::TextEdit::singleline(&mut name)
+                    let mut edit = egui::TextEdit::singleline(&mut name)
                         .desired_width(ui.available_width())
                         .font(TextStyle::Monospace);
-                    if ui.add(response).lost_focus() {
-                        channel.name = name;
-                    }
+                    ui.scope(|ui| {
+                        if routed_from_rack {
+                            ui.visuals_mut().override_text_color = Some(palette.accent);
+                        }
+                        if ui.add(edit).lost_focus() {
+                            channel.name = name;
+                        }
+                    });
                 });
 
                 ui.add_space(6.0);
