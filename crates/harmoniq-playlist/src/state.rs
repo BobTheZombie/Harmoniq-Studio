@@ -25,6 +25,12 @@ impl AudioSourceId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ImportedAudioSource {
+    pub id: AudioSourceId,
+    pub duration_ticks: u64,
+}
+
 /// Identifier for a playlist track.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TrackId(pub u32);
@@ -275,6 +281,15 @@ impl Track {
             controls: TrackControls::default(),
             rack: Vec::new(),
             lanes: Vec::new(),
+        }
+    }
+
+    pub fn ensure_audio_routing(&mut self) {
+        if self.rack.is_empty() {
+            self.rack
+                .push(RackSlot::new(0, "Audio Channel", RackSlotKind::Instrument));
+            self.rack
+                .push(RackSlot::new(1, "Channel EQ", RackSlotKind::Insert));
         }
     }
 

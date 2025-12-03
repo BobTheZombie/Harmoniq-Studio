@@ -6,8 +6,7 @@ use egui::{
 };
 
 use crate::state::{
-    AudioSourceId, Clip, ClipId, ClipKind, Playlist, RackSlotKind, Snap, Track,
-    TrackId as StateTrackId,
+    Clip, ClipId, ClipKind, Playlist, RackSlotKind, Snap, Track, TrackId as StateTrackId,
 };
 
 const TRACK_HEADER_HEIGHT: f32 = 68.0;
@@ -43,7 +42,7 @@ pub struct PlaylistProps<'a> {
     pub snap: &'a mut Snap,
     pub open_piano_roll: &'a mut dyn FnMut(TrackId, Option<u32>, ClipId),
     pub pick_pattern_id: &'a mut dyn FnMut() -> Option<u32>,
-    pub import_audio_file: &'a mut dyn FnMut(PathBuf) -> AudioSourceId,
+    pub import_audio_file: &'a mut dyn FnMut(PathBuf) -> Option<crate::state::ImportedAudioSource>,
 }
 
 pub fn render(ui: &mut Ui, props: PlaylistProps<'_>) {
@@ -214,9 +213,15 @@ pub fn render(ui: &mut Ui, props: PlaylistProps<'_>) {
                     }
                 }
 
-                for dropped in props.playlist.take_dropped_files() {
-                    let _source_id = (props.import_audio_file)(dropped);
-                }
+                handle_file_drop(
+                    ui,
+                    timeline_rect,
+                    lanes_rect,
+                    &layouts,
+                    props.playlist,
+                    *props.snap,
+                    &mut props.import_audio_file,
+                );
 
                 timeline_response
             });
@@ -228,6 +233,86 @@ pub fn render(ui: &mut Ui, props: PlaylistProps<'_>) {
 struct ClipClickInfo {
     clicked_clip: Option<(TrackId, ClipId)>,
     target_lane: Option<(TrackId, u32)>,
+}
+
+fn handle_file_drop(
+    ui: &Ui,
+    timeline_rect: Rect,
+    lanes_rect: Rect,
+    layouts: &[TrackVerticalLayout],
+    playlist: &mut Playlist,
+    snap: Snap,
+    import_audio: &mut dyn FnMut(PathBuf) -> Option<crate::state::ImportedAudioSource>,
+) {
+    let dropped = ui.input(|i| i.raw.dropped_files.clone());
+    for file in dropped {
+        let (Some(path), Some(pos)) = (file.path.clone(), file.pos) else {
+            continue;
+        };
+
+        if !timeline_rect.contains(pos) {
+            continue;
+        }
+
+        let Some((track_index, lane_id)) = lane_from_position(layouts, playlist, lanes_rect, pos)
+        else {
+            continue;
+        };
+
+        let Some(imported) = import_audio(path.clone()) else {
+            continue;
+        };
+
+        let beat = ((pos.x - lanes_rect.left()) / BEAT_WIDTH).max(0.0);
+        let snap_division = snap.division() as f32;
+        let snapped_beats = (beat * snap_division).round() / snap_division;
+        let start_ticks = (snapped_beats * playlist.ppq() as f32).round().max(0.0) as u64;
+        if let Some(track) = playlist.tracks.get_mut(track_index) {
+            track.ensure_audio_routing();
+            let name = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("Audio");
+            playlist.drop_clip_from_browser(
+                track.id,
+                lane_id,
+                name,
+                start_ticks,
+                imported.duration_ticks.max(1),
+                track.color,
+                ClipKind::Audio {
+                    source: imported.id,
+                },
+            );
+        }
+    }
+}
+
+fn lane_from_position(
+    layouts: &[TrackVerticalLayout],
+    playlist: &Playlist,
+    lanes_rect: Rect,
+    pos: Pos2,
+) -> Option<(usize, u32)> {
+    for layout in layouts {
+        let Some(track) = playlist.tracks.get(layout.track_index) else {
+            continue;
+        };
+
+        for lane_row in &layout.lane_rows {
+            let lane_rect = Rect::from_min_max(
+                Pos2::new(lanes_rect.left(), lane_row.top),
+                Pos2::new(lanes_rect.right(), lane_row.bottom),
+            );
+
+            if lane_rect.contains(pos) {
+                let lane = track.lanes.get(lane_row.lane_index)?;
+                return Some((layout.track_index, lane.id));
+            }
+        }
+    }
+
+    None
 }
 
 #[derive(Debug, Clone, Copy)]
