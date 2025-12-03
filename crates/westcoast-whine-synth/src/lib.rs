@@ -3,17 +3,15 @@ use nih_plug::prelude::{formatters, AtomicF32};
 use nih_plug::util;
 use nih_plug_egui::{
     create_egui_editor,
-    egui::{
-        self,
-        plot::{Line, Plot, PlotPoints},
-        RichText, Vec2,
-    },
+    egui::{self, RichText, Vec2},
     resizable_window::ResizableWindow,
     widgets, EguiState,
 };
+use std::fmt::{Display, Formatter};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use egui_plot::{Line, Plot, PlotPoints};
 
 mod dsp;
 
@@ -153,6 +151,12 @@ impl LfoShape {
             LfoShape::Sine => LfoWaveform::Sine,
             LfoShape::Triangle => LfoWaveform::Triangle,
         }
+    }
+}
+
+impl Display for LfoShape {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", LfoShape::variants()[self.to_index()])
     }
 }
 
@@ -724,7 +728,7 @@ impl Plugin for WestCoastWhineSynth {
         ..AudioIOLayout::const_default()
     }];
 
-    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCsAndNotes;
+    const MIDI_INPUT: MidiConfig = MidiConfig::MidiCCs;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
 
     type SysExMessage = ();
@@ -824,7 +828,7 @@ impl Plugin for WestCoastWhineSynth {
             |_ctx, _state| {},
             move |egui_ctx, setter, state| {
                 ResizableWindow::new("westcoast-whine")
-                    .default_size(Vec2::new(620.0, 520.0))
+                    .min_size(Vec2::new(620.0, 520.0))
                     .show(egui_ctx, params.editor_state.as_ref(), |ui| {
                         ui.heading(RichText::new("WestCoast Whine Synth").size(20.0));
                         ui.separator();
@@ -952,19 +956,25 @@ impl Plugin for WestCoastWhineSynth {
 
                                     ui.group(|ui| {
                                         ui.label("Modulation");
-                                        let mut waveform = params.modulation.waveform.value();
+                                        let current_waveform = params.modulation.waveform.value();
+                                        let mut waveform_index = current_waveform.to_index();
                                         egui::ComboBox::from_label("LFO Shape")
-                                            .selected_text(waveform.to_string())
+                                            .selected_text(current_waveform.to_string())
                                             .show_ui(ui, |ui| {
-                                                for variant in LfoShape::variants() {
+                                                for (index, label) in
+                                                    LfoShape::variants().iter().enumerate()
+                                                {
                                                     ui.selectable_value(
-                                                        &mut waveform,
-                                                        *variant,
-                                                        variant.to_string(),
+                                                        &mut waveform_index,
+                                                        index,
+                                                        *label,
                                                     );
                                                 }
                                             });
-                                        if waveform != params.modulation.waveform.value() {
+                                        if waveform_index
+                                            != params.modulation.waveform.value().to_index()
+                                        {
+                                            let waveform = LfoShape::from_index(waveform_index);
                                             setter.begin_set_parameter(&params.modulation.waveform);
                                             setter.set_parameter(
                                                 &params.modulation.waveform,
@@ -1054,14 +1064,14 @@ impl ClapPlugin for WestCoastWhineSynth {
     const CLAP_SUPPORT_URL: Option<&'static str> = Some("https://harmoniq.studio/support");
     const CLAP_FEATURES: &'static [ClapFeature] = &[
         ClapFeature::Instrument,
-        ClapFeature::Synth,
+        ClapFeature::Synthesizer,
         ClapFeature::Stereo,
         ClapFeature::Mono,
     ];
 }
 
 impl Vst3Plugin for WestCoastWhineSynth {
-    const VST3_CLASS_ID: [u8; 16] = *b"WestCoastWhinePlg";
+    const VST3_CLASS_ID: [u8; 16] = *b"WestCoastWhine01";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] =
         &[Vst3SubCategory::Instrument, Vst3SubCategory::Synth];
 }
