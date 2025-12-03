@@ -763,7 +763,7 @@ fn channel_strip(
                         callbacks,
                         palette,
                         metrics,
-                        state.layout.compact_inserts,
+                        layout.compact_inserts,
                     )
                 });
                 channel.rack_state.inserts_expanded = expanded;
@@ -1605,129 +1605,141 @@ fn inserts_panel(
         let insert_count = total_slots;
 
         for index in 0..total_slots {
-            let slot = channel
-                .inserts
-                .get_mut(index)
-                .expect("insert slot ensured above");
-            let is_empty = slot.plugin_uid.is_none();
-            let title = if slot.name.is_empty() {
-                "Empty".to_string()
-            } else {
-                slot.name.clone()
-            };
-
-            let slot_fill = if is_empty {
-                palette.mixer_slot_bg
-            } else {
-                palette.mixer_slot_active
-            };
-
             let mut drop_request = None;
-            let frame = Frame::none()
-                .fill(slot_fill)
-                .stroke(Stroke::new(1.0, palette.mixer_slot_border))
-                .rounding(Rounding::same(8.0))
-                .inner_margin(Margin::symmetric(8.0, 6.0))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(10.0, 0.0);
-                        let handle = ui
-                            .add(egui::Label::new("≡").sense(Sense::drag()))
-                            .on_hover_text("Drag to reorder");
-                        if handle.drag_started() {
-                            ui.ctx().data_mut(|data| data.insert_temp(drag_id, index));
-                        }
-                        if handle.drag_stopped() {
-                            if let Some(from) =
-                                ui.ctx().data(|data| data.get_temp::<usize>(drag_id))
-                            {
-                                let target = drop_target.unwrap_or(insert_count);
-                                drop_request = Some((from, target));
-                            }
-                            ui.ctx().data_mut(|data| data.remove::<usize>(drag_id));
-                        }
+            let mut menu_move: Option<(usize, usize)> = None;
+            let mut disable_all_inserts = false;
+            let mut remove_insert = false;
 
-                        let bypass_response = ui
-                            .add(
-                                StateToggleButton::new(&mut slot.bypass, "Byp", palette)
-                                    .with_width(52.0),
-                            )
-                            .on_hover_text("Bypass");
-                        if bypass_response.changed() {
-                            (callbacks.set_insert_bypass)(channel.id, index, slot.bypass);
-                        }
+            let response = {
+                let slot = channel
+                    .inserts
+                    .get_mut(index)
+                    .expect("insert slot ensured above");
+                let is_empty = slot.plugin_uid.is_none();
+                let title = if slot.name.is_empty() {
+                    "Empty".to_string()
+                } else {
+                    slot.name.clone()
+                };
 
-                        let insert_button = ui.add_sized(
-                            [ui.available_width() - 64.0, 28.0],
-                            egui::Button::new(
-                                RichText::new(title.clone())
-                                    .small()
-                                    .color(palette.text_primary),
-                            ),
-                        );
-                        if insert_button.clicked() {
-                            if is_empty {
-                                (callbacks.open_insert_browser)(channel.id, Some(index));
-                            } else {
-                                (callbacks.open_insert_ui)(channel.id, index);
+                let slot_fill = if is_empty {
+                    palette.mixer_slot_bg
+                } else {
+                    palette.mixer_slot_active
+                };
+
+                Frame::none()
+                    .fill(slot_fill)
+                    .stroke(Stroke::new(1.0, palette.mixer_slot_border))
+                    .rounding(Rounding::same(8.0))
+                    .inner_margin(Margin::symmetric(8.0, 6.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(10.0, 0.0);
+                            let handle = ui
+                                .add(egui::Label::new("≡").sense(Sense::drag()))
+                                .on_hover_text("Drag to reorder");
+                            if handle.drag_started() {
+                                ui.ctx().data_mut(|data| data.insert_temp(drag_id, index));
                             }
-                        }
-                        insert_button.context_menu(|ui| {
-                            let mut menu_move: Option<(usize, usize)> = None;
+                            if handle.drag_stopped() {
+                                if let Some(from) =
+                                    ui.ctx().data(|data| data.get_temp::<usize>(drag_id))
+                                {
+                                    let target = drop_target.unwrap_or(insert_count);
+                                    drop_request = Some((from, target));
+                                }
+                                ui.ctx().data_mut(|data| data.remove::<usize>(drag_id));
+                            }
+
+                            let bypass_response = ui
+                                .add(
+                                    StateToggleButton::new(&mut slot.bypass, "Byp", palette)
+                                        .with_width(52.0),
+                                )
+                                .on_hover_text("Bypass");
+                            if bypass_response.changed() {
+                                (callbacks.set_insert_bypass)(channel.id, index, slot.bypass);
+                            }
+
+                            let insert_button = ui.add_sized(
+                                [ui.available_width() - 64.0, 28.0],
+                                egui::Button::new(
+                                    RichText::new(title.clone())
+                                        .small()
+                                        .color(palette.text_primary),
+                                ),
+                            );
+                            if insert_button.clicked() {
+                                if is_empty {
+                                    (callbacks.open_insert_browser)(channel.id, Some(index));
+                                } else {
+                                    (callbacks.open_insert_ui)(channel.id, index);
+                                }
+                            }
+                            insert_button.context_menu(|ui| {
+                                let mut menu_move_local: Option<(usize, usize)> = None;
+                                if ui
+                                    .button("Load / Replace…")
+                                    .on_hover_text("Choose an effect for this slot")
+                                    .clicked()
+                                {
+                                    (callbacks.open_insert_browser)(channel.id, Some(index));
+                                    ui.close_menu();
+                                }
+                                if slot.plugin_uid.is_some() && ui.button("Open UI").clicked() {
+                                    (callbacks.open_insert_ui)(channel.id, index);
+                                    ui.close_menu();
+                                }
+                                if ui.button("Move Up").clicked() {
+                                    if index > 0 {
+                                        menu_move_local = Some((index, index - 1));
+                                    }
+                                    ui.close_menu();
+                                }
+                                if ui.button("Move Down").clicked() {
+                                    menu_move_local =
+                                        Some((index, (index + 1).min(total_slots - 1)));
+                                    ui.close_menu();
+                                }
+                                if ui.button("Disable All Inserts").clicked() {
+                                    disable_all_inserts = true;
+                                    ui.close_menu();
+                                }
+                                if let Some(request) = menu_move_local {
+                                    menu_move = Some(request);
+                                }
+                            });
+
                             if ui
-                                .button("Load / Replace…")
-                                .on_hover_text("Choose an effect for this slot")
+                                .add(egui::Button::new("✕").fill(palette.toolbar_highlight))
+                                .on_hover_text("Remove")
                                 .clicked()
                             {
-                                (callbacks.open_insert_browser)(channel.id, Some(index));
-                                ui.close_menu();
-                            }
-                            if slot.plugin_uid.is_some() && ui.button("Open UI").clicked() {
-                                (callbacks.open_insert_ui)(channel.id, index);
-                                ui.close_menu();
-                            }
-                            if ui.button("Move Up").clicked() {
-                                if index > 0 {
-                                    menu_move = Some((index, index - 1));
-                                }
-                                ui.close_menu();
-                            }
-                            if ui.button("Move Down").clicked() {
-                                menu_move = Some((index, (index + 1).min(total_slots - 1)));
-                                ui.close_menu();
-                            }
-                            if ui.button("Disable All Inserts").clicked() {
-                                for (slot_index, slot) in
-                                    channel.inserts.iter_mut().enumerate().take(total_slots)
-                                {
-                                    if !slot.bypass && slot.plugin_uid.is_some() {
-                                        slot.bypass = true;
-                                        (callbacks.set_insert_bypass)(
-                                            channel.id,
-                                            slot_index,
-                                            slot.bypass,
-                                        );
-                                    }
-                                }
-                                ui.close_menu();
-                            }
-                            if let Some(request) = menu_move {
-                                pending_move = Some(request);
+                                remove_insert = true;
                             }
                         });
+                    })
+                    .response
+            };
 
-                        if ui
-                            .add(egui::Button::new("✕").fill(palette.toolbar_highlight))
-                            .on_hover_text("Remove")
-                            .clicked()
-                        {
-                            (callbacks.remove_insert)(channel.id, index);
-                        }
-                    });
-                });
+            if disable_all_inserts {
+                for (slot_index, slot) in channel.inserts.iter_mut().enumerate().take(total_slots) {
+                    if !slot.bypass && slot.plugin_uid.is_some() {
+                        slot.bypass = true;
+                        (callbacks.set_insert_bypass)(channel.id, slot_index, slot.bypass);
+                    }
+                }
+            }
 
-            let response = frame.response;
+            if remove_insert {
+                (callbacks.remove_insert)(channel.id, index);
+            }
+
             if let Some((from, to)) = drop_request {
+                pending_move = Some((from, to));
+            }
+            if let Some((from, to)) = menu_move {
                 pending_move = Some((from, to));
             }
 
