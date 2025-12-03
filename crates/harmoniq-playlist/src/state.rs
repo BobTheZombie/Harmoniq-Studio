@@ -44,7 +44,21 @@ pub struct ClipId(pub u64);
 pub enum ClipKind {
     Pattern { pattern_id: u32 },
     Audio { source: AudioSourceId },
-    Automation,
+    Automation { lane: AutomationLane },
+}
+
+/// A single point on an automation lane in playlist ticks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutomationPoint {
+    pub tick: u64,
+    pub value: f32,
+}
+
+/// Automation curve data stored inside an automation clip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutomationLane {
+    pub parameter: String,
+    pub points: Vec<AutomationPoint>,
 }
 
 /// Concrete clip instance positioned in the timeline.
@@ -625,7 +639,25 @@ impl Playlist {
                     ppq,
                     5 * ppq,
                     [track.color[0], track.color[1], track.color[2], 0.7],
-                    ClipKind::Automation,
+                    ClipKind::Automation {
+                        lane: AutomationLane {
+                            parameter: "Gain".to_string(),
+                            points: vec![
+                                AutomationPoint {
+                                    tick: 0,
+                                    value: 0.35,
+                                },
+                                AutomationPoint {
+                                    tick: (2 * ppq).saturating_sub(1),
+                                    value: 0.85,
+                                },
+                                AutomationPoint {
+                                    tick: 5 * ppq,
+                                    value: 0.4,
+                                },
+                            ],
+                        },
+                    },
                 ),
             );
             track.rack.push(RackSlot::new(
