@@ -41,7 +41,7 @@ use hound::{SampleFormat, WavSpec, WavWriter};
 use parking_lot::Mutex;
 use rtrb::Consumer;
 use serde::{Deserialize, Serialize};
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 use tracing_subscriber::EnvFilter;
 use winit::keyboard::{KeyCode, ModifiersState};
 
