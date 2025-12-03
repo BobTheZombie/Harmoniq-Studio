@@ -1,6 +1,6 @@
 use crate::state::{
     AutomationMode, Channel, ChannelEq, ChannelId, CueSend, EqBand, EqFilterKind, MixerLayout,
-    MixerRackVisibility, MixerState, MixerViewTab, RoutingDelta,
+    MixerRackVisibility, MixerState, MixerViewTab, RoutingDelta, MAX_INSERT_SLOTS,
 };
 use harmoniq_ui::{Fader, HarmoniqPalette, Knob, LevelMeter, StateToggleButton};
 use std::collections::BTreeSet;
@@ -325,7 +325,12 @@ fn channel_strip_view(
                                         let mut expanded = channel.rack_state.inserts_expanded;
                                         rack_section(ui, palette, &mut expanded, "Inserts", |ui| {
                                             inserts_panel(
-                                                ui, channel, callbacks, palette, &metrics,
+                                                ui,
+                                                channel,
+                                                callbacks,
+                                                palette,
+                                                &metrics,
+                                                state.layout.compact_inserts,
                                             );
                                         });
                                         channel.rack_state.inserts_expanded = expanded;
@@ -445,6 +450,14 @@ fn zone_toolbar(ui: &mut egui::Ui, state: &mut MixerState, palette: &HarmoniqPal
                     RichText::new("Utilities")
                         .strong()
                         .color(palette.text_primary),
+                );
+                ui.add(
+                    StateToggleButton::new(
+                        &mut state.layout.compact_inserts,
+                        "Hide empty inserts",
+                        palette,
+                    )
+                    .with_width(132.0),
                 );
                 if ui
                     .button(RichText::new("Reset Selected").color(palette.text_primary))
@@ -744,7 +757,14 @@ fn channel_strip(
             if rack_visibility.inserts {
                 let mut expanded = channel.rack_state.inserts_expanded;
                 rack_section(ui, palette, &mut expanded, "Inserts", |ui| {
-                    inserts_panel(ui, channel, callbacks, palette, metrics)
+                    inserts_panel(
+                        ui,
+                        channel,
+                        callbacks,
+                        palette,
+                        metrics,
+                        state.layout.compact_inserts,
+                    )
                 });
                 channel.rack_state.inserts_expanded = expanded;
             }
@@ -1561,6 +1581,7 @@ fn inserts_panel(
     callbacks: &mut crate::MixerCallbacks,
     palette: &HarmoniqPalette,
     _metrics: &StripMetrics,
+    compact_inserts: bool,
 ) {
     let drag_id = egui::Id::new(("mixer_insert_drag", channel.id));
     ui.vertical(|ui| {
@@ -1569,14 +1590,21 @@ fn inserts_panel(
         let pointer_pos = ui.ctx().pointer_interact_pos();
         let mut drop_target: Option<usize> = None;
         let mut pending_move: Option<(usize, usize)> = None;
-        let total_slots = 8;
-        for index in 0..total_slots {
-            channel.ensure_insert_slot(index);
-        }
-        let insert_count = channel.inserts.len();
+        channel.ensure_insert_slot(MAX_INSERT_SLOTS - 1);
+        let last_used = channel
+            .inserts
+            .iter()
+            .take(MAX_INSERT_SLOTS)
+            .rposition(|slot| slot.plugin_uid.is_some())
+            .unwrap_or(0);
+        let total_slots = if compact_inserts {
+            (last_used + 1).max(1)
+        } else {
+            MAX_INSERT_SLOTS
+        };
+        let insert_count = total_slots;
 
         for index in 0..total_slots {
-            channel.ensure_insert_slot(index);
             let slot = channel
                 .inserts
                 .get_mut(index)
@@ -1645,6 +1673,7 @@ fn inserts_panel(
                             }
                         }
                         insert_button.context_menu(|ui| {
+                            let mut menu_move: Option<(usize, usize)> = None;
                             if ui
                                 .button("Load / Replace…")
                                 .on_hover_text("Choose an effect for this slot")
@@ -1656,6 +1685,34 @@ fn inserts_panel(
                             if slot.plugin_uid.is_some() && ui.button("Open UI").clicked() {
                                 (callbacks.open_insert_ui)(channel.id, index);
                                 ui.close_menu();
+                            }
+                            if ui.button("Move Up").clicked() {
+                                if index > 0 {
+                                    menu_move = Some((index, index - 1));
+                                }
+                                ui.close_menu();
+                            }
+                            if ui.button("Move Down").clicked() {
+                                menu_move = Some((index, (index + 1).min(total_slots - 1)));
+                                ui.close_menu();
+                            }
+                            if ui.button("Disable All Inserts").clicked() {
+                                for (slot_index, slot) in
+                                    channel.inserts.iter_mut().enumerate().take(total_slots)
+                                {
+                                    if !slot.bypass && slot.plugin_uid.is_some() {
+                                        slot.bypass = true;
+                                        (callbacks.set_insert_bypass)(
+                                            channel.id,
+                                            slot_index,
+                                            slot.bypass,
+                                        );
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                            if let Some(request) = menu_move {
+                                pending_move = Some(request);
                             }
                         });
 
@@ -1685,13 +1742,15 @@ fn inserts_panel(
         }
 
         if let Some((from, to)) = pending_move {
-            if from != to && from < channel.inserts.len() {
-                let mut destination = to.min(channel.inserts.len());
+            let len = channel.inserts.len().min(MAX_INSERT_SLOTS);
+            if from != to && from < len {
+                let mut destination = to.min(len.saturating_sub(1));
                 let slot = channel.inserts.remove(from);
                 if destination > from {
                     destination = destination.saturating_sub(1);
                 }
                 destination = destination.min(channel.inserts.len());
+                channel.ensure_insert_slot(MAX_INSERT_SLOTS - 1);
                 channel.inserts.insert(destination, slot);
                 (callbacks.reorder_insert)(channel.id, from, destination);
             }

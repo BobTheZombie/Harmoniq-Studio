@@ -71,6 +71,7 @@ pub struct MixerLayout {
     pub show_history: bool,
     pub show_control_room: bool,
     pub strip_width: f32,
+    pub compact_inserts: bool,
 }
 
 impl Default for MixerLayout {
@@ -83,6 +84,7 @@ impl Default for MixerLayout {
             show_history: false,
             show_control_room: true,
             strip_width: 188.0,
+            compact_inserts: false,
         }
     }
 }
