@@ -518,6 +518,7 @@ impl MixerState {
         for i in 0..4 {
             s.channels.push(Channel {
                 id: (i + 1) as ChannelId,
+                track_number: (i as u16) + 1,
                 name: format!("CH {}", i + 1),
                 gain_db: 0.0,
                 pan: 0.0,
@@ -604,6 +605,7 @@ impl MixerState {
         }
         s.channels.push(Channel {
             id: 10_000,
+            track_number: 0,
             name: "MASTER".into(),
             gain_db: 0.0,
             pan: 0.0,
