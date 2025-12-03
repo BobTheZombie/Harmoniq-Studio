@@ -82,6 +82,10 @@ impl ChannelRackPane {
         &mut self.patterns[self.active_pattern_index]
     }
 
+    fn current_pattern(&self) -> Option<&ChannelRackPattern> {
+        self.patterns.get(self.active_pattern_index)
+    }
+
     fn draw_pattern_selector(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette) {
         egui::Frame::none()
             .fill(palette.panel_alt)
@@ -199,6 +203,15 @@ impl ChannelRackPane {
                                         .strong()
                                         .size(16.0),
                                 );
+                                if ui
+                                    .small_button("🎹")
+                                    .on_hover_text("Open in piano roll")
+                                    .clicked()
+                                {
+                                    event_bus.publish(AppEvent::OpenChannelPianoRoll {
+                                        channel_index: index,
+                                    });
+                                }
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
