@@ -1,3 +1,4 @@
+use egui_plot::{Line, Plot, PlotPoints};
 use nih_plug::prelude::*;
 use nih_plug::prelude::{formatters, AtomicF32};
 use nih_plug::util;
@@ -11,7 +12,6 @@ use std::fmt::{Display, Formatter};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use egui_plot::{Line, Plot, PlotPoints};
 
 mod dsp;
 
