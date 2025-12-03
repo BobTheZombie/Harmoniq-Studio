@@ -971,37 +971,49 @@ impl SequencerPane {
 
     fn show_context_menu(&mut self, ui: &egui::Ui, beats_per_bar: f32, total_beats: f32) {
         if let Some(request) = self.pending_context_menu.take() {
-            popup::show_menu_at(ui.ctx(), ui.layer_id(), request.pointer, |ui| {
-                if ui
-                    .button("Add Clip (1 bar)")
-                    .on_hover_text("Insert a new clip at the clicked position")
-                    .clicked()
-                {
-                    self.insert_clip(request.track_index, request.beat, beats_per_bar);
-                    ui.close_menu();
-                }
-                if ui
-                    .button("Set Loop From Here")
-                    .on_hover_text("Move the loop to start from this beat")
-                    .clicked()
-                {
-                    let length = self
-                        .loop_region
-                        .map(|(start, end)| (end - start).max(1.0))
-                        .unwrap_or(beats_per_bar);
-                    self.loop_region =
-                        Some((request.beat, (request.beat + length).min(total_beats)));
-                    ui.close_menu();
-                }
-                ui.separator();
-                if ui
-                    .button("Cancel")
-                    .on_hover_text("Dismiss the menu without changes")
-                    .clicked()
-                {
-                    ui.close_menu();
-                }
-            });
+            let mut open = true;
+            egui::Window::new("Arrangement Context Menu")
+                .open(&mut open)
+                .title_bar(false)
+                .resizable(false)
+                .collapsible(false)
+                .frame(egui::Frame::menu(ui.style()))
+                .anchor(Align2::LEFT_TOP, [0.0, 0.0])
+                .fixed_pos(request.pointer)
+                .show(ui.ctx(), |ui| {
+                    if ui
+                        .button("Add Clip (1 bar)")
+                        .on_hover_text("Insert a new clip at the clicked position")
+                        .clicked()
+                    {
+                        self.insert_clip(request.track_index, request.beat, beats_per_bar);
+                        self.pending_context_menu = None;
+                    }
+                    if ui
+                        .button("Set Loop From Here")
+                        .on_hover_text("Move the loop to start from this beat")
+                        .clicked()
+                    {
+                        let length = self
+                            .loop_region
+                            .map(|(start, end)| (end - start).max(1.0))
+                            .unwrap_or(beats_per_bar);
+                        self.loop_region =
+                            Some((request.beat, (request.beat + length).min(total_beats)));
+                        self.pending_context_menu = None;
+                    }
+                    ui.separator();
+                    if ui
+                        .button("Cancel")
+                        .on_hover_text("Dismiss the menu without changes")
+                        .clicked()
+                    {
+                        self.pending_context_menu = None;
+                    }
+                });
+            if !open {
+                self.pending_context_menu = None;
+            }
         }
     }
 
@@ -1571,6 +1583,6 @@ fn demo_tracks(
             muted: false,
             solo: false,
         },
-    ] * next_clip_id = clip_id;
+    *next_clip_id = clip_id;
     tracks
 }

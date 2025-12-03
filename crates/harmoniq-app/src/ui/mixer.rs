@@ -194,6 +194,7 @@ impl MixerView {
                 rack_state: ChannelRackState::default(),
                 inserts_delay_comp: 0,
                 pan_law: PanLaw::default(),
+                stereo_separation: 1.0,
             };
             self.state.channels.push(channel);
         }
@@ -254,6 +255,7 @@ impl MixerView {
             rack_state: ChannelRackState::default(),
             inserts_delay_comp: info.latency_samples,
             pan_law: PanLaw::default(),
+            stereo_separation: 1.0,
         };
 
         let mut insert_bypass = Vec::with_capacity(info.insert_count);
