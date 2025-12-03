@@ -45,6 +45,11 @@ pub enum MixerCommand {
         ch: ChannelId,
         id: SendId,
         level: f32,
+        pre_fader: bool,
+    },
+    SetStereoSeparation {
+        ch: ChannelId,
+        amount: f32,
     },
     ReorderInsert {
         ch: ChannelId,
@@ -76,7 +81,8 @@ pub trait MixerBackend {
     fn open_insert_ui(&mut self, ch: ChannelId, slot: usize);
     fn set_insert_bypass(&mut self, ch: ChannelId, slot: usize, bypass: bool);
     fn remove_insert(&mut self, ch: ChannelId, slot: usize);
-    fn configure_send(&mut self, ch: ChannelId, id: SendId, level: f32);
+    fn configure_send(&mut self, ch: ChannelId, id: SendId, level: f32, pre_fader: bool);
+    fn set_stereo_separation(&mut self, ch: ChannelId, amount: f32);
     fn reorder_insert(&mut self, ch: ChannelId, from: usize, to: usize);
     fn apply_routing(&mut self, set: &[(ChannelId, String, f32)], remove: &[(ChannelId, String)]);
 }
@@ -149,8 +155,16 @@ impl EngineMixerHandle {
                 MixerCommand::RemoveInsert { ch, slot } => {
                     backend.remove_insert(ch, slot);
                 }
-                MixerCommand::ConfigureSend { ch, id, level } => {
-                    backend.configure_send(ch, id, level);
+                MixerCommand::ConfigureSend {
+                    ch,
+                    id,
+                    level,
+                    pre_fader,
+                } => {
+                    backend.configure_send(ch, id, level, pre_fader);
+                }
+                MixerCommand::SetStereoSeparation { ch, amount } => {
+                    backend.set_stereo_separation(ch, amount);
                 }
                 MixerCommand::ReorderInsert { ch, from, to } => {
                     backend.reorder_insert(ch, from, to);

@@ -17,6 +17,8 @@ pub struct RackCallbacks {
     pub import_sample_file: Box<dyn FnMut(Option<ChannelId>, Option<std::path::PathBuf>) + Send>,
     /// Create an automation lane bound to a target parameter (by string key or id).
     pub create_automation_for: Box<dyn FnMut(&str) + Send>,
+    /// Assign or clear a mixer track for a rack channel.
+    pub set_mixer_track: Box<dyn FnMut(ChannelId, Option<u32>) + Send>,
 }
 
 impl RackCallbacks {
@@ -27,6 +29,7 @@ impl RackCallbacks {
             open_plugin_browser: Box::new(|_| {}),
             import_sample_file: Box::new(|_, _| {}),
             create_automation_for: Box::new(|_| {}),
+            set_mixer_track: Box::new(|_, _| {}),
         }
     }
 }

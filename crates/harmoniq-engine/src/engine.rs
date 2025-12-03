@@ -1057,9 +1057,22 @@ impl<'a> MixerBackend for MixerUiBridge<'a> {
         warn!(channel = ch, slot, "remove_insert not implemented");
     }
 
-    fn configure_send(&mut self, ch: ChannelId, id: SendId, level: f32) {
+    fn configure_send(&mut self, ch: ChannelId, id: SendId, level: f32, pre_fader: bool) {
         if let Some(idx) = self.strip_index(ch) {
             self.set_send_level(idx, id as usize, level);
+            if pre_fader {
+                trace!(
+                    channel = ch,
+                    id,
+                    "pre-fader send requested (UI bridge placeholder)"
+                );
+            }
+        }
+    }
+
+    fn set_stereo_separation(&mut self, ch: ChannelId, amount: f32) {
+        if let Some(idx) = self.strip_index(ch) {
+            self.state.set_width(idx, amount);
         }
     }
 

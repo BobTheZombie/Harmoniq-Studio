@@ -139,6 +139,32 @@ fn channel_row(
         );
         ui.add(egui::Slider::new(&mut ch.pan, -1.0..=1.0).text("Pan"));
 
+        ui.horizontal(|ui| {
+            ui.label("Mixer");
+            let mut track_val = ch.mixer_track.unwrap_or(0);
+            let response = ui.add(
+                egui::DragValue::new(&mut track_val)
+                    .clamp_range(0..=199)
+                    .speed(0.2),
+            );
+            if response.changed() {
+                ch.mixer_track = if track_val == 0 {
+                    None
+                } else {
+                    Some(track_val)
+                };
+                (callbacks.set_mixer_track)(ch.id, ch.mixer_track);
+            }
+            if ui
+                .small_button("✕")
+                .on_hover_text("Unassign from mixer")
+                .clicked()
+            {
+                ch.mixer_track = None;
+                (callbacks.set_mixer_track)(ch.id, None);
+            }
+        });
+
         let mut use_32 = ch.steps_per_bar == 32;
         if ui.toggle_value(&mut use_32, "32").clicked() {
             ch.steps_per_bar = if use_32 { 32 } else { 16 };
