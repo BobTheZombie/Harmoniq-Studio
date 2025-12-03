@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use eframe::egui::{
-    self, popup, Align2, Color32, FontId, PointerButton, Pos2, Rect, RichText, Shape, Stroke,
+    self, Align2, Color32, FontId, PointerButton, Pos2, Rect, RichText, Shape, Stroke,
 };
 use harmoniq_engine::TransportState;
 use harmoniq_ui::HarmoniqPalette;
@@ -926,7 +926,7 @@ impl SequencerPane {
             }
         }
 
-        if response.drag_released_by(PointerButton::Primary) {
+        if response.dragged_stopped_by(PointerButton::Primary) {
             self.dragging_clip = None;
             self.dragging_automation = None;
         }
@@ -1030,12 +1030,14 @@ impl SequencerPane {
     }
 
     fn insert_clip(&mut self, track_index: usize, beat: f32, beats_per_bar: f32) {
+        let clip_id = self.allocate_clip_id();
+
         if let Some(track) = self.tracks.get_mut(track_index) {
             let pattern_id = self
                 .pattern_library
                 .ensure_blank(format!("Pattern {}", track.clips.len() + 1));
             let clip = SequencerClip {
-                id: self.allocate_clip_id(),
+                id: clip_id,
                 start: beat,
                 length: beats_per_bar,
                 name: "New Clip".into(),
@@ -1047,7 +1049,7 @@ impl SequencerPane {
             self.selected_clip = track
                 .clips
                 .iter()
-                .position(|c| c.id == clip.id)
+                .position(|c| c.id == clip_id)
                 .map(|index| (track_index, index));
         }
     }

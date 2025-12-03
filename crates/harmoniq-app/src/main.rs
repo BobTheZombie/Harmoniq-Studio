@@ -3099,9 +3099,14 @@ impl App for HarmoniqStudioApp {
             }
 
             let transport_ticks = self.transport_clock.total_ticks(self.time_signature);
+            let playlist_view = &mut self.playlist_view;
+            let playlist_snap = &mut self.playlist_snap;
+            let mut playlist_window_open = self.playlist_window_open;
+            let mut piano_roll_requests = Vec::new();
+
             egui::Window::new("Playlist")
                 .id(window_id)
-                .open(&mut self.playlist_window_open)
+                .open(&mut playlist_window_open)
                 .collapsible(false)
                 .resizable(true)
                 .vscroll(true)
@@ -3118,21 +3123,27 @@ impl App for HarmoniqStudioApp {
                                 return;
                             };
 
-                            self.open_playlist_clip_piano_roll(track.into(), clip, pattern_id);
+                            piano_roll_requests.push((track, pattern_id, clip));
                         };
                     let mut import_audio = |path: PathBuf| {
                         tracing::info!("Playlist import requested: {path:?}");
                         harmoniq_playlist::state::AudioSourceId::from_path(&path)
                     };
                     let props = PlaylistUiProps {
-                        playlist: &mut self.playlist_view,
+                        playlist: playlist_view,
                         current_time_ticks: transport_ticks,
-                        snap: &mut self.playlist_snap,
+                        snap: playlist_snap,
                         open_piano_roll: &mut open_piano_roll,
                         import_audio_file: &mut import_audio,
                     };
                     render_playlist_window(ui, props);
                 });
+
+            self.playlist_window_open = playlist_window_open;
+
+            for (track, pattern_id, clip) in piano_roll_requests {
+                self.open_playlist_clip_piano_roll(track.into(), clip, pattern_id);
+            }
         }
 
         if self.sequencer_window_open {
@@ -3186,9 +3197,11 @@ impl App for HarmoniqStudioApp {
                 self.piano_roll_window_open = false;
             }
 
+            let mut piano_roll_window_open = self.piano_roll_window_open;
+
             egui::Window::new("Piano Roll")
                 .id(window_id)
-                .open(&mut self.piano_roll_window_open)
+                .open(&mut piano_roll_window_open)
                 .collapsible(false)
                 .resizable(true)
                 .vscroll(true)
@@ -3203,6 +3216,8 @@ impl App for HarmoniqStudioApp {
                     let edits = self.piano_roll_widget.take_edits();
                     self.apply_piano_roll_edits(edits);
                 });
+
+            self.piano_roll_window_open = piano_roll_window_open;
         }
 
         self.inspector
