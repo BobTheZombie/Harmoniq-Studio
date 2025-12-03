@@ -14,7 +14,10 @@ use crate::mixer::control::{
 };
 use crate::mixer_rt::{AutoTx, Command, CommandTx, Mixer, MixerConfig, TrackId};
 use crate::{
-    automation::{AutomationEvent, AutomationLane, AutomationSender, ParameterSpec},
+    automation::{
+        AutomationCommand, AutomationEvent, AutomationLane, AutomationSender, CurveShape,
+        ParameterSpec,
+    },
     graph::{GraphBuilder, GraphHandle},
     nodes::{GainNode as BuiltinGain, NodeNoise as BuiltinNoise, NodeOsc as BuiltinSine},
     plugin::{MidiEvent, PluginDescriptor, PluginId},
@@ -818,13 +821,84 @@ impl HarmoniqEngine {
                                 self.trigger_audio_clip(source);
                             }
                         }
-                        ClipKind::Automation => {}
+                        ClipKind::Automation { ref lane } => {
+                            self.schedule_automation_clip(
+                                track_index,
+                                clip.start_ticks,
+                                clip.duration_ticks,
+                                lane,
+                                block_start_tick,
+                                block_end_tick,
+                                block_start_samples,
+                                samples_per_tick,
+                            );
+                        }
                     }
                 }
             }
         }
 
         self.playlist_last_tick = block_end_tick;
+    }
+
+    fn schedule_automation_clip(
+        &self,
+        track_index: usize,
+        clip_start_tick: u64,
+        clip_duration_ticks: u64,
+        lane: &harmoniq_playlist::state::AutomationLane,
+        block_start_tick: u64,
+        block_end_tick: u64,
+        block_start_samples: u64,
+        samples_per_tick: f64,
+    ) {
+        let graph = self.graph.read();
+        let Some(graph_handle) = graph.as_ref() else {
+            return;
+        };
+        let plugin_ids = graph_handle.plugin_ids();
+        let Some(plugin_id) = plugin_ids.get(track_index).copied() else {
+            return;
+        };
+
+        let Some(parameter) = self
+            .automation_parameter_index(plugin_id, &lane.parameter)
+            .or_else(|| {
+                self.automation_parameter_spec(plugin_id, 0)
+                    .map(|spec| spec.index)
+            })
+        else {
+            return;
+        };
+
+        let Some(sender) = self.automation_sender(plugin_id) else {
+            return;
+        };
+
+        for point in &lane.points {
+            let absolute_tick = clip_start_tick.saturating_add(point.tick);
+            if absolute_tick >= block_end_tick || absolute_tick < self.playlist_last_tick {
+                continue;
+            }
+            if absolute_tick >= clip_start_tick.saturating_add(clip_duration_ticks) {
+                continue;
+            }
+
+            if let Some(offset) = self.tick_to_offset(
+                absolute_tick,
+                block_start_tick,
+                samples_per_tick,
+                self.config.block_size as u32,
+            ) {
+                let sample = block_start_samples.saturating_add(offset as u64);
+                let _ = sender.send(AutomationCommand::DrawCurve {
+                    parameter,
+                    sample,
+                    value: point.value,
+                    shape: CurveShape::Linear,
+                });
+            }
+        }
     }
 
     fn schedule_pattern_clip(
