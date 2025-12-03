@@ -140,19 +140,27 @@ pub fn render(ui: &mut Ui, props: PlaylistProps<'_>) {
                     .selection
                     .map(|(track, clip)| (TrackId(track.0), clip));
                 let click = draw_timeline(
+                    ui,
                     &timeline_painter,
                     &timeline_response,
                     timeline_rect,
                     lanes_rect,
                     &layouts,
-                    &props.playlist.tracks,
+                    &mut props.playlist.tracks,
                     total_beats,
                     selection,
                     props.playlist.ppq(),
                     props.current_time_ticks,
+                    *props.snap,
                 );
 
-                if timeline_response.clicked() {
+                if click.clicked_clip.is_some() {
+                    if let Some((track_id, clip_id)) = click.clicked_clip {
+                        props
+                            .playlist
+                            .set_selection(StateTrackId::from(track_id), clip_id);
+                    }
+                } else if timeline_response.clicked() {
                     if let Some((track_id, clip_id)) = click.clicked_clip {
                         props
                             .playlist
@@ -210,6 +218,46 @@ pub fn render(ui: &mut Ui, props: PlaylistProps<'_>) {
 struct ClipClickInfo {
     clicked_clip: Option<(TrackId, ClipId)>,
     target_lane: Option<(TrackId, u32)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ClipDragState {
+    track: TrackId,
+    lane_id: u32,
+    clip: ClipId,
+    kind: DragKind,
+    start_pointer: Pos2,
+    original_start: u64,
+    original_duration: u64,
+}
+
+impl ClipDragState {
+    fn new(
+        track: TrackId,
+        lane_id: u32,
+        clip: ClipId,
+        kind: DragKind,
+        start_pointer: Pos2,
+        original_start: u64,
+        original_duration: u64,
+    ) -> Self {
+        Self {
+            track,
+            lane_id,
+            clip,
+            kind,
+            start_pointer,
+            original_start,
+            original_duration,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DragKind {
+    Move,
+    ResizeStart,
+    ResizeEnd,
 }
 
 fn playlist_tracks_height(tracks: &[Track]) -> f32 {
@@ -469,16 +517,18 @@ fn draw_rack(ui: &mut Ui, rack_rect: Rect, layouts: &[TrackVerticalLayout], trac
 }
 
 fn draw_timeline(
+    ui: &Ui,
     painter: &Painter,
     response: &Response,
     timeline_rect: Rect,
     lanes_rect: Rect,
     layouts: &[TrackVerticalLayout],
-    tracks: &[Track],
+    tracks: &mut [Track],
     total_beats: f32,
     selection: Option<(TrackId, ClipId)>,
     ppq: u32,
     current_time: u64,
+    snap: Snap,
 ) -> ClipClickInfo {
     let ruler_rect = Rect::from_min_max(
         Pos2::new(timeline_rect.left(), timeline_rect.top()),
@@ -498,9 +548,12 @@ fn draw_timeline(
     let hover_pos = response.hover_pos();
     let mut clicked_clip = None;
     let mut target_lane = None;
+    let mut drag_state = ui
+        .ctx()
+        .data(|data| data.get_temp::<ClipDragState>(clip_drag_id(ui.ctx())));
 
     for layout in layouts {
-        let track = &tracks[layout.track_index];
+        let track = &mut tracks[layout.track_index];
         let track_base_color = track_color(track.color, 40, 0.5);
         let accent_rect = Rect::from_min_max(
             Pos2::new(lanes_rect.left() - 6.0, layout.header_top),
@@ -529,8 +582,14 @@ fn draw_timeline(
                 Stroke::new(1.0, Color32::from_rgb(54, 54, 54)),
             );
 
-            for clip in &track.lanes[lane_row.lane_index].clips {
-                let clip_rect = clip_rect(lane_rect, clip, ppq);
+            let lane = &mut track.lanes[lane_row.lane_index];
+            let mut resort_lane = false;
+            for clip_index in 0..lane.clips.len() {
+                let clip = lane.clips[clip_index].clone();
+                let clip_rect = clip_rect(lane_rect, &clip, ppq);
+                let clip_id =
+                    Id::new(("playlist_clip", track.id.0, lane_row.lane_index, clip.id.0));
+                let clip_response = ui.interact(clip_rect, clip_id, Sense::click_and_drag());
                 let is_selected = selection
                     .map(|(track_id, clip_id)| {
                         track_id == TrackId(track.id.0) && clip_id == clip.id
@@ -554,25 +613,164 @@ fn draw_timeline(
                     TextStyle::Body.resolve(painter.ctx().style().as_ref()),
                     Color32::from_rgb(10, 10, 10),
                 );
-            }
 
-            if response.clicked() || response.double_clicked() {
-                if let Some(pointer_pos) = response.interact_pointer_pos() {
-                    if lane_rect.contains(pointer_pos) {
-                        target_lane =
-                            Some((TrackId(track.id.0), track.lanes[lane_row.lane_index].id));
-                        for clip in &track.lanes[lane_row.lane_index].clips {
-                            let clip_rect = clip_rect(lane_rect, clip, ppq);
+                let handle_width = 8.0;
+                let left_handle = Rect::from_min_max(
+                    Pos2::new(clip_rect.left(), clip_rect.top()),
+                    Pos2::new(clip_rect.left() + handle_width, clip_rect.bottom()),
+                );
+                let right_handle = Rect::from_min_max(
+                    Pos2::new(clip_rect.right() - handle_width, clip_rect.top()),
+                    Pos2::new(clip_rect.right(), clip_rect.bottom()),
+                );
+
+                let left_handle_resp = ui.interact(
+                    left_handle,
+                    Id::new((
+                        "playlist_clip_left",
+                        track.id.0,
+                        lane_row.lane_index,
+                        clip.id.0,
+                    )),
+                    Sense::click_and_drag(),
+                );
+                let right_handle_resp = ui.interact(
+                    right_handle,
+                    Id::new((
+                        "playlist_clip_right",
+                        track.id.0,
+                        lane_row.lane_index,
+                        clip.id.0,
+                    )),
+                    Sense::click_and_drag(),
+                );
+
+                if clip_response.clicked()
+                    || left_handle_resp.clicked()
+                    || right_handle_resp.clicked()
+                {
+                    clicked_clip = Some((TrackId(track.id.0), clip.id));
+                }
+
+                if left_handle_resp.drag_started() {
+                    drag_state = Some(ClipDragState::new(
+                        TrackId(track.id.0),
+                        lane.id,
+                        clip.id,
+                        DragKind::ResizeStart,
+                        left_handle_resp
+                            .interact_pointer_pos()
+                            .or_else(|| clip_response.interact_pointer_pos())
+                            .unwrap_or(clip_rect.left_top()),
+                        clip.start_ticks,
+                        clip.duration_ticks,
+                    ));
+                } else if right_handle_resp.drag_started() {
+                    drag_state = Some(ClipDragState::new(
+                        TrackId(track.id.0),
+                        lane.id,
+                        clip.id,
+                        DragKind::ResizeEnd,
+                        right_handle_resp
+                            .interact_pointer_pos()
+                            .or_else(|| clip_response.interact_pointer_pos())
+                            .unwrap_or(clip_rect.right_top()),
+                        clip.start_ticks,
+                        clip.duration_ticks,
+                    ));
+                } else if clip_response.drag_started() {
+                    drag_state = Some(ClipDragState::new(
+                        TrackId(track.id.0),
+                        lane.id,
+                        clip.id,
+                        DragKind::Move,
+                        clip_response
+                            .interact_pointer_pos()
+                            .unwrap_or(clip_rect.left_top()),
+                        clip.start_ticks,
+                        clip.duration_ticks,
+                    ));
+                }
+
+                if let Some(state) = drag_state.as_ref().filter(|state| {
+                    state.track == TrackId(track.id.0)
+                        && state.clip == clip.id
+                        && state.lane_id == lane.id
+                }) {
+                    if let Some(pointer_pos) = clip_response.interact_pointer_pos() {
+                        let delta = pointer_pos.x - state.start_pointer.x;
+                        let delta_beats = delta / BEAT_WIDTH;
+                        let snapped_delta = snap_beats(delta_beats, snap, ppq);
+                        match state.kind {
+                            DragKind::Move => {
+                                let new_start_beats =
+                                    (state.original_start as f32 / ppq as f32) + snapped_delta;
+                                let new_start =
+                                    (new_start_beats * ppq as f32).round().max(0.0) as u64;
+                                lane.clips[clip_index].start_ticks = new_start;
+                                resort_lane = true;
+                            }
+                            DragKind::ResizeStart => {
+                                let end = state.original_start + state.original_duration;
+                                let new_start_beats =
+                                    (state.original_start as f32 / ppq as f32) + snapped_delta;
+                                let new_start =
+                                    (new_start_beats * ppq as f32).round().max(0.0) as u64;
+                                let new_start = new_start.min(end.saturating_sub(1));
+                                lane.clips[clip_index].start_ticks = new_start;
+                                lane.clips[clip_index].duration_ticks =
+                                    end.saturating_sub(new_start).max(1);
+                                resort_lane = true;
+                            }
+                            DragKind::ResizeEnd => {
+                                let start = state.original_start;
+                                let new_end_beats = (start as f32 / ppq as f32
+                                    + state.original_duration as f32 / ppq as f32)
+                                    + snapped_delta;
+                                let new_end =
+                                    (new_end_beats * ppq as f32).round().max(start as f32) as u64;
+                                lane.clips[clip_index].duration_ticks =
+                                    new_end.saturating_sub(start).max(1);
+                            }
+                        }
+                    }
+
+                    if clip_response.drag_released()
+                        || left_handle_resp.drag_released()
+                        || right_handle_resp.drag_released()
+                    {
+                        drag_state = None;
+                    }
+                }
+
+                if response.clicked() || response.double_clicked() {
+                    if let Some(pointer_pos) = response.interact_pointer_pos() {
+                        if lane_rect.contains(pointer_pos) && clicked_clip.is_none() {
+                            target_lane = Some((TrackId(track.id.0), lane.id));
                             if clip_rect.contains(pointer_pos) {
                                 clicked_clip = Some((TrackId(track.id.0), clip.id));
-                                break;
                             }
                         }
                     }
                 }
             }
+
+            if response.clicked() || response.double_clicked() {
+                if let Some(pointer_pos) = response.interact_pointer_pos() {
+                    if lane.clips.is_empty() && lane_rect.contains(pointer_pos) {
+                        target_lane = Some((TrackId(track.id.0), lane.id));
+                    }
+                }
+            }
+
+            if resort_lane {
+                lane.clips.sort_by_key(|clip| clip.start_ticks);
+            }
         }
     }
+
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(clip_drag_id(ui.ctx()), drag_state));
 
     draw_playhead(painter, lanes_rect, current_time, ppq);
 
@@ -580,6 +778,15 @@ fn draw_timeline(
         clicked_clip,
         target_lane,
     }
+}
+
+fn clip_drag_id(ctx: &egui::Context) -> Id {
+    Id::new(("playlist_clip_drag", ctx.viewport_id()))
+}
+
+fn snap_beats(delta_beats: f32, snap: Snap, _ppq: u32) -> f32 {
+    let division = snap.division() as f32;
+    (delta_beats * division).round() / division
 }
 
 fn clip_rect(lane_rect: Rect, clip: &Clip, ppq: u32) -> Rect {
