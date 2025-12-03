@@ -53,15 +53,47 @@ pub fn render(ui: &mut egui::Ui, mut props: RackProps) {
 fn pattern_strip(ui: &mut egui::Ui, state: &mut RackState) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Pattern:").strong());
-        for pat in &state.patterns {
-            let selected = pat.id == state.current_pattern;
-            if ui.selectable_label(selected, pat.name.as_str()).clicked() {
-                state.current_pattern = pat.id;
-            }
+        if ui.button("◀").clicked() {
+            state.select_previous_pattern();
         }
+
+        let mut selected_pattern = state.current_pattern;
+        let selected_label = state
+            .patterns
+            .iter()
+            .find(|p| p.id == selected_pattern)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "No Pattern".to_string());
+
+        egui::ComboBox::from_id_source("rack_pattern_selector")
+            .selected_text(selected_label)
+            .width(160.0)
+            .show_ui(ui, |ui| {
+                for pat in &state.patterns {
+                    ui.selectable_value(&mut selected_pattern, pat.id, pat.name.clone());
+                }
+            });
+
+        if selected_pattern != state.current_pattern {
+            state.select_pattern(selected_pattern);
+        }
+
+        if ui.button("▶").clicked() {
+            state.select_next_pattern();
+        }
+
+        if ui
+            .button("Clone")
+            .on_hover_text("Duplicate the current pattern")
+            .clicked()
+        {
+            let _ = state.clone_pattern(state.current_pattern);
+        }
+
         if ui.button("+").on_hover_text("Add Pattern").clicked() {
             state.add_pattern();
         }
+
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(egui::RichText::new("Channel Rack").monospace());
         });
