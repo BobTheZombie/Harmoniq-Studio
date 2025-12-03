@@ -2736,14 +2736,8 @@ impl CommandHandler for HarmoniqStudioApp {
                     self.console.log(LogLevel::Info, format!("Mixer {state}"));
                 }
                 ViewCommand::TogglePlaylist => {
-                    self.toggle_widget(UID_PLAYLIST);
-                    let state = if self.is_widget_open(UID_PLAYLIST) {
-                        "shown"
-                    } else {
-                        "hidden"
-                    };
-                    self.console
-                        .log(LogLevel::Info, format!("Playlist {state}"));
+                    self.open_widget(UID_PLAYLIST);
+                    self.console.log(LogLevel::Info, "Playlist shown".to_string());
                 }
                 ViewCommand::ToggleSequencer => {
                     self.toggle_widget(UID_SEQUENCER);
