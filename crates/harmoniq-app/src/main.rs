@@ -19,7 +19,6 @@ use eframe::egui::{
     ViewportCommand,
 };
 use eframe::{App, CreationContext, NativeOptions};
-use egui_dock::{DockArea, DockState, Style as DockStyle, TabViewer};
 use egui_extras::{image::load_svg_bytes, install_image_loaders};
 use harmoniq_engine::{
     automation::{AutomationCommand, CurveShape, ParameterSpec},
@@ -95,13 +94,15 @@ use ui::{
     floating::{FloatingKind, FloatingWindowId, FloatingWindows},
     focus::InputFocus,
     inspector::InspectorPane,
-    layout::LayoutState,
+    launcher::{
+        UiLauncher, UID_BROWSER, UID_CHANNEL_RACK, UID_CONSOLE, UID_INSPECTOR, UID_MIXER,
+        UID_PIANO_ROLL, UID_PLAYLIST, UID_SEQUENCER,
+    },
     menu_bar::{MenuBarSnapshot, MenuBarState},
     metrics_view::MetricsHud,
     midi::devices_panel::MidiDevicesPanel,
     mixer::MixerView,
     notifications::Notifications,
-    piano_roll::PianoRollPane,
     plugin_manager::{
         FeedbackKind as PluginFeedbackKind, PluginManagerFeedback, PluginManagerPanel,
     },
@@ -110,7 +111,6 @@ use ui::{
     sequencer::SequencerPane,
     shortcuts::ShortcutMap,
     transport::{TransportBar, TransportSnapshot},
-    workspace::{build_default_workspace, WorkspacePane},
 };
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -1423,18 +1423,11 @@ enum PianoRollTarget {
 struct HarmoniqStudioApp {
     theme: HarmoniqTheme,
     icons: AppIcons,
-    dock_style: DockStyle,
-    dock_state: DockState<WorkspacePane>,
-    layout: LayoutState,
+    launcher: UiLauncher,
     menu: MenuBarState,
     transport_bar: TransportBar,
-    browser: BrowserPane,
     channel_rack: ChannelRackPane,
-    sequencer: SequencerPane,
-    piano_roll: PianoRollPane,
     mixer: MixerView,
-    inspector: InspectorPane,
-    console: ConsolePane,
     floating: FloatingWindows,
     floating_config_path: PathBuf,
     plugin_store: Arc<PluginStore>,
@@ -1477,17 +1470,14 @@ struct HarmoniqStudioApp {
     last_engine_update: Instant,
     status_message: Option<String>,
     notices: Notifications,
-    browser_hidden: bool,
-    sequencer_hidden: bool,
-    mixer_window_open: bool,
-    playlist_window_open: bool,
+    browser: BrowserPane,
+    sequencer: SequencerPane,
+    piano_roll: PianoRollWidget,
+    inspector: InspectorPane,
+    console: ConsolePane,
+    piano_roll_target: Option<PianoRollTarget>,
     playlist_view: PlaylistState,
     playlist_snap: PlaylistSnap,
-    sequencer_window_open: bool,
-    piano_roll_hidden: bool,
-    piano_roll_window_open: bool,
-    piano_roll_target: Option<PianoRollTarget>,
-    piano_roll_widget: PianoRollWidget,
     pending_note_offs: Vec<PendingNoteOff>,
     fullscreen: bool,
     fullscreen_dirty: bool,
@@ -1537,7 +1527,6 @@ impl HarmoniqStudioApp {
                 }
             }
         }
-        let dock_style = Self::create_dock_style(cc.egui_ctx.style().as_ref(), theme.palette());
         let icons = AppIcons::load(&cc.egui_ctx)?;
 
         let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;
@@ -1576,13 +1565,6 @@ impl HarmoniqStudioApp {
             initial_time_signature,
         )));
 
-        let layout = LayoutState::load(PathBuf::from("config/ui_layout.json"));
-        let mut dock_state = layout.dock().unwrap_or_else(|| build_default_workspace());
-
-        if dock_state.main_surface().is_empty() {
-            dock_state = build_default_workspace();
-        }
-
         let resources_root = env::current_dir()
             .map(|path| path.join("resources"))
             .unwrap_or_else(|_| PathBuf::from("resources"));
@@ -1590,15 +1572,13 @@ impl HarmoniqStudioApp {
         let mut metrics_hud = MetricsHud::new();
         metrics_hud.set_worker_count(Self::detect_worker_count());
 
+        let launcher = UiLauncher::new();
         let event_bus = EventBus::default();
         let menu = MenuBarState::default();
         let transport_bar = TransportBar::new(initial_tempo, initial_time_signature);
-        let browser_visible = layout.browser_visible();
-        let browser_width = layout.browser_width();
-        let browser = BrowserPane::new(resources_root, browser_visible, browser_width);
+        let browser = BrowserPane::new(resources_root, true, 260.0);
         let channel_rack = ChannelRackPane::default();
         let sequencer = SequencerPane::default();
-        let piano_roll = PianoRollPane::default();
         let mut piano_roll_state = PianoRollEditorState::new(PianoRollClip::new(960));
         piano_roll_state.snap = Some(SnapUnit::Grid(4));
         let piano_roll_widget = PianoRollWidget::new(piano_roll_state);
@@ -1658,18 +1638,11 @@ impl HarmoniqStudioApp {
         let mut app = Self {
             theme,
             icons,
-            dock_style,
-            dock_state,
-            layout,
+            launcher,
             menu,
             transport_bar,
-            browser,
             channel_rack,
-            sequencer,
-            piano_roll,
             mixer,
-            inspector,
-            console,
             floating,
             floating_config_path,
             plugin_store,
@@ -1712,17 +1685,14 @@ impl HarmoniqStudioApp {
             last_engine_update: Instant::now(),
             status_message,
             notices: Notifications::default(),
-            browser_hidden: !browser_visible,
-            sequencer_hidden: false,
-            mixer_window_open: false,
-            playlist_window_open: false,
+            browser,
+            sequencer,
+            piano_roll: piano_roll_widget,
+            inspector,
+            console,
+            piano_roll_target: None,
             playlist_view: PlaylistState::new_default(960),
             playlist_snap: PlaylistSnap::N1_4,
-            sequencer_window_open: false,
-            piano_roll_hidden: false,
-            piano_roll_window_open: false,
-            piano_roll_target: None,
-            piano_roll_widget,
             pending_note_offs: Vec::new(),
             fullscreen: false,
             fullscreen_dirty: false,
@@ -1748,59 +1718,6 @@ impl HarmoniqStudioApp {
         Ok(app)
     }
 
-    fn create_dock_style(base_style: &egui::Style, palette: &HarmoniqPalette) -> DockStyle {
-        let mut style = DockStyle::from_egui(base_style);
-
-        style.main_surface_border_stroke = Stroke::new(1.0, palette.toolbar_outline);
-        style.main_surface_border_rounding = Rounding::same(12.0);
-
-        style.tab_bar.bg_fill = palette.panel_alt;
-        style.tab_bar.hline_color = palette.toolbar_outline;
-        style.tab_bar.fill_tab_bar = true;
-
-        style.tab.tab_body.bg_fill = palette.panel;
-        style.tab.tab_body.stroke = Stroke::new(1.0, palette.toolbar_outline);
-        style.tab.tab_body.rounding = Rounding::same(12.0);
-
-        style.tab.active.bg_fill = palette.panel_alt;
-        style.tab.active.text_color = palette.text_primary;
-        style.tab.active.outline_color = palette.toolbar_outline;
-
-        style.tab.hovered.bg_fill = palette.toolbar_highlight;
-        style.tab.hovered.text_color = palette.text_primary;
-        style.tab.hovered.outline_color = palette.accent;
-
-        style.tab.focused = style.tab.active.clone();
-        style.tab.focused_with_kb_focus = style.tab.active.clone();
-        style.tab.active_with_kb_focus = style.tab.active.clone();
-
-        style.tab.inactive.bg_fill = palette.panel;
-        style.tab.inactive.text_color = palette.text_muted;
-        style.tab.inactive.outline_color = palette.toolbar_outline;
-        style.tab.inactive_with_kb_focus = style.tab.inactive.clone();
-
-        style.buttons.close_tab_color = palette.text_primary;
-        style.buttons.close_tab_active_color = palette.accent;
-        style.buttons.close_tab_bg_fill = palette.panel_alt;
-        style.buttons.add_tab_color = palette.text_primary;
-        style.buttons.add_tab_active_color = palette.accent;
-        style.buttons.add_tab_bg_fill = palette.panel_alt;
-        style.buttons.add_tab_border_color = palette.toolbar_outline;
-
-        style.separator.color_idle = palette.toolbar_outline;
-        style.separator.color_hovered = palette.accent;
-        style.separator.color_dragged = palette.accent_alt;
-
-        style.overlay.selection_color = palette.accent_soft.gamma_multiply(0.6);
-        style.overlay.button_color = palette.accent;
-        style.overlay.button_border_stroke = Stroke::new(1.0, palette.toolbar_outline);
-        style.overlay.hovered_leaf_highlight.color = palette.accent_soft.gamma_multiply(0.25);
-        style.overlay.hovered_leaf_highlight.rounding = Rounding::same(12.0);
-        style.overlay.hovered_leaf_highlight.stroke = Stroke::new(1.0, palette.accent);
-
-        style
-    }
-
     fn detect_worker_count() -> u32 {
         std::thread::available_parallelism()
             .map(|n| {
@@ -1817,6 +1734,47 @@ impl HarmoniqStudioApp {
     fn toggle_perf_hud(&mut self) {
         self.perf_hud.visible = !self.perf_hud.visible;
         self.perf_hud.last_activity_ms = 0;
+    }
+
+    fn widget_defaults(&self, uid: &str) -> (egui::Pos2, egui::Vec2, String) {
+        let center = self.last_screen_rect.center();
+        if let Some(entry) = self.launcher.by_uid(uid) {
+            let size = entry.default_size;
+            let pos = center - size * 0.5;
+            return (pos, size, entry.title.to_string());
+        }
+
+        (
+            center + egui::vec2(-320.0, -240.0),
+            egui::vec2(640.0, 480.0),
+            uid.to_string(),
+        )
+    }
+
+    fn is_widget_open(&self, uid: &str) -> bool {
+        let kind = FloatingKind::UiWidget {
+            uid: uid.to_string(),
+        };
+        self.floating
+            .find_by_kind(&kind)
+            .map(|id| self.floating.is_open(id))
+            .unwrap_or(false)
+    }
+
+    fn open_widget(&mut self, uid: &str) {
+        let (pos, size, title) = self.widget_defaults(uid);
+        let kind = FloatingKind::UiWidget {
+            uid: uid.to_string(),
+        };
+        self.floating.ensure_open(kind, title, pos, size);
+    }
+
+    fn toggle_widget(&mut self, uid: &str) {
+        let (pos, size, title) = self.widget_defaults(uid);
+        let kind = FloatingKind::UiWidget {
+            uid: uid.to_string(),
+        };
+        self.floating.toggle_by_kind(kind, title, pos, size);
     }
 
     fn on_engine_stats(&mut self, xruns_total: u64) {
@@ -1975,7 +1933,7 @@ impl HarmoniqStudioApp {
             return;
         }
 
-        let ppq = self.piano_roll_widget.state().ppq();
+        let ppq = self.piano_roll.state().ppq();
         let mut clip = PianoRollClip::new(ppq);
         let step_len = (clip.loop_len_ppq / steps.len() as i64).max(1);
         let mut next_id = 0u64;
@@ -1999,15 +1957,14 @@ impl HarmoniqStudioApp {
         }
 
         clip.sort_notes();
-        self.piano_roll_widget.set_clip(clip);
+        self.piano_roll.set_clip(clip);
         self.piano_roll_target = Some(PianoRollTarget::ChannelRack {
             channel_index,
             pattern_index: self.channel_rack.active_pattern_index(),
             step_count: steps.len(),
             step_len_ppq: step_len,
         });
-        self.piano_roll_window_open = true;
-        self.piano_roll_hidden = false;
+        self.open_widget(UID_PIANO_ROLL);
     }
 
     fn open_playlist_clip_piano_roll(
@@ -2040,14 +1997,13 @@ impl HarmoniqStudioApp {
         }
 
         clip.sort_notes();
-        self.piano_roll_widget.set_clip(clip);
+        self.piano_roll.set_clip(clip);
         self.piano_roll_target = Some(PianoRollTarget::Playlist {
             track_id,
             clip_id,
             pattern_id,
         });
-        self.piano_roll_window_open = true;
-        self.piano_roll_hidden = false;
+        self.open_widget(UID_PIANO_ROLL);
     }
 
     fn update_channel_pattern_from_piano_roll(
@@ -2066,7 +2022,7 @@ impl HarmoniqStudioApp {
                     step.on = false;
                 }
 
-                for note in &self.piano_roll_widget.state().clip.notes {
+                for note in &self.piano_roll.state().clip.notes {
                     let step = (note.start_ppq / step_len_ppq)
                         .clamp(0, step_count.saturating_sub(1) as i64)
                         as usize;
@@ -2083,12 +2039,12 @@ impl HarmoniqStudioApp {
             return;
         }
 
-        self.piano_roll_widget.state_mut().apply_edits(&edits);
+        self.piano_roll.state_mut().apply_edits(&edits);
 
         match self.piano_roll_target {
             Some(PianoRollTarget::Playlist { pattern_id, .. }) => {
                 let notes = self
-                    .piano_roll_widget
+                    .piano_roll
                     .state()
                     .clip
                     .notes
@@ -2126,11 +2082,11 @@ impl HarmoniqStudioApp {
     fn sync_engine_pattern_notes(&mut self) {
         let sample_rate = self.engine_runner.config().sample_rate as f32;
         let tempo = self.tempo.max(1.0);
-        let ppq = self.piano_roll_widget.state().ppq() as f32;
+        let ppq = self.piano_roll.state().ppq() as f32;
         let seconds_per_tick = (60.0 / tempo) / ppq.max(1.0);
 
         let mut events = Vec::new();
-        for note in &self.piano_roll_widget.state().clip.notes {
+        for note in &self.piano_roll.state().clip.notes {
             let channel = note.chan.min(15);
             let pitch = note.pitch;
             let start_samples = ((note.start_ppq as f32 * seconds_per_tick) * sample_rate)
@@ -2185,11 +2141,7 @@ impl HarmoniqStudioApp {
                     pattern_id,
                     clip_name,
                 } => {
-                    if let Some(pattern) = self.sequencer.pattern(pattern_id) {
-                        self.piano_roll.load_pattern(pattern);
-                    }
-                    self.piano_roll_window_open = true;
-                    self.piano_roll_hidden = false;
+                    self.open_widget(UID_PIANO_ROLL);
                     self.console.log(
                         LogLevel::Info,
                         format!("Opening piano roll for {clip_name} (pattern #{pattern_id})"),
@@ -2197,23 +2149,17 @@ impl HarmoniqStudioApp {
                 }
                 AppEvent::Layout(event) => match event {
                     LayoutEvent::ToggleBrowser => {
-                        self.browser_hidden = !self.browser_hidden;
-                        self.browser.set_visible(!self.browser_hidden);
-                        self.layout.set_browser_visible(!self.browser_hidden);
-                        let state = if self.browser_hidden {
-                            "hidden"
-                        } else {
+                        self.toggle_widget(UID_BROWSER);
+                        let state = if self.is_widget_open(UID_BROWSER) {
                             "shown"
+                        } else {
+                            "hidden"
                         };
                         self.console.log(LogLevel::Info, format!("Browser {state}"));
                     }
                     LayoutEvent::ResetWorkspace => {
-                        self.dock_state = build_default_workspace();
-                        self.layout.store_dock(&self.dock_state);
-                        self.browser_hidden = false;
-                        self.browser.set_visible(true);
-                        self.layout.set_browser_visible(true);
-                        self.console.log(LogLevel::Info, "Workspace layout reset");
+                        self.console
+                            .log(LogLevel::Info, "Workspace layout reset to launcher view");
                     }
                 },
                 AppEvent::OpenFile(path) => {
@@ -2453,6 +2399,7 @@ impl HarmoniqStudioApp {
     fn floating_defaults(&self, kind: &FloatingKind) -> (egui::Pos2, egui::Vec2, String) {
         let center = self.last_screen_rect.center();
         match kind {
+            FloatingKind::UiWidget { uid } => self.widget_defaults(uid),
             FloatingKind::PluginEditor { plugin_uid } => (
                 center + egui::vec2(-360.0, -240.0),
                 egui::vec2(720.0, 480.0),
@@ -2505,14 +2452,134 @@ impl HarmoniqStudioApp {
         _id: FloatingWindowId,
         kind: &FloatingKind,
     ) {
+        let palette = self.theme.palette().clone();
         match kind {
+            FloatingKind::UiWidget { uid } => match uid.as_str() {
+                UID_MIXER => {
+                    self.mixer.ui(ui, &palette);
+                }
+                UID_PLAYLIST => {
+                    let transport_ticks = self.transport_clock.total_ticks(self.time_signature);
+                    let playlist_view = &mut self.playlist_view;
+                    let playlist_snap = &mut self.playlist_snap;
+                    let channel_rack = &mut self.channel_rack;
+                    let mut piano_roll_requests = Vec::new();
+                    let mut pick_pattern_id = || {
+                        channel_rack
+                            .current_pattern_id()
+                            .or_else(|| channel_rack.pattern_ids().next())
+                    };
+                    let loader = MediaLoader::new();
+                    let tempo = self.tempo;
+                    let ppq = playlist_view.ppq();
+                    let mut import_audio = move |path: PathBuf| -> Option<ImportedAudioSource> {
+                        tracing::info!("Playlist import requested: {path:?}");
+                        let decoded = match loader.load_from_path(&path) {
+                            Ok(audio) => audio,
+                            Err(err) => {
+                                tracing::error!("Failed to import audio {path:?}: {err}");
+                                return None;
+                            }
+                        };
+
+                        let frames = decoded.channels.first().map(|c| c.len()).unwrap_or(0);
+                        if decoded.sample_rate == 0 {
+                            tracing::warn!("Skipping audio import with zero sample rate: {path:?}");
+                            return None;
+                        }
+
+                        let duration_seconds = frames as f32 / decoded.sample_rate as f32;
+                        let ticks_per_second = (ppq as f32) * (tempo.max(0.001) / 60.0);
+                        let duration_ticks = (duration_seconds * ticks_per_second).ceil() as u64;
+
+                        Some(ImportedAudioSource {
+                            id: harmoniq_playlist::state::AudioSourceId::from_path(&path),
+                            duration_ticks: duration_ticks.max(1),
+                        })
+                    };
+                    let mut open_piano_roll = |track: harmoniq_playlist::ui::TrackId,
+                                               pattern: Option<u32>,
+                                               clip| {
+                        let Some(pattern_id) = pattern else {
+                            tracing::info!(
+                                    "Playlist requested piano roll for non-pattern clip: track={:?} clip={:?}",
+                                    track, clip
+                                );
+                            return;
+                        };
+
+                        piano_roll_requests.push((track, pattern_id, clip));
+                    };
+                    let props = PlaylistUiProps {
+                        playlist: playlist_view,
+                        current_time_ticks: transport_ticks,
+                        snap: playlist_snap,
+                        open_piano_roll: &mut open_piano_roll,
+                        pick_pattern_id: &mut pick_pattern_id,
+                        import_audio_file: &mut import_audio,
+                    };
+                    render_playlist_window(ui, props);
+
+                    for (track, pattern_id, clip) in piano_roll_requests {
+                        self.open_playlist_clip_piano_roll(track.into(), clip, pattern_id);
+                    }
+                }
+                UID_SEQUENCER => {
+                    self.sequencer.ui(
+                        ui,
+                        &palette,
+                        self.time_signature,
+                        self.transport_clock,
+                        self.transport_state,
+                        None,
+                        &self.event_bus,
+                    );
+                }
+                UID_PIANO_ROLL => {
+                    self.piano_roll.ui(ui);
+                    let previews = self.piano_roll.take_note_previews();
+                    for preview in previews {
+                        self.preview_note(preview);
+                    }
+                    let edits = self.piano_roll.take_edits();
+                    self.apply_piano_roll_edits(edits);
+                }
+                UID_BROWSER => {
+                    self.browser
+                        .ui(ui, &palette, &self.event_bus, &mut self.input_focus);
+                }
+                UID_CHANNEL_RACK => {
+                    self.channel_rack.ui(ui, &palette, &self.event_bus);
+                }
+                UID_CONSOLE => {
+                    self.console.ui(ui, &palette, &mut self.input_focus);
+                }
+                UID_INSPECTOR => {
+                    self.inspector.ui(
+                        ui,
+                        &palette,
+                        &mut self.input_focus,
+                        &self.event_bus,
+                        &mut self.channel_rack,
+                    );
+                }
+                other => {
+                    ui.label(format!("Unknown widget {other}"));
+                }
+            },
             FloatingKind::PluginEditor { plugin_uid } => {
                 ui.label(format!(
                     "Plugin editor for {plugin_uid} is not implemented yet."
                 ));
             }
             FloatingKind::PianoRoll { .. } => {
-                ui.label("Floating Piano Roll is under construction.");
+                self.piano_roll.ui(ui);
+                let previews = self.piano_roll.take_note_previews();
+                for preview in previews {
+                    self.preview_note(preview);
+                }
+                let edits = self.piano_roll.take_edits();
+                self.apply_piano_roll_edits(edits);
             }
             FloatingKind::MixerInsert { insert_idx } => {
                 ui.label(format!("Mixer insert {insert_idx} inspector pending."));
@@ -2537,7 +2604,6 @@ impl HarmoniqStudioApp {
         if let Err(err) = self.floating.save(&self.floating_config_path) {
             warn!("failed to save floating window layout on exit: {err:?}");
         }
-        self.layout.flush();
     }
 }
 
@@ -2661,8 +2727,8 @@ impl CommandHandler for HarmoniqStudioApp {
             },
             Command::View(cmd) => match cmd {
                 ViewCommand::ToggleMixer => {
-                    self.mixer_window_open = !self.mixer_window_open;
-                    let state = if self.mixer_window_open {
+                    self.toggle_widget(UID_MIXER);
+                    let state = if self.is_widget_open(UID_MIXER) {
                         "shown"
                     } else {
                         "hidden"
@@ -2670,8 +2736,8 @@ impl CommandHandler for HarmoniqStudioApp {
                     self.console.log(LogLevel::Info, format!("Mixer {state}"));
                 }
                 ViewCommand::TogglePlaylist => {
-                    self.playlist_window_open = !self.playlist_window_open;
-                    let state = if self.playlist_window_open {
+                    self.toggle_widget(UID_PLAYLIST);
+                    let state = if self.is_widget_open(UID_PLAYLIST) {
                         "shown"
                     } else {
                         "hidden"
@@ -2680,9 +2746,8 @@ impl CommandHandler for HarmoniqStudioApp {
                         .log(LogLevel::Info, format!("Playlist {state}"));
                 }
                 ViewCommand::ToggleSequencer => {
-                    self.sequencer_hidden = !self.sequencer_hidden;
-                    self.sequencer_window_open = !self.sequencer_hidden;
-                    let state = if self.sequencer_window_open {
+                    self.toggle_widget(UID_SEQUENCER);
+                    let state = if self.is_widget_open(UID_SEQUENCER) {
                         "shown"
                     } else {
                         "hidden"
@@ -2691,9 +2756,8 @@ impl CommandHandler for HarmoniqStudioApp {
                         .log(LogLevel::Info, format!("Sequencer {state}"));
                 }
                 ViewCommand::TogglePianoRoll => {
-                    self.piano_roll_hidden = !self.piano_roll_hidden;
-                    self.piano_roll_window_open = !self.piano_roll_hidden;
-                    let state = if self.piano_roll_window_open {
+                    self.toggle_widget(UID_PIANO_ROLL);
+                    let state = if self.is_widget_open(UID_PIANO_ROLL) {
                         "shown"
                     } else {
                         "hidden"
@@ -2702,13 +2766,11 @@ impl CommandHandler for HarmoniqStudioApp {
                         .log(LogLevel::Info, format!("Piano Roll {state}"));
                 }
                 ViewCommand::ToggleBrowser => {
-                    self.browser_hidden = !self.browser_hidden;
-                    self.browser.set_visible(!self.browser_hidden);
-                    self.layout.set_browser_visible(!self.browser_hidden);
-                    let state = if self.browser_hidden {
-                        "hidden"
-                    } else {
+                    self.toggle_widget(UID_BROWSER);
+                    let state = if self.is_widget_open(UID_BROWSER) {
                         "shown"
+                    } else {
+                        "hidden"
                     };
                     self.console.log(LogLevel::Info, format!("Browser {state}"));
                 }
@@ -2897,95 +2959,6 @@ impl CommandHandler for HarmoniqStudioApp {
     }
 }
 
-struct WorkspaceTabViewer<'a> {
-    palette: &'a HarmoniqPalette,
-    event_bus: &'a EventBus,
-    browser: &'a mut BrowserPane,
-    channel_rack: &'a mut ChannelRackPane,
-    sequencer: &'a mut SequencerPane,
-    piano_roll: &'a mut PianoRollPane,
-    inspector: &'a mut InspectorPane,
-    console: &'a mut ConsolePane,
-    input_focus: &'a mut InputFocus,
-    browser_hidden: bool,
-    sequencer_hidden: bool,
-    piano_roll_hidden: bool,
-    transport_state: TransportState,
-    transport_clock: TransportClock,
-    time_signature: TimeSignature,
-}
-
-impl<'a> TabViewer for WorkspaceTabViewer<'a> {
-    type Tab = WorkspacePane;
-
-    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        tab.title().into()
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
-        match tab {
-            WorkspacePane::Browser => {
-                if self.browser_hidden {
-                    ui.centered_and_justified(|ui| {
-                        ui.label(
-                            RichText::new("Browser hidden (View → Toggle Browser)")
-                                .color(self.palette.text_muted),
-                        );
-                    });
-                } else {
-                    self.browser
-                        .ui(ui, self.palette, self.event_bus, self.input_focus);
-                }
-            }
-            WorkspacePane::Sequencer => {
-                if self.sequencer_hidden {
-                    ui.centered_and_justified(|ui| {
-                        ui.label(
-                            RichText::new("Sequencer hidden (View → Toggle Sequencer)")
-                                .color(self.palette.text_muted),
-                        );
-                    });
-                } else {
-                    self.sequencer.ui(
-                        ui,
-                        self.palette,
-                        self.time_signature,
-                        self.transport_clock,
-                        self.transport_state,
-                        Some(self.input_focus),
-                        &self.event_bus,
-                    );
-                }
-            }
-            WorkspacePane::PianoRoll => {
-                if self.piano_roll_hidden {
-                    ui.centered_and_justified(|ui| {
-                        ui.label(
-                            RichText::new("Piano Roll hidden (View → Toggle Piano Roll)")
-                                .color(self.palette.text_muted),
-                        );
-                    });
-                } else {
-                    self.piano_roll
-                        .ui(ui, self.palette, self.event_bus, self.input_focus);
-                }
-            }
-            WorkspacePane::Inspector => {
-                self.inspector.ui(
-                    ui,
-                    self.palette,
-                    self.input_focus,
-                    self.event_bus,
-                    self.channel_rack,
-                );
-            }
-            WorkspacePane::Console => {
-                self.console.ui(ui, self.palette, self.input_focus);
-            }
-        }
-    }
-}
-
 impl App for HarmoniqStudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint_after(Duration::from_millis(16));
@@ -3048,11 +3021,11 @@ impl App for HarmoniqStudioApp {
             )
             .show(ctx, |ui| {
                 let snapshot = MenuBarSnapshot {
-                    mixer_visible: self.mixer_window_open,
-                    playlist_visible: self.playlist_window_open,
-                    sequencer_visible: !self.sequencer_hidden,
-                    piano_roll_visible: !self.piano_roll_hidden,
-                    browser_visible: !self.browser_hidden,
+                    mixer_visible: self.is_widget_open(UID_MIXER),
+                    playlist_visible: self.is_widget_open(UID_PLAYLIST),
+                    sequencer_visible: self.is_widget_open(UID_SEQUENCER),
+                    piano_roll_visible: self.is_widget_open(UID_PIANO_ROLL),
+                    browser_visible: self.is_widget_open(UID_BROWSER),
                     perf_hud_visible: self.perf_hud.visible,
                     fullscreen: self.fullscreen,
                     can_undo: false,
@@ -3092,10 +3065,10 @@ impl App for HarmoniqStudioApp {
                     clock: self.transport_clock,
                     metronome: self.metronome,
                     pattern_mode: self.pattern_mode,
-                    mixer_visible: self.mixer_window_open,
-                    playlist_visible: self.playlist_window_open,
-                    piano_roll_visible: self.piano_roll_window_open,
-                    sequencer_visible: self.sequencer_window_open,
+                    mixer_visible: self.is_widget_open(UID_MIXER),
+                    playlist_visible: self.is_widget_open(UID_PLAYLIST),
+                    piano_roll_visible: self.is_widget_open(UID_PIANO_ROLL),
+                    sequencer_visible: self.is_widget_open(UID_SEQUENCER),
                 };
                 self.transport_bar.ui(
                     ui,
@@ -3116,224 +3089,9 @@ impl App for HarmoniqStudioApp {
                     .rounding(Rounding::same(18.0)),
             )
             .show(ctx, |ui| {
-                let dock_style = self.dock_style.clone();
-                let mut tab_viewer = WorkspaceTabViewer {
-                    palette: &palette,
-                    event_bus: &self.event_bus,
-                    browser: &mut self.browser,
-                    channel_rack: &mut self.channel_rack,
-                    sequencer: &mut self.sequencer,
-                    piano_roll: &mut self.piano_roll,
-                    inspector: &mut self.inspector,
-                    console: &mut self.console,
-                    input_focus: &mut self.input_focus,
-                    browser_hidden: self.browser_hidden,
-                    sequencer_hidden: self.sequencer_hidden,
-                    piano_roll_hidden: self.piano_roll_hidden,
-                    transport_state: self.transport_state,
-                    transport_clock: self.transport_clock,
-                    time_signature: self.time_signature,
-                };
-                DockArea::new(&mut self.dock_state)
-                    .style(dock_style)
-                    .show_inside(ui, &mut tab_viewer);
+                self.launcher
+                    .ui(ui, &palette, &self.icons, &self.command_sender);
             });
-
-        if self.mixer_window_open {
-            let window_id = egui::Id::new("mixer_window");
-            let esc_pressed = ctx.input(|i| {
-                i.key_pressed(Key::Escape)
-                    && !i.modifiers.ctrl
-                    && !i.modifiers.alt
-                    && !i.modifiers.command
-                    && !i.modifiers.shift
-            });
-            let focused_mixer =
-                ctx.memory(|mem| mem.focused().is_some_and(|focus| focus == window_id));
-            if esc_pressed && focused_mixer {
-                self.mixer_window_open = false;
-            }
-
-            egui::Window::new("Mixer")
-                .id(window_id)
-                .open(&mut self.mixer_window_open)
-                .collapsible(false)
-                .resizable(true)
-                .vscroll(true)
-                .default_size(egui::vec2(820.0, 420.0))
-                .default_pos(egui::pos2(60.0, 60.0))
-                .show(ctx, |ui| {
-                    self.mixer.ui(ui, &palette);
-                });
-        }
-
-        if self.playlist_window_open {
-            let window_id = egui::Id::new("playlist_window");
-            let esc_pressed = ctx.input(|i| {
-                i.key_pressed(Key::Escape)
-                    && !i.modifiers.ctrl
-                    && !i.modifiers.alt
-                    && !i.modifiers.command
-                    && !i.modifiers.shift
-            });
-            let focused_playlist =
-                ctx.memory(|mem| mem.focused().is_some_and(|focus| focus == window_id));
-            if esc_pressed && focused_playlist {
-                self.playlist_window_open = false;
-            }
-
-            let transport_ticks = self.transport_clock.total_ticks(self.time_signature);
-            let playlist_view = &mut self.playlist_view;
-            let playlist_snap = &mut self.playlist_snap;
-            let channel_rack = &mut self.channel_rack;
-            let mut playlist_window_open = self.playlist_window_open;
-            let mut piano_roll_requests = Vec::new();
-            let mut pick_pattern_id = || {
-                channel_rack
-                    .current_pattern_id()
-                    .or_else(|| channel_rack.pattern_ids().next())
-            };
-
-            egui::Window::new("Playlist")
-                .id(window_id)
-                .open(&mut playlist_window_open)
-                .collapsible(false)
-                .resizable(true)
-                .vscroll(true)
-                .default_size(egui::vec2(960.0, 520.0))
-                .default_pos(egui::pos2(140.0, 80.0))
-                .show(ctx, |ui| {
-                    let mut open_piano_roll =
-                        |track: harmoniq_playlist::ui::TrackId, pattern: Option<u32>, clip| {
-                            let Some(pattern_id) = pattern else {
-                                tracing::info!(
-                                    "Playlist requested piano roll for non-pattern clip: track={:?} clip={:?}",
-                                    track, clip
-                                );
-                                return;
-                            };
-
-                            piano_roll_requests.push((track, pattern_id, clip));
-                        };
-                    let loader = MediaLoader::new();
-                    let tempo = self.tempo;
-                    let ppq = playlist_view.ppq();
-                    let mut import_audio = move |path: PathBuf| -> Option<ImportedAudioSource> {
-                        tracing::info!("Playlist import requested: {path:?}");
-                        let decoded = match loader.load_from_path(&path) {
-                            Ok(audio) => audio,
-                            Err(err) => {
-                                tracing::error!("Failed to import audio {path:?}: {err}");
-                                return None;
-                            }
-                        };
-
-                        let frames = decoded.channels.first().map(|c| c.len()).unwrap_or(0);
-                        if decoded.sample_rate == 0 {
-                            tracing::warn!("Skipping audio import with zero sample rate: {path:?}");
-                            return None;
-                        }
-
-                        let duration_seconds = frames as f32 / decoded.sample_rate as f32;
-                        let ticks_per_second = (ppq as f32) * (tempo.max(0.001) / 60.0);
-                        let duration_ticks = (duration_seconds * ticks_per_second).ceil() as u64;
-
-                        Some(ImportedAudioSource {
-                            id: harmoniq_playlist::state::AudioSourceId::from_path(&path),
-                            duration_ticks: duration_ticks.max(1),
-                        })
-                    };
-                    let props = PlaylistUiProps {
-                        playlist: playlist_view,
-                        current_time_ticks: transport_ticks,
-                        snap: playlist_snap,
-                        open_piano_roll: &mut open_piano_roll,
-                        pick_pattern_id: &mut pick_pattern_id,
-                        import_audio_file: &mut import_audio,
-                    };
-                    render_playlist_window(ui, props);
-                });
-
-            self.playlist_window_open = playlist_window_open;
-
-            for (track, pattern_id, clip) in piano_roll_requests {
-                self.open_playlist_clip_piano_roll(track.into(), clip, pattern_id);
-            }
-        }
-
-        if self.sequencer_window_open {
-            let window_id = egui::Id::new("sequencer_window");
-            let esc_pressed = ctx.input(|i| {
-                i.key_pressed(Key::Escape)
-                    && !i.modifiers.ctrl
-                    && !i.modifiers.alt
-                    && !i.modifiers.command
-                    && !i.modifiers.shift
-            });
-            let focused_sequencer =
-                ctx.memory(|mem| mem.focused().is_some_and(|focus| focus == window_id));
-            if esc_pressed && focused_sequencer {
-                self.sequencer_window_open = false;
-            }
-
-            egui::Window::new("Sequencer")
-                .id(window_id)
-                .open(&mut self.sequencer_window_open)
-                .collapsible(false)
-                .resizable(true)
-                .vscroll(true)
-                .default_size(egui::vec2(1040.0, 560.0))
-                .default_pos(egui::pos2(120.0, 72.0))
-                .show(ctx, |ui| {
-                    self.sequencer.ui(
-                        ui,
-                        &palette,
-                        self.time_signature,
-                        self.transport_clock,
-                        self.transport_state,
-                        None,
-                        &self.event_bus,
-                    );
-                });
-        }
-
-        if self.piano_roll_window_open {
-            let window_id = egui::Id::new("piano_roll_window");
-            let esc_pressed = ctx.input(|i| {
-                i.key_pressed(Key::Escape)
-                    && !i.modifiers.ctrl
-                    && !i.modifiers.alt
-                    && !i.modifiers.command
-                    && !i.modifiers.shift
-            });
-            let focused_roll =
-                ctx.memory(|mem| mem.focused().is_some_and(|focus| focus == window_id));
-            if esc_pressed && focused_roll {
-                self.piano_roll_window_open = false;
-            }
-
-            let mut piano_roll_window_open = self.piano_roll_window_open;
-
-            egui::Window::new("Piano Roll")
-                .id(window_id)
-                .open(&mut piano_roll_window_open)
-                .collapsible(false)
-                .resizable(true)
-                .vscroll(true)
-                .default_size(egui::vec2(980.0, 560.0))
-                .default_pos(egui::pos2(160.0, 100.0))
-                .show(ctx, |ui| {
-                    self.piano_roll_widget.ui(ui);
-                    let previews = self.piano_roll_widget.take_note_previews();
-                    for preview in previews {
-                        self.preview_note(preview);
-                    }
-                    let edits = self.piano_roll_widget.take_edits();
-                    self.apply_piano_roll_edits(edits);
-                });
-
-            self.piano_roll_window_open = piano_roll_window_open;
-        }
 
         self.inspector
             .sync_playlist_selection(self.playlist_view.selected_clip(), self.playlist_view.ppq());
@@ -3502,9 +3260,6 @@ impl App for HarmoniqStudioApp {
                 }
             }
         }
-
-        self.layout.store_dock(&self.dock_state);
-        self.layout.maybe_save();
 
         if self.startup_visible && self.startup_progress.is_none() {
             if let Some(shown_at) = self.startup_shown_at {

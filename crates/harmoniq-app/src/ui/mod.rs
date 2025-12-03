@@ -9,6 +9,7 @@ pub mod event_bus;
 pub mod floating;
 pub mod focus;
 pub mod inspector;
+pub mod launcher;
 pub mod layout;
 pub mod menu_bar;
 pub mod menu_plugins;

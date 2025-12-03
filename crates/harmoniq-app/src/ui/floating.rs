@@ -19,6 +19,7 @@ pub enum FloatingKind {
     MidiMonitor,
     Performance,
     Inspector { selection: Option<String> },
+    UiWidget { uid: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

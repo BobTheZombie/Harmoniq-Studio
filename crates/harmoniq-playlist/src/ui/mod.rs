@@ -244,9 +244,10 @@ fn handle_file_drop(
     snap: Snap,
     import_audio: &mut dyn FnMut(PathBuf) -> Option<crate::state::ImportedAudioSource>,
 ) {
-    let (dropped, pointer_pos) =
-        ui.input(|i| (i.raw.dropped_files.clone(), i.pointer.hover_pos()));
-    let Some(pos) = pointer_pos else { return; };
+    let (dropped, pointer_pos) = ui.input(|i| (i.raw.dropped_files.clone(), i.pointer.hover_pos()));
+    let Some(pos) = pointer_pos else {
+        return;
+    };
 
     for file in dropped {
         let Some(path) = file.path.clone() else {
