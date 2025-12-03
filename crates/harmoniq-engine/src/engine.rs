@@ -1081,17 +1081,15 @@ impl HarmoniqEngine {
             self.midi_block.extend(queue.drain(..));
         }
 
+        let mut midi_block = core::mem::take(&mut self.midi_block);
+
         if !self.pattern_mode
             && matches!(
                 self.transport(),
                 TransportState::Playing | TransportState::Recording
             )
         {
-            self.process_playlist_block(
-                block_start_samples,
-                block_len_samples,
-                &mut self.midi_block,
-            );
+            self.process_playlist_block(block_start_samples, block_len_samples, &mut midi_block);
         }
 
         #[cfg(feature = "mixer_api")]
@@ -1106,12 +1104,14 @@ impl HarmoniqEngine {
 
         let graph = self.graph.read().clone();
         let Some(graph) = graph else {
+            self.midi_block = midi_block;
             self.rt_snapshot.store(Arc::new(RtBlockSnapshot::default()));
             return Ok(());
         };
 
         let plugin_ids = graph.plugin_ids();
         if plugin_ids.is_empty() {
+            self.midi_block = midi_block;
             self.rt_snapshot.store(Arc::new(RtBlockSnapshot::default()));
             return Ok(());
         }
@@ -1128,7 +1128,7 @@ impl HarmoniqEngine {
         drop(processors_guard);
 
         let latencies_guard = self.latencies.read();
-        let mut latencies: Vec<usize> = plugin_ids
+        let latencies: Vec<usize> = plugin_ids
             .iter()
             .map(|plugin_id| *latencies_guard.get(plugin_id).unwrap_or(&0))
             .collect();
@@ -1143,7 +1143,7 @@ impl HarmoniqEngine {
             &processor_handles,
             &latencies,
             &self.automation_block,
-            &self.midi_block,
+            &midi_block,
             mixer_ptr,
             self.mixer_cfg,
             &mut self.delay_lines,
@@ -1157,11 +1157,12 @@ impl HarmoniqEngine {
             processors: processor_handles,
             latencies,
             automation: self.automation_block.clone(),
-            pending_midi: self.midi_block.clone(),
+            pending_midi: midi_block.clone(),
             max_latency,
             graph_runner: Some(Mutex::new(runner)),
         };
 
+        self.midi_block = midi_block;
         self.rt_snapshot.store(Arc::new(snapshot));
         Ok(())
     }
