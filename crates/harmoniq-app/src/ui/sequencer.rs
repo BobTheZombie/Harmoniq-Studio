@@ -926,7 +926,7 @@ impl SequencerPane {
             }
         }
 
-        if response.dragged_stopped_by(PointerButton::Primary) {
+        if response.drag_stopped_by(PointerButton::Primary) {
             self.dragging_clip = None;
             self.dragging_automation = None;
         }
