@@ -72,9 +72,8 @@ use harmoniq_pianoroll::{
 };
 use harmoniq_playlist::{
     state::{
-        AudioSourceId as PlaylistAudioSourceId, ClipId as PlaylistClipId,
-        ClipKind as PlaylistClipKind, ImportedAudioSource, PatternNote, Playlist as PlaylistState,
-        Snap as PlaylistSnap, TrackId as PlaylistTrackId,
+        AudioSourceId as PlaylistAudioSourceId, ClipId as PlaylistClipId, ImportedAudioSource,
+        PatternNote, Playlist as PlaylistState, Snap as PlaylistSnap, TrackId as PlaylistTrackId,
     },
     ui::{render as render_playlist_window, PlaylistProps as PlaylistUiProps},
 };

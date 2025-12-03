@@ -16,7 +16,7 @@ use clap::builder::PossibleValue;
 use clap::ValueEnum;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, FromSample, SampleFormat, SizedSample, StreamConfig};
-use crossbeam::queue::ArrayQueue;
+use crossbeam_queue::ArrayQueue;
 #[cfg(target_os = "linux")]
 use harmoniq_engine::sound_server::alsa_devices_available;
 #[cfg(all(target_os = "linux", feature = "openasio"))]
