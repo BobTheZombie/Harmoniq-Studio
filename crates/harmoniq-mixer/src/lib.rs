@@ -30,9 +30,11 @@ pub struct MixerCallbacks {
     /// Apply routing matrix changes
     pub apply_routing: Box<dyn FnMut(RoutingDelta) + Send>,
     /// Create/route a send target (A/B/C…) — host decides exact routing object
-    pub configure_send: Box<dyn FnMut(ChannelId, SendId, f32) + Send>,
+    pub configure_send: Box<dyn FnMut(ChannelId, SendId, f32, bool) + Send>,
     /// Set channel gain (dB) and pan (-1..1) in engine
     pub set_gain_pan: Box<dyn FnMut(ChannelId, f32, f32) + Send>,
+    /// Adjust stereo separation/width for the channel
+    pub set_stereo_separation: Box<dyn FnMut(ChannelId, f32) + Send>,
     /// Mute/Solo changes
     pub set_mute: Box<dyn FnMut(ChannelId, bool) + Send>,
     pub set_solo: Box<dyn FnMut(ChannelId, bool) + Send>,
@@ -47,8 +49,9 @@ impl MixerCallbacks {
             remove_insert: Box::new(|_, _| {}),
             reorder_insert: Box::new(|_, _, _| {}),
             apply_routing: Box::new(|_| {}),
-            configure_send: Box::new(|_, _, _| {}),
+            configure_send: Box::new(|_, _, _, _| {}),
             set_gain_pan: Box::new(|_, _, _| {}),
+            set_stereo_separation: Box::new(|_, _| {}),
             set_mute: Box::new(|_, _| {}),
             set_solo: Box::new(|_, _| {}),
         }

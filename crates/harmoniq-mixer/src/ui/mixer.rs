@@ -956,6 +956,22 @@ fn strip_controls(
             (callbacks.set_gain_pan)(channel.id, channel.gain_db, channel.pan);
         }
         ui.add_space(6.0);
+        let width_response = ui.add(
+            Knob::new(
+                &mut channel.stereo_separation,
+                0.0,
+                1.5,
+                1.0,
+                "Stereo",
+                palette,
+            )
+            .with_diameter(metrics.pan_knob_diameter),
+        );
+        if width_response.changed() {
+            channel.stereo_separation = channel.stereo_separation.clamp(0.0, 1.5);
+            (callbacks.set_stereo_separation)(channel.id, channel.stereo_separation);
+        }
+        ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
             let mute_response = ui
@@ -1445,9 +1461,13 @@ fn sends_section(
                     Knob::new(&mut level, 0.0, 1.0, 0.0, "", palette)
                         .with_diameter(metrics.send_knob_diameter),
                 );
-                if response.changed() {
+                let level_changed = response.changed();
+                if level_changed {
                     send.level = level;
-                    (callbacks.configure_send)(channel.id, send.id, send.level);
+                }
+                let pre_changed = ui.checkbox(&mut send.pre_fader, "Pre").changed();
+                if level_changed || pre_changed {
+                    (callbacks.configure_send)(channel.id, send.id, send.level, send.pre_fader);
                 }
             });
         }
@@ -1571,19 +1591,35 @@ fn inserts_panel(
                             (callbacks.set_insert_bypass)(channel.id, index, slot.bypass);
                         }
 
-                        if ui
-                            .add_sized(
-                                [ui.available_width() - 64.0, 28.0],
-                                egui::Button::new(
-                                    RichText::new(title.clone())
-                                        .small()
-                                        .color(palette.text_primary),
-                                ),
-                            )
-                            .clicked()
-                        {
-                            (callbacks.open_insert_ui)(channel.id, index);
+                        let insert_button = ui.add_sized(
+                            [ui.available_width() - 64.0, 28.0],
+                            egui::Button::new(
+                                RichText::new(title.clone())
+                                    .small()
+                                    .color(palette.text_primary),
+                            ),
+                        );
+                        if insert_button.clicked() {
+                            if slot.plugin_uid.is_some() {
+                                (callbacks.open_insert_ui)(channel.id, index);
+                            } else {
+                                (callbacks.open_insert_browser)(channel.id, Some(index));
+                            }
                         }
+                        insert_button.context_menu(|ui| {
+                            if ui
+                                .button("Load / Replace…")
+                                .on_hover_text("Choose an effect for this slot")
+                                .clicked()
+                            {
+                                (callbacks.open_insert_browser)(channel.id, Some(index));
+                                ui.close_menu();
+                            }
+                            if slot.plugin_uid.is_some() && ui.button("Open UI").clicked() {
+                                (callbacks.open_insert_ui)(channel.id, index);
+                                ui.close_menu();
+                            }
+                        });
 
                         if ui
                             .add(egui::Button::new("✕").fill(palette.toolbar_highlight))

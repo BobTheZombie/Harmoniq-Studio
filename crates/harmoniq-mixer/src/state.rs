@@ -361,6 +361,7 @@ pub struct Channel {
     pub rack_state: ChannelRackState,
     pub inserts_delay_comp: u32,
     pub pan_law: PanLaw,
+    pub stereo_separation: f32,
 }
 
 impl Channel {
@@ -595,6 +596,7 @@ impl MixerState {
                 },
                 inserts_delay_comp: 0,
                 pan_law: PanLaw::ConstantPower,
+                stereo_separation: 1.0,
             });
         }
         s.channels.push(Channel {
@@ -645,6 +647,7 @@ impl MixerState {
             },
             inserts_delay_comp: 0,
             pan_law: PanLaw::ConstantPower,
+            stereo_separation: 1.0,
         });
         s
     }
