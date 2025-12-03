@@ -161,10 +161,22 @@ fn channel_row(
         ui.text_edit_singleline(&mut ch.name);
 
         ui.separator();
-        ui.label(egui::RichText::new(kind_badge(ch)).weak());
+        let badge_resp = ui.label(egui::RichText::new(kind_badge(ch)).weak());
+        badge_resp.context_menu(|ui| {
+            if ui.button("Open Piano Roll").clicked() {
+                (callbacks.open_piano_roll)(ch.id, pat);
+                ui.close_menu();
+            }
+        });
 
         ui.separator();
-        ui.label(egui::RichText::new(instrument_label(ch)).italics().weak());
+        let instrument_resp = ui.label(egui::RichText::new(instrument_label(ch)).italics().weak());
+        instrument_resp.context_menu(|ui| {
+            if ui.button("Open Piano Roll").clicked() {
+                (callbacks.open_piano_roll)(ch.id, pat);
+                ui.close_menu();
+            }
+        });
 
         ui.separator();
         ui.add(
