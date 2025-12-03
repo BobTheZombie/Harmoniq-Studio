@@ -1583,6 +1583,8 @@ fn demo_tracks(
             muted: false,
             solo: false,
         },
+    ];
+
     *next_clip_id = clip_id;
     tracks
 }
