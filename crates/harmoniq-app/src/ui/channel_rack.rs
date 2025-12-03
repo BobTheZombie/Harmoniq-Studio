@@ -13,6 +13,8 @@ struct Channel {
     color: Color32,
     volume: f32,
     pan: f32,
+    plugin_uid: Option<String>,
+    sample_id: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -37,6 +39,8 @@ impl Channel {
             color,
             volume: 0.75,
             pan: 0.0,
+            plugin_uid: None,
+            sample_id: None,
         }
     }
 }
@@ -78,6 +82,9 @@ pub struct ChannelRackPane {
     selected_stock_kit: Option<usize>,
     patterns: Vec<ChannelRackPattern>,
     active_pattern_index: usize,
+    next_sample_id: u64,
+    pending_plugin_target: Option<usize>,
+    plugin_uid_buffer: String,
 }
 
 impl ChannelRackPane {
@@ -215,7 +222,7 @@ impl ChannelRackPane {
             let channel_count = self.channels.len();
             for index in 0..channel_count {
                 let channel = &mut self.channels[index];
-                egui::Frame::none()
+                let frame = egui::Frame::none()
                     .fill(palette.panel_alt)
                     .rounding(egui::Rounding::same(10.0))
                     .stroke(egui::Stroke::new(1.0, palette.toolbar_outline))
@@ -229,6 +236,18 @@ impl ChannelRackPane {
                                         .strong()
                                         .size(16.0),
                                 );
+                                if let Some(uid) = &channel.plugin_uid {
+                                    ui.label(
+                                        RichText::new(uid.clone())
+                                            .color(palette.text_muted)
+                                            .monospace(),
+                                    );
+                                } else if let Some(sample_id) = channel.sample_id {
+                                    ui.label(
+                                        RichText::new(format!("Sample #{sample_id}"))
+                                            .color(palette.text_muted),
+                                    );
+                                }
                                 if ui
                                     .small_button("🎹")
                                     .on_hover_text("Open in piano roll")
@@ -324,6 +343,29 @@ impl ChannelRackPane {
                             });
                         });
                     });
+
+                frame.response.context_menu(|ui| {
+                    if ui.button("Load Sample…").clicked() {
+                        channel.sample_id = Some(self.next_sample_id);
+                        self.next_sample_id += 1;
+                        channel.plugin_uid = None;
+                        ui.close_menu();
+                    }
+                    if ui.button("Load Plugin…").clicked() {
+                        self.pending_plugin_target = Some(index);
+                        self.plugin_uid_buffer = channel.plugin_uid.clone().unwrap_or_default();
+                        channel.sample_id = None;
+                        ui.close_menu();
+                    }
+                    if let Some(uid) = &channel.plugin_uid {
+                        ui.separator();
+                        ui.label(RichText::new(format!("Plugin: {uid}")).monospace());
+                    }
+                    if let Some(sample_id) = channel.sample_id {
+                        ui.separator();
+                        ui.label(format!("Sample ID: {sample_id}"));
+                    }
+                });
                 ui.add_space(8.0);
             }
             if ui.button("Add Channel").clicked() {
@@ -353,6 +395,36 @@ impl ChannelRackPane {
                         .insert(insert_at, self.channels[insert_at].volume);
                 }
                 offset += 1;
+            }
+        }
+
+        if let Some(target) = self.pending_plugin_target {
+            if let Some(channel) = self.channels.get_mut(target) {
+                egui::Window::new("Load Plugin")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                    .show(ui.ctx(), |ui| {
+                        ui.label("Enter a plugin UID for this channel.");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.plugin_uid_buffer)
+                                .hint_text("plugin://uid"),
+                        );
+                        ui.horizontal(|ui| {
+                            if ui.button("Assign").clicked() {
+                                let trimmed = self.plugin_uid_buffer.trim();
+                                channel.plugin_uid =
+                                    (!trimmed.is_empty()).then(|| trimmed.to_string());
+                                channel.sample_id = None;
+                                self.pending_plugin_target = None;
+                            }
+                            if ui.button("Cancel").clicked() {
+                                self.pending_plugin_target = None;
+                            }
+                        });
+                    });
+            } else {
+                self.pending_plugin_target = None;
             }
         }
     }
@@ -432,49 +504,81 @@ impl Default for ChannelRackPane {
             selected_stock_kit: None,
             patterns,
             active_pattern_index: 0,
+            next_sample_id: 1,
+            pending_plugin_target: None,
+            plugin_uid_buffer: String::new(),
         }
     }
 }
 
-/// Schedule step events for the current 16th-note tick.
-///
-/// The audio engine is expected to call this every tick of the step sequencer.
-/// A standard 960 PPQ grid is used, so each 16th note advances by 240 ticks.
-pub fn schedule_step_events(pattern: &ChannelRackPattern, beat: usize) -> Vec<MidiEvent> {
-    if pattern.steps.is_empty() {
-        return Vec::new();
-    }
+#[derive(Debug, Clone)]
+pub enum StepEvent {
+    Midi(MidiEvent),
+    Sample { sample_id: u64 },
+}
 
-    let steps_per_bar = pattern.steps[0].len();
-    if steps_per_bar == 0 {
-        return Vec::new();
-    }
-
-    let step_index = beat % steps_per_bar;
-    let ticks_per_beat = 960u32;
-    let ticks_per_step = ticks_per_beat / 4;
-    let event_tick = (step_index as u32) * ticks_per_step;
-
-    let mut events = Vec::new();
-    let channel_count = pattern.steps.len().min(pattern.channel_volumes.len());
-    for channel_index in 0..channel_count {
-        let Some(step_state) = pattern.steps[channel_index].get(step_index) else {
-            continue;
+impl ChannelRackPane {
+    /// Schedule step events for the current 16th-note tick.
+    ///
+    /// The audio engine is expected to call this every tick of the step sequencer.
+    /// A standard 960 PPQ grid is used, so each 16th note advances by 240 ticks.
+    pub fn schedule_step_events(&self, beat: usize) -> Vec<StepEvent> {
+        let Some(pattern) = self.current_pattern() else {
+            return Vec::new();
         };
-        if !step_state.on {
-            continue;
+
+        if pattern.steps.is_empty() {
+            return Vec::new();
         }
 
-        let volume = pattern.channel_volumes[channel_index];
-        let scaled_velocity = (step_state.velocity.clamp(0.0, 1.0) * 127.0)
-            .round()
-            .clamp(1.0, 127.0) as u8;
-        debug!(
-            "Triggering step event for channel {channel_index} at tick {event_tick} with volume {:.3} and velocity {scaled_velocity}",
-            volume
-        );
-        events.push(MidiEvent::new(0, [0x90, 60, scaled_velocity]));
-    }
+        let steps_per_bar = pattern.steps[0].len();
+        if steps_per_bar == 0 {
+            return Vec::new();
+        }
 
-    events
+        let step_index = beat % steps_per_bar;
+        let ticks_per_beat = 960u32;
+        let ticks_per_step = ticks_per_beat / 4;
+        let event_tick = (step_index as u32) * ticks_per_step;
+
+        let channel_count = pattern
+            .steps
+            .len()
+            .min(pattern.channel_volumes.len())
+            .min(self.channels.len());
+
+        let mut events = Vec::new();
+        for channel_index in 0..channel_count {
+            let Some(step_state) = pattern.steps[channel_index].get(step_index) else {
+                continue;
+            };
+            if !step_state.on {
+                continue;
+            }
+
+            let volume = pattern.channel_volumes[channel_index];
+            let scaled_velocity = (step_state.velocity.clamp(0.0, 1.0) * 127.0)
+                .round()
+                .clamp(1.0, 127.0) as u8;
+
+            if let Some(uid) = self.channels[channel_index].plugin_uid.as_deref() {
+                debug!(
+                    "Triggering plugin step for channel {channel_index} (uid: {uid}) at tick {event_tick} with volume {:.3} and velocity {scaled_velocity}",
+                    volume
+                );
+                events.push(StepEvent::Midi(MidiEvent::new(
+                    0,
+                    [0x90, 60, scaled_velocity],
+                )));
+            } else if let Some(sample_id) = self.channels[channel_index].sample_id {
+                debug!(
+                    "Triggering sample step for channel {channel_index} (sample #{sample_id}) at tick {event_tick} with volume {:.3} and velocity {scaled_velocity}",
+                    volume
+                );
+                events.push(StepEvent::Sample { sample_id });
+            }
+        }
+
+        events
+    }
 }

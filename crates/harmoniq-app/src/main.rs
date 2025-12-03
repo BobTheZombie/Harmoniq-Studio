@@ -82,7 +82,7 @@ use ui::mixer::MixerEngineBridge;
 use ui::{
     audio_settings::{ActiveAudioSummary, AudioSettingsAction, AudioSettingsPanel},
     browser::BrowserPane,
-    channel_rack::ChannelRackPane,
+    channel_rack::{ChannelRackPane, StepEvent},
     command_dispatch::{command_channel, CommandDispatcher, CommandHandler, CommandSender},
     commands::{
         Command, EditCommand, FileCommand, FloatingCommand, HelpCommand, InsertCommand,
@@ -1877,6 +1877,20 @@ impl HarmoniqStudioApp {
         self.queue_preview_clip(clip, "Playing sound test");
     }
 
+    fn trigger_sample(&mut self, sample_id: u64) {
+        let sample_rate = self.engine_runner.config().sample_rate;
+        let clip = self.sound_test.prepare_clip(sample_rate);
+        if let Err(command) = self
+            .command_queue
+            .try_send(EngineCommand::PlaySoundTest(clip))
+        {
+            debug!(
+                ?command,
+                sample_id, "Command queue full while triggering sample"
+            );
+        }
+    }
+
     fn preview_stock_sound(&mut self, name: &str) {
         let sample_rate = self.engine_runner.config().sample_rate;
         let fallback_clip = self.sound_test.prepare_clip(sample_rate);
@@ -2358,10 +2372,6 @@ impl HarmoniqStudioApp {
             return;
         }
 
-        let Some(pattern) = self.channel_rack.current_pattern() else {
-            return;
-        };
-
         let current_tick = self.transport_clock.total_ticks(self.time_signature);
         let ticks_per_step = 960u64 / 4;
 
@@ -2371,9 +2381,18 @@ impl HarmoniqStudioApp {
 
         while self.last_step_tick <= current_tick {
             let beat = (self.last_step_tick / ticks_per_step) as usize;
-            let events = ui::channel_rack::schedule_step_events(pattern, beat);
+            let events = self.channel_rack.schedule_step_events(beat);
             if !events.is_empty() {
-                self.send_command(EngineCommand::SubmitMidi(events));
+                let mut midi_batch = Vec::new();
+                for event in events {
+                    match event {
+                        StepEvent::Midi(event) => midi_batch.push(event),
+                        StepEvent::Sample { sample_id } => self.trigger_sample(sample_id),
+                    }
+                }
+                if !midi_batch.is_empty() {
+                    self.send_command(EngineCommand::SubmitMidi(midi_batch));
+                }
             }
             self.last_step_tick = self.last_step_tick.saturating_add(ticks_per_step);
         }
