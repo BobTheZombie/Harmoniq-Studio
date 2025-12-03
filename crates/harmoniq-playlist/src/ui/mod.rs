@@ -42,6 +42,7 @@ pub struct PlaylistProps<'a> {
     pub current_time_ticks: u64,
     pub snap: &'a mut Snap,
     pub open_piano_roll: &'a mut dyn FnMut(TrackId, Option<u32>, ClipId),
+    pub pick_pattern_id: &'a mut dyn FnMut() -> Option<u32>,
     pub import_audio_file: &'a mut dyn FnMut(PathBuf) -> AudioSourceId,
 }
 
@@ -195,19 +196,19 @@ pub fn render(ui: &mut Ui, props: PlaylistProps<'_>) {
                                 .iter_mut()
                                 .find(|track| track.id == state_track_id)
                             {
-                                let dummy_path = PathBuf::from("import.wav");
-                                let source = AudioSourceId::from_path(dummy_path.as_path());
-                                let mut clip = Clip::new(
-                                    ClipId(rand::random::<u64>()),
-                                    "Audio Clip",
-                                    ticks,
-                                    ppq_ticks.max(1),
-                                    track.color,
-                                    crate::state::ClipKind::Audio { source },
-                                );
-                                clip.fade_in_ticks = 0;
-                                clip.fade_out_ticks = 0;
-                                track.add_clip_to_lane(lane_id, clip);
+                                if let Some(pattern_id) = (props.pick_pattern_id)() {
+                                    let mut clip = Clip::new(
+                                        ClipId(rand::random::<u64>()),
+                                        "Pattern Clip",
+                                        ticks,
+                                        ppq_ticks.max(1),
+                                        track.color,
+                                        crate::state::ClipKind::Pattern { pattern_id },
+                                    );
+                                    clip.fade_in_ticks = 0;
+                                    clip.fade_out_ticks = 0;
+                                    track.add_clip_to_lane(lane_id, clip);
+                                }
                             }
                         }
                     }

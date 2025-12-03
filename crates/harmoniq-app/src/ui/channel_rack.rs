@@ -117,6 +117,19 @@ impl ChannelRackPane {
         self.patterns.get_mut(index)
     }
 
+    pub fn pattern_ids(&self) -> impl Iterator<Item = u32> + '_ {
+        0..(self.patterns.len() as u32)
+    }
+
+    pub fn pattern(&self, id: u32) -> Option<&ChannelRackPattern> {
+        self.patterns.get(id as usize)
+    }
+
+    pub fn current_pattern_id(&self) -> Option<u32> {
+        self.pattern(self.active_pattern_index as u32)
+            .map(|_| self.active_pattern_index as u32)
+    }
+
     fn draw_pattern_selector(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette) {
         egui::Frame::none()
             .fill(palette.panel_alt)
@@ -527,6 +540,22 @@ impl ChannelRackPane {
             return Vec::new();
         };
 
+        self.schedule_events_for_pattern(pattern, beat)
+    }
+
+    pub fn schedule_pattern_step_events(&self, pattern_id: u32, beat: usize) -> Vec<StepEvent> {
+        let Some(pattern) = self.pattern(pattern_id) else {
+            return Vec::new();
+        };
+
+        self.schedule_events_for_pattern(pattern, beat)
+    }
+
+    fn schedule_events_for_pattern(
+        &self,
+        pattern: &ChannelRackPattern,
+        beat: usize,
+    ) -> Vec<StepEvent> {
         if pattern.steps.is_empty() {
             return Vec::new();
         }

@@ -71,7 +71,8 @@ use harmoniq_pianoroll::{
 };
 use harmoniq_playlist::{
     state::{
-        ClipId as PlaylistClipId, PatternNote, Playlist as PlaylistState, Snap as PlaylistSnap,
+        AudioSourceId as PlaylistAudioSourceId, ClipId as PlaylistClipId,
+        ClipKind as PlaylistClipKind, PatternNote, Playlist as PlaylistState, Snap as PlaylistSnap,
         TrackId as PlaylistTrackId,
     },
     ui::{render as render_playlist_window, PlaylistProps as PlaylistUiProps},
@@ -1469,6 +1470,7 @@ struct HarmoniqStudioApp {
     transport_state: TransportState,
     transport_clock: TransportClock,
     last_step_tick: u64,
+    last_playlist_tick: u64,
     metronome: bool,
     pattern_mode: bool,
     transport_loop_enabled: bool,
@@ -1704,6 +1706,7 @@ impl HarmoniqStudioApp {
             transport_state: TransportState::Stopped,
             transport_clock: TransportClock::default(),
             last_step_tick: 0,
+            last_playlist_tick: 0,
             metronome: false,
             pattern_mode: true,
             transport_loop_enabled: false,
@@ -1889,6 +1892,12 @@ impl HarmoniqStudioApp {
                 sample_id, "Command queue full while triggering sample"
             );
         }
+    }
+
+    fn play_audio_source(&mut self, _source: PlaylistAudioSourceId) {
+        let sample_rate = self.engine_runner.config().sample_rate;
+        let clip = self.sound_test.prepare_clip(sample_rate);
+        self.queue_preview_clip(clip, "Playing playlist audio clip");
     }
 
     fn preview_stock_sound(&mut self, name: &str) {
@@ -2166,6 +2175,7 @@ impl HarmoniqStudioApp {
                 AppEvent::TogglePatternMode => {
                     self.pattern_mode = !self.pattern_mode;
                     self.last_step_tick = self.transport_clock.total_ticks(self.time_signature);
+                    self.last_playlist_tick = self.transport_clock.total_ticks(self.time_signature);
                     self.send_command(EngineCommand::SetPatternMode(self.pattern_mode));
                 }
                 AppEvent::PreviewStockSound(name) => {
@@ -2322,12 +2332,14 @@ impl HarmoniqStudioApp {
                 self.transport.sample_pos.store(0, AtomicOrdering::Relaxed);
                 self.send_command(EngineCommand::SetTransport(TransportState::Playing));
                 self.last_step_tick = 0;
+                self.last_playlist_tick = 0;
             }
             TransportEvent::Stop => {
                 self.transport_state = TransportState::Stopped;
                 self.transport.sample_pos.store(0, AtomicOrdering::Relaxed);
                 self.send_command(EngineCommand::SetTransport(TransportState::Stopped));
                 self.last_step_tick = 0;
+                self.last_playlist_tick = 0;
             }
             TransportEvent::Record(armed) => {
                 self.record_armed = armed;
@@ -2395,6 +2407,68 @@ impl HarmoniqStudioApp {
                 }
             }
             self.last_step_tick = self.last_step_tick.saturating_add(ticks_per_step);
+        }
+    }
+
+    fn process_playlist_playback(&mut self) {
+        if self.pattern_mode
+            || !matches!(
+                self.transport_state,
+                TransportState::Playing | TransportState::Recording
+            )
+        {
+            self.last_playlist_tick = self.transport_clock.total_ticks(self.time_signature);
+            return;
+        }
+
+        let current_tick = self.transport_clock.total_ticks(self.time_signature);
+        let tick_step = ((self.playlist_view.ppq().max(1) as u64) / 4).max(1);
+
+        if self.last_playlist_tick == 0 {
+            self.last_playlist_tick = current_tick.saturating_sub(current_tick % tick_step);
+        }
+
+        let mut tick = self.last_playlist_tick;
+        while tick <= current_tick {
+            self.schedule_playlist_events_at_tick(tick, tick_step);
+            tick = tick.saturating_add(tick_step);
+        }
+
+        self.last_playlist_tick = tick;
+    }
+
+    fn schedule_playlist_events_at_tick(&mut self, tick: u64, tick_step: u64) {
+        let mut midi_batch = Vec::new();
+
+        for track in &self.playlist_view.tracks {
+            for lane in &track.lanes {
+                for clip in &lane.clips {
+                    if tick < clip.start_ticks || tick >= clip.end_ticks() {
+                        continue;
+                    }
+
+                    match clip.kind {
+                        PlaylistClipKind::Pattern { pattern_id } => {
+                            let local_tick = tick.saturating_sub(clip.start_ticks);
+                            let beat = (local_tick / tick_step) as usize;
+                            midi_batch.extend(
+                                self.channel_rack
+                                    .schedule_pattern_step_events(pattern_id, beat),
+                            );
+                        }
+                        PlaylistClipKind::Audio { source } => {
+                            if tick == clip.start_ticks {
+                                self.play_audio_source(source);
+                            }
+                        }
+                        PlaylistClipKind::Automation => {}
+                    }
+                }
+            }
+        }
+
+        if !midi_batch.is_empty() {
+            self.send_command(EngineCommand::SubmitMidi(midi_batch));
         }
     }
 
@@ -2987,6 +3061,7 @@ impl App for HarmoniqStudioApp {
         self.poll_rt_events();
         self.update_engine_context();
         self.process_step_sequencer();
+        self.process_playlist_playback();
         self.input_focus.maybe_release_on_escape(ctx);
         self.plugin_manager.tick();
         if let Some(status) = self.plugin_manager.progress() {
@@ -3159,8 +3234,14 @@ impl App for HarmoniqStudioApp {
             let transport_ticks = self.transport_clock.total_ticks(self.time_signature);
             let playlist_view = &mut self.playlist_view;
             let playlist_snap = &mut self.playlist_snap;
+            let channel_rack = &mut self.channel_rack;
             let mut playlist_window_open = self.playlist_window_open;
             let mut piano_roll_requests = Vec::new();
+            let mut pick_pattern_id = || {
+                channel_rack
+                    .current_pattern_id()
+                    .or_else(|| channel_rack.pattern_ids().next())
+            };
 
             egui::Window::new("Playlist")
                 .id(window_id)
@@ -3192,6 +3273,7 @@ impl App for HarmoniqStudioApp {
                         current_time_ticks: transport_ticks,
                         snap: playlist_snap,
                         open_piano_roll: &mut open_piano_roll,
+                        pick_pattern_id: &mut pick_pattern_id,
                         import_audio_file: &mut import_audio,
                     };
                     render_playlist_window(ui, props);
