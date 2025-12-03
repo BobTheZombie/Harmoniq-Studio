@@ -196,7 +196,9 @@ impl ChannelRackPane {
             ui.add_space(6.0);
             self.draw_stock_kits(ui, palette);
             ui.add_space(6.0);
-            for (index, channel) in self.channels.iter_mut().enumerate() {
+            let channel_count = self.channels.len();
+            for index in 0..channel_count {
+                let channel = &mut self.channels[index];
                 egui::Frame::none()
                     .fill(palette.panel_alt)
                     .rounding(egui::Rounding::same(10.0))
@@ -236,22 +238,24 @@ impl ChannelRackPane {
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 4.0;
-                                let pattern = self.current_pattern_mut();
-                                for step in 0..pattern.steps[index].len() {
-                                    let accent = channel.color.gamma_multiply(if step % 4 == 0 {
-                                        0.9
-                                    } else {
-                                        0.7
-                                    });
-                                    let toggle = ui.add(
-                                        StepToggle::new(palette, accent)
-                                            .active(pattern.steps[index][step])
-                                            .emphasise(step % 4 == 0)
-                                            .with_size(egui::vec2(20.0, 34.0)),
-                                    );
-                                    if toggle.clicked() {
-                                        pattern.steps[index][step] = !pattern.steps[index][step];
-                                        event_bus.publish(AppEvent::RequestRepaint);
+                                if let Some(pattern) = self.patterns.get_mut(self.active_pattern_index)
+                                {
+                                    for step in 0..pattern.steps[index].len() {
+                                        let accent = channel.color.gamma_multiply(if step % 4 == 0 {
+                                            0.9
+                                        } else {
+                                            0.7
+                                        });
+                                        let toggle = ui.add(
+                                            StepToggle::new(palette, accent)
+                                                .active(pattern.steps[index][step])
+                                                .emphasise(step % 4 == 0)
+                                                .with_size(egui::vec2(20.0, 34.0)),
+                                        );
+                                        if toggle.clicked() {
+                                            pattern.steps[index][step] = !pattern.steps[index][step];
+                                            event_bus.publish(AppEvent::RequestRepaint);
+                                        }
                                     }
                                 }
                             });

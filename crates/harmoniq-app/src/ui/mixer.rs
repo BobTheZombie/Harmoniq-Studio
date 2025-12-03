@@ -435,7 +435,7 @@ impl MixerView {
         let map_send = snapshots.clone();
         #[cfg(feature = "mixer_api")]
         let tx_send = engine_sender.clone();
-        callbacks.configure_send = Box::new(move |channel_id, send_id, level, pre_fader| {
+        callbacks.configure_send = Box::new(move |channel_id, send_id, level, _pre_fader| {
             if let Some(snapshot) = map_send.get(&channel_id) {
                 let target_db = gain_to_db(level).clamp(-60.0, 6.0);
                 let previous = snapshot
@@ -453,19 +453,19 @@ impl MixerView {
                     ch: channel_id,
                     id: send_id,
                     level,
-                    pre_fader,
+                    pre_fader: _pre_fader,
                 });
             }
         });
 
         #[cfg(feature = "mixer_api")]
         let tx_stereo = engine_sender.clone();
-        callbacks.set_stereo_separation = Box::new(move |channel_id, amount| {
+        callbacks.set_stereo_separation = Box::new(move |_channel_id, _amount| {
             #[cfg(feature = "mixer_api")]
             if let Some(tx) = &tx_stereo {
                 let _ = tx.send(MixerCommand::SetStereoSeparation {
-                    ch: channel_id,
-                    amount,
+                    ch: _channel_id,
+                    amount: _amount,
                 });
             }
         });
