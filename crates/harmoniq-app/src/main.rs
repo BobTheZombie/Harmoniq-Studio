@@ -65,11 +65,14 @@ use audio::{
 };
 use config::qwerty::{QwertyConfig, VelocityCurveSetting};
 use harmoniq_pianoroll::{
-    model::{Clip as PianoRollClip, EditorState as PianoRollEditorState, Note, SnapUnit},
+    model::{Clip as PianoRollClip, Edit, EditorState as PianoRollEditorState, Note, SnapUnit},
     PianoRoll as PianoRollWidget,
 };
 use harmoniq_playlist::{
-    state::{Playlist as PlaylistState, Snap as PlaylistSnap},
+    state::{
+        ClipId as PlaylistClipId, PatternNote, Playlist as PlaylistState, Snap as PlaylistSnap,
+        TrackId as PlaylistTrackId,
+    },
     ui::{render as render_playlist_window, PlaylistProps as PlaylistUiProps},
 };
 use midi::{list_midi_inputs, MidiInputDevice, QwertyKeyboardInput};
@@ -1400,6 +1403,21 @@ impl Drop for OfflineLoop {
     }
 }
 
+#[derive(Clone, Copy)]
+enum PianoRollTarget {
+    Playlist {
+        track_id: PlaylistTrackId,
+        clip_id: PlaylistClipId,
+        pattern_id: u32,
+    },
+    ChannelRack {
+        channel_index: usize,
+        pattern_index: usize,
+        step_count: usize,
+        step_len_ppq: i64,
+    },
+}
+
 struct HarmoniqStudioApp {
     theme: HarmoniqTheme,
     icons: AppIcons,
@@ -1465,6 +1483,7 @@ struct HarmoniqStudioApp {
     sequencer_window_open: bool,
     piano_roll_hidden: bool,
     piano_roll_window_open: bool,
+    piano_roll_target: Option<PianoRollTarget>,
     piano_roll_widget: PianoRollWidget,
     fullscreen: bool,
     fullscreen_dirty: bool,
@@ -1690,6 +1709,7 @@ impl HarmoniqStudioApp {
             sequencer_window_open: false,
             piano_roll_hidden: false,
             piano_roll_window_open: false,
+            piano_roll_target: None,
             piano_roll_widget,
             fullscreen: false,
             fullscreen_dirty: false,
@@ -1907,8 +1927,125 @@ impl HarmoniqStudioApp {
 
         clip.sort_notes();
         self.piano_roll_widget.set_clip(clip);
+        self.piano_roll_target = Some(PianoRollTarget::ChannelRack {
+            channel_index,
+            pattern_index: self.channel_rack.active_pattern_index(),
+            step_count: steps.len(),
+            step_len_ppq: step_len,
+        });
         self.piano_roll_window_open = true;
         self.piano_roll_hidden = false;
+    }
+
+    fn open_playlist_clip_piano_roll(
+        &mut self,
+        track_id: PlaylistTrackId,
+        clip_id: PlaylistClipId,
+        pattern_id: u32,
+    ) {
+        self.playlist_view.ensure_pattern(pattern_id);
+        let ppq = self.playlist_view.ppq() as i32;
+        let mut clip = PianoRollClip::new(ppq);
+        if let Some(pattern) = self.playlist_view.pattern(pattern_id) {
+            clip.notes = pattern
+                .notes
+                .iter()
+                .map(|note| Note {
+                    id: note.id,
+                    start_ppq: note.start_ticks,
+                    dur_ppq: note.duration_ticks,
+                    pitch: note.pitch,
+                    vel: note.velocity,
+                    chan: note.channel,
+                    selected: false,
+                })
+                .collect();
+        }
+
+        if let Some(playlist_clip) = self.playlist_view.clip(track_id, clip_id) {
+            clip.loop_len_ppq = playlist_clip.duration_ticks as i64;
+        }
+
+        clip.sort_notes();
+        self.piano_roll_widget.set_clip(clip);
+        self.piano_roll_target = Some(PianoRollTarget::Playlist {
+            track_id,
+            clip_id,
+            pattern_id,
+        });
+        self.piano_roll_window_open = true;
+        self.piano_roll_hidden = false;
+    }
+
+    fn update_channel_pattern_from_piano_roll(
+        &mut self,
+        channel_index: usize,
+        pattern_index: usize,
+        step_count: usize,
+        step_len_ppq: i64,
+    ) {
+        if let Some(pattern) = self.channel_rack.pattern_mut(pattern_index) {
+            if let Some(steps) = pattern.steps.get_mut(channel_index) {
+                if steps.len() != step_count {
+                    steps.resize(step_count, false);
+                }
+                for step in steps.iter_mut() {
+                    *step = false;
+                }
+
+                for note in &self.piano_roll_widget.state().clip.notes {
+                    let step = (note.start_ppq / step_len_ppq)
+                        .clamp(0, step_count.saturating_sub(1) as i64)
+                        as usize;
+                    if let Some(slot) = steps.get_mut(step) {
+                        *slot = true;
+                    }
+                }
+            }
+        }
+    }
+
+    fn apply_piano_roll_edits(&mut self, edits: Vec<Edit>) {
+        if edits.is_empty() {
+            return;
+        }
+
+        self.piano_roll_widget.state_mut().apply_edits(&edits);
+
+        match self.piano_roll_target {
+            Some(PianoRollTarget::Playlist { pattern_id, .. }) => {
+                let notes = self
+                    .piano_roll_widget
+                    .state()
+                    .clip
+                    .notes
+                    .iter()
+                    .map(|note| PatternNote {
+                        id: note.id,
+                        start_ticks: note.start_ppq,
+                        duration_ticks: note.dur_ppq,
+                        pitch: note.pitch,
+                        velocity: note.vel,
+                        channel: note.chan,
+                    })
+                    .collect();
+                self.playlist_view.set_pattern_notes(pattern_id, notes);
+            }
+            Some(PianoRollTarget::ChannelRack {
+                channel_index,
+                pattern_index,
+                step_count,
+                step_len_ppq,
+            }) => {
+                self.update_channel_pattern_from_piano_roll(
+                    channel_index,
+                    pattern_index,
+                    step_count,
+                    step_len_ppq,
+                );
+            }
+            None => {}
+        }
     }
 
     fn process_events(&mut self) {
@@ -2886,12 +3023,16 @@ impl App for HarmoniqStudioApp {
                 .default_pos(egui::pos2(140.0, 80.0))
                 .show(ctx, |ui| {
                     let mut open_piano_roll =
-                        |track: harmoniq_playlist::ui::TrackId, _pattern: Option<u32>, clip| {
-                            tracing::info!(
-                                "Playlist requested piano roll: track={:?} clip={:?}",
-                                track,
-                                clip
-                            );
+                        |track: harmoniq_playlist::ui::TrackId, pattern: Option<u32>, clip| {
+                            let Some(pattern_id) = pattern else {
+                                tracing::info!(
+                                    "Playlist requested piano roll for non-pattern clip: track={:?} clip={:?}",
+                                    track, clip
+                                );
+                                return;
+                            };
+
+                            self.open_playlist_clip_piano_roll(track.into(), clip, pattern_id);
                         };
                     let mut import_audio = |path: PathBuf| {
                         tracing::info!("Playlist import requested: {path:?}");
@@ -2970,12 +3111,7 @@ impl App for HarmoniqStudioApp {
                 .show(ctx, |ui| {
                     self.piano_roll_widget.ui(ui);
                     let edits = self.piano_roll_widget.take_edits();
-                    if !edits.is_empty() {
-                        tracing::info!(
-                            "Piano roll produced {} edit(s) (integration pending)",
-                            edits.len()
-                        );
-                    }
+                    self.apply_piano_roll_edits(edits);
                 });
         }
 

@@ -86,6 +86,14 @@ impl ChannelRackPane {
         self.patterns.get(self.active_pattern_index)
     }
 
+    pub fn active_pattern_index(&self) -> usize {
+        self.active_pattern_index
+    }
+
+    pub fn pattern_mut(&mut self, index: usize) -> Option<&mut ChannelRackPattern> {
+        self.patterns.get_mut(index)
+    }
+
     fn draw_pattern_selector(&mut self, ui: &mut egui::Ui, palette: &HarmoniqPalette) {
         egui::Frame::none()
             .fill(palette.panel_alt)

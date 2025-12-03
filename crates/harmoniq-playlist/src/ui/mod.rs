@@ -6,7 +6,8 @@ use egui::{
 };
 
 use crate::state::{
-    AudioSourceId, Clip, ClipId, Playlist, RackSlotKind, Snap, Track, TrackId as StateTrackId,
+    AudioSourceId, Clip, ClipId, ClipKind, Playlist, RackSlotKind, Snap, Track,
+    TrackId as StateTrackId,
 };
 
 const TRACK_HEADER_HEIGHT: f32 = 68.0;
@@ -139,6 +140,7 @@ pub fn render(ui: &mut Ui, props: PlaylistProps<'_>) {
                     .playlist
                     .selection
                     .map(|(track, clip)| (TrackId(track.0), clip));
+                let playlist_ppq = props.playlist.ppq();
                 let click = draw_timeline(
                     ui,
                     &timeline_painter,
@@ -149,7 +151,7 @@ pub fn render(ui: &mut Ui, props: PlaylistProps<'_>) {
                     &mut props.playlist.tracks,
                     total_beats,
                     selection,
-                    props.playlist.ppq(),
+                    playlist_ppq,
                     props.current_time_ticks,
                     *props.snap,
                 );
@@ -172,7 +174,14 @@ pub fn render(ui: &mut Ui, props: PlaylistProps<'_>) {
 
                 if timeline_response.double_clicked() {
                     if let Some((track_id, clip_id)) = click.clicked_clip {
-                        (props.open_piano_roll)(track_id, None, clip_id);
+                        let pattern = props
+                            .playlist
+                            .clip(StateTrackId::from(track_id), clip_id)
+                            .and_then(|clip| match clip.kind {
+                                ClipKind::Pattern { pattern_id } => Some(pattern_id),
+                                _ => None,
+                            });
+                        (props.open_piano_roll)(track_id, pattern, clip_id);
                     } else if let Some((track_id, lane_id)) = click.target_lane {
                         if let Some(pointer_pos) = timeline_response.interact_pointer_pos() {
                             let beat = ((pointer_pos.x - lanes_rect.left()) / BEAT_WIDTH).max(0.0);

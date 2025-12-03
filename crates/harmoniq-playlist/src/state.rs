@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
@@ -86,6 +87,44 @@ impl Clip {
             crossfade_with: None,
             time_stretch_enabled: false,
         }
+    }
+}
+
+/// MIDI note data stored inside a pattern clip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PatternNote {
+    pub id: u64,
+    pub start_ticks: i64,
+    pub duration_ticks: i64,
+    pub pitch: u8,
+    pub velocity: u8,
+    pub channel: u8,
+}
+
+impl PatternNote {
+    pub fn end_ticks(&self) -> i64 {
+        self.start_ticks + self.duration_ticks.max(1)
+    }
+}
+
+/// In-memory pattern backing a playlist clip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Pattern {
+    pub id: u32,
+    pub notes: Vec<PatternNote>,
+}
+
+impl Pattern {
+    pub fn new(id: u32) -> Self {
+        Self {
+            id,
+            notes: Vec::new(),
+        }
+    }
+
+    pub fn set_notes(&mut self, mut notes: Vec<PatternNote>) {
+        notes.sort_by_key(|note| (note.start_ticks, note.pitch));
+        self.notes = notes;
     }
 }
 
@@ -311,6 +350,7 @@ pub struct Playlist {
     pub tracks: Vec<Track>,
     pub selection: Option<(TrackId, ClipId)>,
     pub dropped_files: Vec<PathBuf>,
+    pub patterns: HashMap<u32, Pattern>,
 }
 
 impl Playlist {
@@ -320,6 +360,7 @@ impl Playlist {
             tracks: Vec::new(),
             selection: None,
             dropped_files: Vec::new(),
+            patterns: HashMap::new(),
         };
         playlist.seed_demo_content();
         playlist
@@ -351,6 +392,36 @@ impl Playlist {
             duration_ticks: clip.duration_ticks,
             color: clip.color,
         })
+    }
+
+    pub fn clip(&self, track: TrackId, clip_id: ClipId) -> Option<&Clip> {
+        self.tracks
+            .iter()
+            .find(|t| t.id == track)
+            .and_then(|track| {
+                track
+                    .lanes
+                    .iter()
+                    .flat_map(|lane| lane.clips.iter())
+                    .find(|clip| clip.id == clip_id)
+            })
+    }
+
+    pub fn pattern(&self, id: u32) -> Option<&Pattern> {
+        self.patterns.get(&id)
+    }
+
+    pub fn pattern_mut(&mut self, id: u32) -> Option<&mut Pattern> {
+        self.patterns.get_mut(&id)
+    }
+
+    pub fn ensure_pattern(&mut self, id: u32) -> &mut Pattern {
+        self.patterns.entry(id).or_insert_with(|| Pattern::new(id))
+    }
+
+    pub fn set_pattern_notes(&mut self, id: u32, notes: Vec<PatternNote>) {
+        let pattern = self.ensure_pattern(id);
+        pattern.set_notes(notes);
     }
 
     pub fn set_selection(&mut self, track: TrackId, clip: ClipId) {
@@ -531,6 +602,7 @@ impl Playlist {
                     },
                 ),
             );
+            self.ensure_demo_pattern((index as u32) + 1, ppq as i64);
             track.add_clip_to_lane(
                 0,
                 Clip::new(
@@ -544,6 +616,7 @@ impl Playlist {
                     },
                 ),
             );
+            self.ensure_demo_pattern((index as u32) + 101, ppq as i64);
             track.add_clip_to_lane(
                 1,
                 Clip::new(
@@ -567,6 +640,32 @@ impl Playlist {
                 .rack
                 .push(RackSlot::new(2, "Delay", RackSlotKind::Send));
             self.tracks.push(track);
+        }
+    }
+
+    fn ensure_demo_pattern(&mut self, pattern_id: u32, ppq: i64) {
+        let pattern = self.patterns.entry(pattern_id).or_insert_with(|| Pattern {
+            id: pattern_id,
+            notes: Vec::new(),
+        });
+
+        if pattern.notes.is_empty() {
+            pattern.notes.push(PatternNote {
+                id: 0,
+                start_ticks: 0,
+                duration_ticks: ppq.max(1),
+                pitch: 60,
+                velocity: 100,
+                channel: 0,
+            });
+            pattern.notes.push(PatternNote {
+                id: 1,
+                start_ticks: (ppq / 2).max(1),
+                duration_ticks: (ppq / 2).max(1),
+                pitch: 64,
+                velocity: 96,
+                channel: 0,
+            });
         }
     }
 }
