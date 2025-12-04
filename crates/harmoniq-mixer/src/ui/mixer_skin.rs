@@ -1,3 +1,7 @@
+use crate::{
+    state::{ChannelId, SendId},
+    MixerCallbacks,
+};
 use egui::{
     self, Align, Align2, Color32, Frame, Layout, Margin, Pos2, Rect, Response, Rounding, Sense,
     Stroke, Ui, Vec2,
@@ -5,6 +9,7 @@ use egui::{
 
 const DB_MIN: f32 = -60.0;
 const DB_MAX: f32 = 12.0;
+const MAX_RACK_SLOTS: usize = 10;
 
 /// Insert slot entry metadata for the rack section.
 #[derive(Clone, Debug, PartialEq)]
@@ -16,6 +21,7 @@ pub struct Slot {
 /// Send slot entry metadata for the rack section.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SendSlot {
+    pub id: SendId,
     pub dest: String,
     pub gain: f32,
     pub pre: bool,
@@ -25,6 +31,7 @@ pub struct SendSlot {
 /// Mixer strip data model consumed by the UI skin.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StripModel {
+    pub channel_id: ChannelId,
     pub name: String,
     pub color: Color32,
     pub meter_l: f32,
@@ -313,7 +320,7 @@ pub struct MixerUi {
 
 impl MixerUi {
     /// Render the mixer UI using egui primitives.
-    pub fn ui(&mut self, ui: &mut egui::Ui) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, callbacks: &mut MixerCallbacks) {
         self.zoom = self.zoom.clamp(0.85, 1.35);
         self.theme.set_zoom(self.zoom);
 
@@ -427,6 +434,7 @@ impl MixerUi {
                                             self.show_meter_bridge,
                                             alternate,
                                             false,
+                                            callbacks,
                                         );
                                     }
                                     strip_widget(
@@ -438,6 +446,7 @@ impl MixerUi {
                                         self.show_meter_bridge,
                                         false,
                                         true,
+                                        callbacks,
                                     );
                                 });
                             });
@@ -455,6 +464,7 @@ fn strip_widget(
     show_meter_bridge: bool,
     alternate: bool,
     is_master: bool,
+    callbacks: &mut MixerCallbacks,
 ) {
     let width = if is_master {
         sizes.strip_width_wide
@@ -536,7 +546,7 @@ fn strip_widget(
                 theme.paint_clip_led(ui.painter(), resp.rect, strip.clip);
             }
 
-            strip_rack(ui, strip, theme, sizes, density);
+            strip_rack(ui, strip, theme, sizes, density, callbacks);
             fader_strip(ui, strip, theme, sizes, density);
 
             let footer_height = sizes.button_height * 1.15;
@@ -598,16 +608,8 @@ fn strip_rack(
     theme: &MixerTheme,
     sizes: ScaledSizes,
     density: Density,
+    callbacks: &mut MixerCallbacks,
 ) {
-    let max_inserts = match density {
-        Density::Narrow => 3,
-        Density::Wide => 5,
-    };
-    let max_sends = match density {
-        Density::Narrow => 2,
-        Density::Wide => 4,
-    };
-
     Frame::none()
         .fill(theme.colors.rack_panel)
         .rounding(Rounding::same(theme.rounding() * 0.6))
@@ -615,82 +617,406 @@ fn strip_rack(
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing = Vec2::new(sizes.spacing, sizes.spacing * 0.6);
             rack_section(ui, "INSERTS", theme, sizes);
-            for slot in strip.inserts.iter_mut().take(max_inserts) {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = Vec2::new(sizes.spacing * 0.5, 0.0);
-                    let toggle =
-                        rack_toggle(ui, &mut slot.on, theme, sizes, Some(slot.name.as_str()));
-                    toggle.on_hover_text("Toggle insert");
-                    ui.label(
-                        egui::RichText::new(&slot.name)
-                            .size(11.2 * sizes.zoom)
-                            .color(theme.colors.text_primary),
-                    );
-                });
-            }
-            if strip.inserts.len() > max_inserts {
-                ui.label(
-                    egui::RichText::new(format!("+{} more…", strip.inserts.len() - max_inserts))
-                        .small()
-                        .color(theme.colors.text_dim),
-                );
-            }
+            inserts_section(ui, strip, theme, sizes, density, callbacks);
 
             ui.add_space(sizes.spacing);
 
             rack_section(ui, "SENDS", theme, sizes);
-            for slot in strip.sends.iter_mut().take(max_sends) {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = Vec2::new(sizes.spacing * 0.5, 0.0);
-                    let toggle = rack_toggle(ui, &mut slot.on, theme, sizes, None);
-                    toggle.on_hover_text("Toggle send");
+            sends_section(ui, strip, theme, sizes, density, callbacks);
+        });
+}
 
-                    let tag = if slot.pre { "PRE" } else { "POST" };
-                    let (tag_rect, _tag_response) = ui.allocate_exact_size(
-                        Vec2::new(34.0 * sizes.zoom, sizes.rack_row_height),
-                        Sense::hover(),
-                    );
-                    ui.painter().rect_filled(
-                        tag_rect,
-                        Rounding::same(theme.rounding() * 0.2),
-                        theme.colors.button_badge,
-                    );
-                    ui.painter().text(
-                        tag_rect.center(),
-                        Align2::CENTER_CENTER,
-                        tag,
-                        egui::FontId::proportional(10.0 * sizes.zoom),
-                        theme.colors.text_dim,
-                    );
+#[derive(Clone, Debug)]
+struct InsertDragPayload {
+    channel: ChannelId,
+    slot: usize,
+}
 
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing = Vec2::new(0.0, sizes.spacing * 0.3);
-                        ui.label(
-                            egui::RichText::new(&slot.dest)
-                                .size(11.0 * sizes.zoom)
-                                .color(theme.colors.text_primary),
+#[derive(Clone, Debug)]
+struct SendDragPayload {
+    target: String,
+}
+
+fn insert_drag_id() -> egui::Id {
+    egui::Id::new("mixer_skin_insert_drag")
+}
+
+fn send_drag_id() -> egui::Id {
+    egui::Id::new("mixer_skin_send_drag")
+}
+
+fn current_insert_drag(ctx: &egui::Context) -> Option<InsertDragPayload> {
+    ctx.data_mut(|data| data.get_temp(insert_drag_id()))
+}
+
+fn clear_insert_drag(ctx: &egui::Context) {
+    ctx.data_mut(|data| data.remove::<InsertDragPayload>(insert_drag_id()));
+}
+
+fn set_insert_drag(ctx: &egui::Context, payload: InsertDragPayload) {
+    ctx.data_mut(|data| data.insert_temp(insert_drag_id(), payload));
+}
+
+fn current_send_drag(ctx: &egui::Context) -> Option<SendDragPayload> {
+    ctx.data_mut(|data| data.get_temp(send_drag_id()))
+}
+
+fn clear_send_drag(ctx: &egui::Context) {
+    ctx.data_mut(|data| data.remove::<SendDragPayload>(send_drag_id()));
+}
+
+fn set_send_drag(ctx: &egui::Context, payload: SendDragPayload) {
+    ctx.data_mut(|data| data.insert_temp(send_drag_id(), payload));
+}
+
+fn inserts_section(
+    ui: &mut Ui,
+    strip: &mut StripModel,
+    theme: &MixerTheme,
+    sizes: ScaledSizes,
+    density: Density,
+    callbacks: &mut MixerCallbacks,
+) {
+    let mut drop_request: Option<(InsertDragPayload, usize)> = None;
+    let mut remove_request: Option<usize> = None;
+    let slot_height = sizes.rack_row_height
+        * match density {
+            Density::Narrow => 1.0,
+            Density::Wide => 1.1,
+        };
+
+    egui::ScrollArea::vertical()
+        .id_source(("insert_section", strip.channel_id))
+        .max_height(slot_height * MAX_RACK_SLOTS as f32 + sizes.spacing * 2.0)
+        .show(ui, |ui| {
+            for index in 0..MAX_RACK_SLOTS {
+                let row_resp = Frame::none().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing =
+                            Vec2::new(sizes.spacing * 0.45, sizes.spacing * 0.25);
+
+                        let handle = ui.add_sized(
+                            Vec2::new(16.0 * sizes.zoom, slot_height),
+                            egui::Label::new("☰").sense(Sense::drag()),
                         );
-                        let slider = egui::Slider::new(&mut slot.gain, 0.0..=1.0)
-                            .logarithmic(true)
-                            .show_value(false)
-                            .step_by(0.01);
-                        ui.add_sized(Vec2::new(70.0 * sizes.zoom, sizes.spacing * 3.4), slider);
+
+                        if handle.drag_started() && index < strip.inserts.len() {
+                            set_insert_drag(
+                                ui.ctx(),
+                                InsertDragPayload {
+                                    channel: strip.channel_id,
+                                    slot: index,
+                                },
+                            );
+                        }
+                        if handle.dragged() {
+                            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                        }
+
+                        match strip.inserts.get_mut(index) {
+                            Some(slot) => {
+                                let toggle = rack_toggle(ui, &mut slot.on, theme, sizes, None);
+                                if toggle.clicked() {
+                                    (callbacks.set_insert_bypass)(
+                                        strip.channel_id,
+                                        index,
+                                        !slot.on,
+                                    );
+                                }
+                                toggle.on_hover_text("Toggle insert bypass");
+
+                                let label_resp = ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&slot.name)
+                                            .size(11.2 * sizes.zoom)
+                                            .color(theme.colors.text_primary),
+                                    )
+                                    .sense(Sense::click()),
+                                );
+                                if label_resp.double_clicked() {
+                                    (callbacks.open_insert_ui)(strip.channel_id, index);
+                                }
+
+                                label_resp.context_menu(|ui| {
+                                    if ui.button("Open").clicked() {
+                                        (callbacks.open_insert_ui)(strip.channel_id, index);
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("Replace").clicked() {
+                                        (callbacks.open_insert_browser)(
+                                            strip.channel_id,
+                                            Some(index),
+                                        );
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("Remove").clicked() {
+                                        remove_request = Some(index);
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("Add Insert").clicked() {
+                                        (callbacks.open_insert_browser)(
+                                            strip.channel_id,
+                                            Some(index + 1),
+                                        );
+                                        ui.close_menu();
+                                    }
+                                });
+                            }
+                            None => {
+                                let add_resp = ui.add_sized(
+                                    Vec2::new(88.0 * sizes.zoom, slot_height),
+                                    egui::Button::new("+ Add"),
+                                );
+                                if add_resp.clicked() {
+                                    (callbacks.open_insert_browser)(strip.channel_id, Some(index));
+                                }
+                            }
+                        }
                     });
-                    ui.label(
-                        egui::RichText::new(format!("{:.0}%", slot.gain * 100.0))
-                            .small()
-                            .color(theme.colors.text_dim),
-                    );
                 });
-            }
-            if strip.sends.len() > max_sends {
-                ui.label(
-                    egui::RichText::new(format!("+{} more…", strip.sends.len() - max_sends))
-                        .small()
-                        .color(theme.colors.text_dim),
-                );
+
+                if let Some(payload) = current_insert_drag(ui.ctx()) {
+                    let hovering = ui.rect_contains_pointer(row_resp.response.rect);
+                    if hovering {
+                        ui.painter().rect_stroke(
+                            row_resp.response.rect,
+                            Rounding::same(theme.rounding() * 0.2),
+                            Stroke::new(1.1, theme.colors.button_badge),
+                        );
+
+                        if ui.input(|i| i.pointer.any_released()) {
+                            drop_request = Some((payload, index));
+                        }
+                    }
+                }
             }
         });
+
+    if let Some(idx) = remove_request {
+        if idx < strip.inserts.len() {
+            strip.inserts.remove(idx);
+            (callbacks.remove_insert)(strip.channel_id, idx);
+        }
+    }
+
+    if let Some((payload, target)) = drop_request {
+        clear_insert_drag(ui.ctx());
+        if payload.channel == strip.channel_id {
+            if payload.slot < strip.inserts.len() {
+                let slot = strip.inserts.remove(payload.slot);
+                let mut dest = target.min(strip.inserts.len());
+                if dest > payload.slot {
+                    dest = dest.saturating_sub(1);
+                }
+                dest = dest.min(strip.inserts.len());
+                strip.inserts.insert(dest, slot);
+                (callbacks.reorder_insert)(strip.channel_id, payload.slot, dest);
+            }
+        } else {
+            (callbacks.open_insert_browser)(strip.channel_id, Some(target));
+        }
+    }
+}
+
+fn sends_section(
+    ui: &mut Ui,
+    strip: &mut StripModel,
+    theme: &MixerTheme,
+    sizes: ScaledSizes,
+    density: Density,
+    callbacks: &mut MixerCallbacks,
+) {
+    let slot_height = sizes.rack_row_height
+        * match density {
+            Density::Narrow => 1.0,
+            Density::Wide => 1.1,
+        };
+    let mut drop_request: Option<(SendDragPayload, usize)> = None;
+
+    egui::ScrollArea::vertical()
+        .id_source(("sends_section", strip.channel_id))
+        .max_height(slot_height * MAX_RACK_SLOTS as f32 + sizes.spacing * 2.0)
+        .show(ui, |ui| {
+            for index in 0..MAX_RACK_SLOTS {
+                let row_resp = Frame::none().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing =
+                            Vec2::new(sizes.spacing * 0.45, sizes.spacing * 0.2);
+
+                        if let Some(send) = strip.sends.get_mut(index) {
+                            let toggle = rack_toggle(ui, &mut send.on, theme, sizes, None);
+                            if toggle.clicked() {
+                                let level = if send.on { send.gain } else { 0.0 };
+                                (callbacks.configure_send)(
+                                    strip.channel_id,
+                                    send.id,
+                                    level,
+                                    send.pre,
+                                );
+                            }
+                            toggle.on_hover_text("Toggle send");
+
+                            let tag_label = if send.pre { "PRE" } else { "POST" };
+                            let mut badge = ui.add_sized(
+                                Vec2::new(38.0 * sizes.zoom, slot_height),
+                                egui::SelectableLabel::new(send.pre, tag_label),
+                            );
+                            if badge.clicked() {
+                                send.pre = !send.pre;
+                                (callbacks.configure_send)(
+                                    strip.channel_id,
+                                    send.id,
+                                    send.gain,
+                                    send.pre,
+                                );
+                            }
+                            badge.on_hover_text("Toggle pre/post");
+
+                            let drag_handle = ui.add_sized(
+                                Vec2::new(18.0 * sizes.zoom, slot_height),
+                                egui::Label::new("↕").sense(Sense::drag()),
+                            );
+                            if drag_handle.drag_started() {
+                                set_send_drag(
+                                    ui.ctx(),
+                                    SendDragPayload {
+                                        target: send.dest.clone(),
+                                    },
+                                );
+                            }
+                            if drag_handle.dragged() {
+                                ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                            }
+
+                            let dest_resp = egui::ComboBox::from_id_source((
+                                strip.channel_id,
+                                "send_dest",
+                                index,
+                            ))
+                            .selected_text(send.dest.clone())
+                            .show_ui(ui, |ui| {
+                                for slot in 0..MAX_RACK_SLOTS {
+                                    let label = format!("Bus {}", (b'A' + slot as u8) as char);
+                                    let selected = send.dest == label;
+                                    if ui.selectable_label(selected, &label).clicked() {
+                                        send.dest = label;
+                                        (callbacks.configure_send)(
+                                            strip.channel_id,
+                                            send.id,
+                                            send.gain,
+                                            send.pre,
+                                        );
+                                        ui.close_menu();
+                                    }
+                                }
+                            })
+                            .response;
+
+                            if dest_resp.hovered() {
+                                if let Some(payload) = current_send_drag(ui.ctx()) {
+                                    if ui.input(|i| i.pointer.any_released()) {
+                                        send.dest = payload.target;
+                                        (callbacks.configure_send)(
+                                            strip.channel_id,
+                                            send.id,
+                                            send.gain,
+                                            send.pre,
+                                        );
+                                        clear_send_drag(ui.ctx());
+                                    }
+                                }
+                            }
+
+                            let mut level = send.gain;
+                            let slider = egui::Slider::new(&mut level, 0.0..=1.0)
+                                .show_value(false)
+                                .step_by(0.01)
+                                .clamp_to_range(true);
+                            let resp = ui.add_sized(
+                                Vec2::new(80.0 * sizes.zoom, sizes.spacing * 3.0),
+                                slider,
+                            );
+                            if resp.changed() {
+                                send.gain = level;
+                                let level = if send.on { send.gain } else { 0.0 };
+                                (callbacks.configure_send)(
+                                    strip.channel_id,
+                                    send.id,
+                                    level,
+                                    send.pre,
+                                );
+                            }
+                            ui.label(
+                                egui::RichText::new(format!("{:.0}%", send.gain * 100.0))
+                                    .small()
+                                    .color(theme.colors.text_dim),
+                            );
+                        } else {
+                            let add_resp = ui.add_sized(
+                                Vec2::new(110.0 * sizes.zoom, slot_height),
+                                egui::Button::new("+ Add Send"),
+                            );
+                            if add_resp.clicked() {
+                                strip.sends.push(SendSlot {
+                                    id: index as SendId,
+                                    dest: format!("Bus {}", (b'A' + index as u8) as char),
+                                    gain: 0.0,
+                                    pre: false,
+                                    on: true,
+                                });
+                                (callbacks.configure_send)(
+                                    strip.channel_id,
+                                    index as SendId,
+                                    0.0,
+                                    false,
+                                );
+                            }
+
+                            if let Some(payload) = current_send_drag(ui.ctx()) {
+                                if add_resp.hovered() && ui.input(|i| i.pointer.any_released()) {
+                                    drop_request = Some((payload, index));
+                                }
+                            }
+                        }
+                    });
+                });
+
+                if let Some(payload) = current_send_drag(ui.ctx()) {
+                    if ui.rect_contains_pointer(row_resp.response.rect)
+                        && ui.input(|i| i.pointer.any_released())
+                    {
+                        drop_request = Some((payload, index));
+                    }
+                }
+            }
+        });
+
+    if let Some((payload, index)) = drop_request {
+        if index < strip.sends.len() {
+            strip.sends[index].dest = payload.target.clone();
+            let level = if strip.sends[index].on {
+                strip.sends[index].gain
+            } else {
+                0.0
+            };
+            (callbacks.configure_send)(
+                strip.channel_id,
+                strip.sends[index].id,
+                level,
+                strip.sends[index].pre,
+            );
+        } else if index < MAX_RACK_SLOTS {
+            strip.sends.push(SendSlot {
+                id: index as SendId,
+                dest: payload.target,
+                gain: 0.0,
+                pre: false,
+                on: true,
+            });
+            (callbacks.configure_send)(strip.channel_id, index as SendId, 0.0, false);
+        }
+        clear_send_drag(ui.ctx());
+    }
 }
 
 fn rack_section(ui: &mut Ui, title: &str, theme: &MixerTheme, sizes: ScaledSizes) {
@@ -1046,12 +1372,13 @@ pub fn run_demo() {
 
     struct DemoApp {
         mixer: MixerUi,
+        callbacks: MixerCallbacks,
     }
 
     impl eframe::App for DemoApp {
         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
             egui::CentralPanel::default().show(ctx, |ui| {
-                self.mixer.ui(ui);
+                self.mixer.ui(ui, &mut self.callbacks);
             });
         }
     }
@@ -1059,6 +1386,7 @@ pub fn run_demo() {
     let theme = MixerTheme::default();
     let strips = (0..12)
         .map(|i| StripModel {
+            channel_id: i as ChannelId + 1,
             name: format!("CH {:02}", i + 1),
             color: Color32::from_rgb(0x46, 0x50 + (i as u8 * 3), 0x5A + (i as u8 * 2)),
             meter_l: (0.25 + 0.03 * i as f32).fract(),
@@ -1080,6 +1408,7 @@ pub fn run_demo() {
                 .collect(),
             sends: (0..4)
                 .map(|n| SendSlot {
+                    id: n as SendId,
                     dest: format!("Bus {}", (b'A' + n as u8) as char),
                     gain: 0.45 + 0.1 * n as f32,
                     pre: n % 2 == 0,
@@ -1090,6 +1419,7 @@ pub fn run_demo() {
         .collect();
 
     let master = StripModel {
+        channel_id: 0,
         name: "MASTER".into(),
         color: Color32::from_rgb(0x64, 0x80, 0x90),
         meter_l: 0.82,
@@ -1114,12 +1444,15 @@ pub fn run_demo() {
             },
         ],
         sends: vec![SendSlot {
+            id: 0,
             dest: "Phones".into(),
             gain: 0.7,
             pre: false,
             on: true,
         }],
     };
+
+    let callbacks = MixerCallbacks::noop();
 
     let mixer = MixerUi {
         strips,
@@ -1134,6 +1467,6 @@ pub fn run_demo() {
     let _ = eframe::run_native(
         "Mixer Skin Demo",
         options,
-        Box::new(move |_| Box::new(DemoApp { mixer })),
+        Box::new(move |_| Box::new(DemoApp { mixer, callbacks })),
     );
 }
