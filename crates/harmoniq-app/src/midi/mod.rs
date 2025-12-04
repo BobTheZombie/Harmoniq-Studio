@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
 use harmoniq_engine::{
-    AutomationEvent, EngineCommand, EngineCommandQueue, MidiEvent, MidiTimestamp,
+    AutomationEvent, EngineCommand, EngineCommandQueue, MidiEvent, MidiTimestamp, PluginId,
 };
 use harmoniq_midi::{
     config as midi_config,
@@ -111,6 +111,10 @@ pub fn open_midi_input(
     input.ignore(Ignore::None);
 
     let ports = input.ports();
+    let port_names: Vec<String> = ports
+        .iter()
+        .map(|port| input.port_name(port).unwrap_or_else(|_| "Unknown".to_string()))
+        .collect();
     if ports.is_empty() {
         anyhow::bail!("no MIDI inputs available");
     }
@@ -126,15 +130,12 @@ pub fn open_midi_input(
             return Ok(None);
         };
         let requested_lower = requested_name.trim().to_lowercase();
-        if let Some((port_index, port)) = ports.iter().enumerate().find(|(_idx, port)| {
-            input
-                .port_name(port)
-                .map(|name| name.to_lowercase().contains(&requested_lower))
-                .unwrap_or(false)
-        }) {
-            let name = input
-                .port_name(port)
-                .unwrap_or_else(|_| "Unknown".to_string());
+        if let Some((port_index, name)) = port_names
+            .iter()
+            .enumerate()
+            .find(|(_idx, name)| name.to_lowercase().contains(&requested_lower))
+        {
+            let name = name.clone();
             configs.push(MidiInputConfig {
                 enabled: true,
                 name,
@@ -153,9 +154,13 @@ pub fn open_midi_input(
     let dispatcher = spawn_dispatcher(consumer, command_queue.clone(), mode, Arc::clone(&stop))?;
 
     let start = Instant::now();
-    let stop_flag = Arc::clone(&stop);
     let mut connections = Vec::new();
     for (index, mut cfg) in configs.into_iter().enumerate() {
+        let mut input =
+            MidiInput::new("harmoniq-midi").context("failed to open MIDI input")?;
+        input.ignore(Ignore::None);
+        let ports = input.ports();
+
         let Some(port) = ports.get(cfg.port_index) else {
             warn!(
                 index = cfg.port_index,
@@ -165,9 +170,10 @@ pub fn open_midi_input(
         };
 
         if cfg.name.is_empty() {
-            cfg.name = input
-                .port_name(port)
-                .unwrap_or_else(|_| format!("Input #{}", cfg.port_index + 1));
+            cfg.name = port_names
+                .get(cfg.port_index)
+                .cloned()
+                .unwrap_or_else(|| format!("Input #{}", cfg.port_index + 1));
         }
 
         let stop_flag = Arc::clone(&stop);
@@ -515,7 +521,7 @@ fn resolve_midi_learn(event: &MidiEvent) -> Option<AutomationEvent> {
     let binding = map.read().resolve(&msg)?.clone();
 
     Some(AutomationEvent {
-        plugin_id: binding.target_param.0,
+        plugin_id: PluginId(binding.target_param.0),
         parameter: binding.target_param.1 as usize,
         value: (*value as f32) / 127.0,
         sample_offset: *sample_offset,
