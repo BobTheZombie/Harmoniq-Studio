@@ -6,15 +6,43 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
-use harmoniq_engine::{EngineCommand, EngineCommandQueue, MidiEvent, MidiTimestamp};
-use harmoniq_midi::{config as midi_config, device::MidiInputConfig};
+use harmoniq_engine::{
+    AutomationEvent, EngineCommand, EngineCommandQueue, MidiEvent, MidiTimestamp,
+};
+use harmoniq_midi::{
+    config as midi_config,
+    device::MidiInputConfig,
+    learn::{MidiLearnMap, MidiLearnMapEntry},
+};
 use midir::{Ignore, MidiInput, MidiInputConnection};
+use once_cell::sync::Lazy;
+use parking_lot::RwLock;
 use ringbuf::{HeapConsumer, HeapRb};
 use tracing::{info, warn};
 use winit::keyboard::{KeyCode, ModifiersState};
 
 pub mod qwerty;
 pub use qwerty::QwertyKeyboardInput;
+
+static MIDI_LEARN_MAP: Lazy<Arc<RwLock<MidiLearnMap>>> =
+    Lazy::new(|| Arc::new(RwLock::new(MidiLearnMap::default())));
+
+pub fn midi_learn_map() -> Arc<RwLock<MidiLearnMap>> {
+    Arc::clone(&MIDI_LEARN_MAP)
+}
+
+pub fn set_midi_learn_map(map: MidiLearnMap) {
+    let mut guard = MIDI_LEARN_MAP.write();
+    *guard = map;
+}
+
+pub fn upsert_midi_learn_binding(entry: MidiLearnMapEntry) {
+    MIDI_LEARN_MAP.write().upsert(entry);
+}
+
+pub fn current_midi_learn_map() -> MidiLearnMap {
+    MIDI_LEARN_MAP.read().clone()
+}
 
 const MIDI_QUEUE_CAPACITY: usize = 1024;
 const MIDI_DISPATCH_BATCH: usize = 64;
@@ -192,6 +220,7 @@ fn spawn_dispatcher(
         .spawn(move || {
             let mut staging = Vec::with_capacity(MIDI_DISPATCH_BATCH);
             let mut translated = Vec::with_capacity(MIDI_DISPATCH_BATCH);
+            let mut automation = Vec::with_capacity(MIDI_DISPATCH_BATCH);
             while !stop.load(Ordering::Acquire) {
                 staging.clear();
                 drain_queue(&mut consumer, &mut staging, MIDI_DISPATCH_BATCH);
@@ -201,32 +230,55 @@ fn spawn_dispatcher(
                 }
 
                 translated.clear();
+                automation.clear();
                 for event in staging.drain(..) {
                     if let Some(parsed) = parse_midi_event(&event, &mode) {
+                        if let Some(mapped) = resolve_midi_learn(&parsed) {
+                            automation.push(mapped);
+                        }
                         translated.push(parsed);
                     }
                 }
 
-                if translated.is_empty() {
+                if translated.is_empty() && automation.is_empty() {
                     continue;
                 }
 
-                if let Err(err) = queue.try_send(EngineCommand::SubmitMidi(translated.clone())) {
-                    warn!(?err, "failed to enqueue MIDI event batch");
+                if !translated.is_empty()
+                    && queue
+                        .try_send(EngineCommand::SubmitMidi(translated.clone()))
+                        .is_err()
+                {
+                    warn!("failed to enqueue MIDI event batch");
+                }
+
+                if !automation.is_empty()
+                    && queue
+                        .try_send(EngineCommand::SubmitAutomation(automation.clone()))
+                        .is_err()
+                {
+                    warn!("failed to enqueue automation from MIDI learn");
                 }
             }
 
             // Drain remaining events on shutdown.
             staging.clear();
             translated.clear();
+            automation.clear();
             drain_queue(&mut consumer, &mut staging, usize::MAX);
             for event in staging.drain(..) {
                 if let Some(parsed) = parse_midi_event(&event, &mode) {
+                    if let Some(mapped) = resolve_midi_learn(&parsed) {
+                        automation.push(mapped);
+                    }
                     translated.push(parsed);
                 }
             }
             if !translated.is_empty() {
                 let _ = queue.try_send(EngineCommand::SubmitMidi(translated));
+            }
+            if !automation.is_empty() {
+                let _ = queue.try_send(EngineCommand::SubmitAutomation(automation));
             }
         })
         .map_err(|err| anyhow!("failed to spawn MIDI dispatcher thread: {err}"))
@@ -442,6 +494,32 @@ fn parse_midi_event(event: &QueuedMidiEvent, mode: &MidiChannelMode) -> Option<M
         }
         _ => None,
     }
+}
+
+fn resolve_midi_learn(event: &MidiEvent) -> Option<AutomationEvent> {
+    let MidiEvent::ControlChange {
+        channel,
+        control,
+        value,
+        sample_offset,
+        ..
+    } = event
+    else {
+        return None;
+    };
+
+    let status = 0xB0 | (channel & 0x0F);
+    let msg = [status, *control, *value];
+
+    let map = midi_learn_map();
+    let binding = map.read().resolve(&msg)?.clone();
+
+    Some(AutomationEvent {
+        plugin_id: binding.target_param.0,
+        parameter: binding.target_param.1 as usize,
+        value: (*value as f32) / 127.0,
+        sample_offset: *sample_offset,
+    })
 }
 
 #[cfg(test)]

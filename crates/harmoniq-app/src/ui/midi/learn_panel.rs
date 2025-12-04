@@ -1,8 +1,9 @@
 use eframe::egui;
 use harmoniq_midi::learn::{MidiLearnMap, MidiLearnMapEntry};
 
+use crate::midi;
+
 /// Panel displaying MIDI learn bindings.
-#[derive(Default)]
 pub struct MidiLearnPanel {
     is_open: bool,
     map: MidiLearnMap,
@@ -10,6 +11,15 @@ pub struct MidiLearnPanel {
 }
 
 impl MidiLearnPanel {
+    /// Construct a new panel, initialising the view from the shared MIDI learn map.
+    pub fn new() -> Self {
+        Self {
+            is_open: false,
+            map: midi::current_midi_learn_map(),
+            last_message: None,
+        }
+    }
+
     /// Toggle the panel.
     pub fn toggle(&mut self) {
         self.is_open = !self.is_open;
@@ -63,11 +73,19 @@ impl MidiLearnPanel {
 
     /// Replace the mapping.
     pub fn set_map(&mut self, map: MidiLearnMap) {
+        midi::set_midi_learn_map(map.clone());
         self.map = map;
     }
 
     /// Register a new binding.
     pub fn add_binding(&mut self, entry: MidiLearnMapEntry) {
+        midi::upsert_midi_learn_binding(entry.clone());
         self.map.upsert(entry);
+    }
+}
+
+impl Default for MidiLearnPanel {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -97,6 +97,7 @@ pub enum EngineCommand {
     RegisterAudioSource(AudioSourceId, AudioClip),
     ReplaceGraph(GraphHandle),
     SubmitMidi(Vec<MidiEvent>),
+    SubmitAutomation(Vec<AutomationEvent>),
     PlaySoundTest(AudioClip),
 }
 
@@ -148,6 +149,7 @@ pub struct HarmoniqEngine {
     rt_snapshot: ArcSwap<RtBlockSnapshot>,
     automation_block: Vec<Vec<AutomationEvent>>,
     midi_block: Vec<MidiEvent>,
+    learn_automation: Vec<AutomationEvent>,
     automations: RwLock<HashMap<PluginId, AutomationLane>>,
     latencies: RwLock<HashMap<PluginId, usize>>,
     delay_lines: HashMap<PluginId, Box<DelayCompensator>>,
@@ -216,6 +218,7 @@ impl HarmoniqEngine {
             rt_snapshot: ArcSwap::from_pointee(RtBlockSnapshot::default()),
             automation_block: Vec::new(),
             midi_block: Vec::new(),
+            learn_automation: Vec::new(),
             config,
             tone_shaper,
             automations: RwLock::new(HashMap::new()),
@@ -603,6 +606,9 @@ impl HarmoniqEngine {
             }
             EngineCommand::ReplaceGraph(graph) => self.replace_graph(graph)?,
             EngineCommand::SubmitMidi(events) => self.enqueue_midi(events, block_start_samples),
+            EngineCommand::SubmitAutomation(events) => {
+                self.learn_automation.extend(events);
+            }
             EngineCommand::PlaySoundTest(clip) => {
                 self.sound_tests.push(ClipPlayback::new(clip));
             }
@@ -1080,6 +1086,23 @@ impl HarmoniqEngine {
         }
     }
 
+    fn append_learned_automation(&mut self, plugin_ids: &[PluginId]) {
+        if self.learn_automation.is_empty() {
+            return;
+        }
+
+        self.automation_block
+            .resize_with(plugin_ids.len(), Vec::new);
+
+        for event in self.learn_automation.drain(..) {
+            if let Some(index) = plugin_ids.iter().position(|id| *id == event.plugin_id) {
+                if let Some(bucket) = self.automation_block.get_mut(index) {
+                    bucket.push(event);
+                }
+            }
+        }
+    }
+
     fn fill_midi_events_for_block(&mut self, block_start_samples: u64, block_len: u32) {
         self.midi_block.clear();
         let slice = slice_events_for_block(&self.midi_lane, block_start_samples, block_len);
@@ -1194,6 +1217,7 @@ impl HarmoniqEngine {
         drop(latencies_guard);
 
         self.fill_automation_events_for_block(&plugin_ids, block_start, block_len);
+        self.append_learned_automation(&plugin_ids);
         let max_latency = latencies.iter().copied().max().unwrap_or(0);
 
         let mixer_ptr = NonNull::from(&mut self.mixer);
