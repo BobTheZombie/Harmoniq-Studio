@@ -1,17 +1,16 @@
 use std::sync::Arc;
 
-use anyhow::Context;
 use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};
 
 /// Handle to an open MIDI output connection.
 pub struct MidiOutputHandle {
     name: Arc<str>,
-    connection: MidiOutputConnection<()>,
+    connection: MidiOutputConnection,
 }
 
 impl MidiOutputHandle {
     /// Create a new handle from an existing connection.
-    pub fn new(name: impl Into<Arc<str>>, connection: MidiOutputConnection<()>) -> Self {
+    pub fn new(name: impl Into<Arc<str>>, connection: MidiOutputConnection) -> Self {
         Self {
             name: name.into(),
             connection,
@@ -32,12 +31,17 @@ impl MidiOutputHandle {
 }
 
 /// Platform MIDI output helper based on the `midir` crate.
-#[derive(Default)]
 pub struct MidiOutputManager {
     output: MidiOutput,
 }
 
 impl MidiOutputManager {
+    /// Initialize a new MIDI output manager.
+    pub fn new() -> anyhow::Result<Self> {
+        let output = MidiOutput::new("harmoniq-midi")?;
+        Ok(Self { output })
+    }
+
     /// Enumerate available output port names.
     pub fn enumerate(&self) -> anyhow::Result<Vec<String>> {
         let mut names = Vec::new();
@@ -64,7 +68,13 @@ impl MidiOutputManager {
         let conn = self
             .output
             .connect(port, "harmoniq-midi-output")
-            .context("failed to open MIDI output")?;
+            .map_err(|err| anyhow::anyhow!("failed to open MIDI output: {err}"))?;
         Ok(MidiOutputHandle::new(name, conn))
+    }
+}
+
+impl Default for MidiOutputManager {
+    fn default() -> Self {
+        Self::new().expect("failed to initialize MIDI output")
     }
 }
