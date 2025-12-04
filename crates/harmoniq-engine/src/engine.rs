@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -26,6 +26,7 @@ use crate::{
     plugin::{MidiEvent, PluginDescriptor, PluginId},
     rt::{AudioMetrics, AudioMetricsCollector},
     rt_bridge::RtBridge,
+    sched::events::{slice_for_block as slice_events_for_block, Ev as ScheduledEvent, EventLane},
     scratch::RtAllocGuard,
     tone::ToneShaper,
     transport::Transport as TransportMetrics,
@@ -39,6 +40,7 @@ use log::warn;
 
 const COMMAND_QUEUE_CAPACITY: usize = 1024;
 const METRICS_HISTORY_CAPACITY: usize = 512;
+const MIDI_EVENT_CAPACITY: usize = 4096;
 
 /// Transport state shared with UI and sequencing components.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,7 +142,9 @@ pub struct HarmoniqEngine {
     playlist_audio: RwLock<HashMap<AudioSourceId, AudioClip>>,
     transport_metrics: Arc<TransportMetrics>,
     command_queue: Arc<ArrayQueue<EngineCommand>>,
-    pending_midi: Mutex<Vec<MidiEvent>>,
+    midi_lane: EventLane,
+    midi_capacity: usize,
+    midi_lane_warned_overflow: AtomicBool,
     rt_snapshot: ArcSwap<RtBlockSnapshot>,
     automation_block: Vec<Vec<AutomationEvent>>,
     midi_block: Vec<MidiEvent>,
@@ -192,6 +196,7 @@ impl HarmoniqEngine {
         let mixer_ui = MixerUiState::demo();
         #[cfg(feature = "mixer_api")]
         let mixer_handle = EngineMixerHandle::new(4096);
+        let midi_capacity = MIDI_EVENT_CAPACITY;
         let mut engine = Self {
             master_buffer: Mutex::new(AudioBuffer::from_config(&config)),
             processors: RwLock::new(HashMap::new()),
@@ -205,7 +210,9 @@ impl HarmoniqEngine {
             playlist_audio: RwLock::new(HashMap::new()),
             transport_metrics: Arc::clone(&transport_metrics),
             command_queue,
-            pending_midi: Mutex::new(Vec::new()),
+            midi_lane: EventLane::with_capacity(midi_capacity),
+            midi_capacity,
+            midi_lane_warned_overflow: AtomicBool::new(false),
             rt_snapshot: ArcSwap::from_pointee(RtBlockSnapshot::default()),
             automation_block: Vec::new(),
             midi_block: Vec::new(),
@@ -264,7 +271,9 @@ impl HarmoniqEngine {
     }
 
     pub fn reset_render_state(&mut self) -> anyhow::Result<()> {
-        self.pending_midi.lock().clear();
+        self.midi_lane = EventLane::with_capacity(self.midi_capacity);
+        self.midi_lane_warned_overflow
+            .store(false, Ordering::Relaxed);
         self.transport_metrics
             .sample_pos
             .store(0, Ordering::Relaxed);
@@ -567,10 +576,15 @@ impl HarmoniqEngine {
     }
 
     pub fn execute_command(&mut self, command: EngineCommand) -> anyhow::Result<()> {
-        self.handle_command(command)
+        let block_start_samples = self.transport_metrics.sample_pos.load(Ordering::Relaxed);
+        self.handle_command(command, block_start_samples)
     }
 
-    fn handle_command(&mut self, command: EngineCommand) -> anyhow::Result<()> {
+    fn handle_command(
+        &mut self,
+        command: EngineCommand,
+        block_start_samples: u64,
+    ) -> anyhow::Result<()> {
         match command {
             EngineCommand::SetTempo(tempo) => {
                 self.tempo = tempo.max(1.0);
@@ -588,10 +602,7 @@ impl HarmoniqEngine {
                 self.playlist_audio.write().insert(id, clip);
             }
             EngineCommand::ReplaceGraph(graph) => self.replace_graph(graph)?,
-            EngineCommand::SubmitMidi(events) => {
-                let mut pending = self.pending_midi.lock();
-                pending.extend(events);
-            }
+            EngineCommand::SubmitMidi(events) => self.enqueue_midi(events, block_start_samples),
             EngineCommand::PlaySoundTest(clip) => {
                 self.sound_tests.push(ClipPlayback::new(clip));
             }
@@ -1037,9 +1048,9 @@ impl HarmoniqEngine {
         self.mixer_handle.push_meter(event);
     }
 
-    fn drain_command_queue(&mut self) -> anyhow::Result<()> {
+    fn drain_command_queue(&mut self, block_start_samples: u64) -> anyhow::Result<()> {
         while let Some(command) = self.command_queue.pop() {
-            self.handle_command(command)?;
+            self.handle_command(command, block_start_samples)?;
         }
         Ok(())
     }
@@ -1069,6 +1080,55 @@ impl HarmoniqEngine {
         }
     }
 
+    fn fill_midi_events_for_block(&mut self, block_start_samples: u64, block_len: u32) {
+        self.midi_block.clear();
+        let slice = slice_events_for_block(&self.midi_lane, block_start_samples, block_len);
+        for event in slice.ev {
+            if let ScheduledEvent::Midi(bytes, offset) = event {
+                self.midi_block.push(MidiEvent::new(*offset, *bytes));
+            }
+        }
+    }
+
+    fn enqueue_midi(&self, events: Vec<MidiEvent>, block_start_samples: u64) {
+        for event in events {
+            let Some(bytes) = Self::midi_bytes(&event) else {
+                continue;
+            };
+
+            let absolute_sample = block_start_samples.saturating_add(event.sample_offset() as u64);
+            let bounded_sample = absolute_sample.min(u32::MAX as u64) as u32;
+            let scheduled = ScheduledEvent::Midi(bytes, bounded_sample);
+
+            if self.midi_lane.push(scheduled).is_err()
+                && !self.midi_lane_warned_overflow.swap(true, Ordering::AcqRel)
+            {
+                warn!("MIDI lane overflow; dropping events");
+            }
+        }
+    }
+
+    fn midi_bytes(event: &MidiEvent) -> Option<[u8; 3]> {
+        match event {
+            MidiEvent::NoteOn {
+                channel,
+                note,
+                velocity,
+                ..
+            } => Some([0x90 | (channel & 0x0F), *note, *velocity]),
+            MidiEvent::NoteOff { channel, note, .. } => Some([0x80 | (channel & 0x0F), *note, 0]),
+            MidiEvent::ControlChange {
+                channel,
+                control,
+                value,
+                ..
+            } => Some([0xB0 | (channel & 0x0F), *control, *value]),
+            MidiEvent::PitchBend {
+                channel, lsb, msb, ..
+            } => Some([0xE0 | (channel & 0x0F), *lsb, *msb]),
+        }
+    }
+
     fn prepare_block_snapshot(
         &mut self,
         block_start: u64,
@@ -1076,13 +1136,9 @@ impl HarmoniqEngine {
         block_start_samples: u64,
         block_len_samples: u64,
     ) -> anyhow::Result<()> {
-        self.drain_command_queue()?;
+        self.drain_command_queue(block_start_samples)?;
 
-        self.midi_block.clear();
-        {
-            let mut queue = self.pending_midi.lock();
-            self.midi_block.extend(queue.drain(..));
-        }
+        self.fill_midi_events_for_block(block_start_samples, block_len as u32);
 
         let mut midi_block = core::mem::take(&mut self.midi_block);
 
