@@ -2425,6 +2425,11 @@ impl HarmoniqStudioApp {
                 egui::vec2(560.0, 360.0),
                 "Performance".into(),
             ),
+            FloatingKind::TaskManager => (
+                center + egui::vec2(-280.0, -210.0),
+                egui::vec2(560.0, 380.0),
+                "Harmoniq Task Manager".into(),
+            ),
             FloatingKind::Inspector { selection } => (
                 center + egui::vec2(-300.0, -200.0),
                 egui::vec2(600.0, 400.0),
@@ -2590,6 +2595,89 @@ impl HarmoniqStudioApp {
             FloatingKind::Performance => {
                 ui.label("Performance panel is not implemented yet.");
             }
+            FloatingKind::TaskManager => {
+                ui.vertical(|ui| {
+                    ui.heading(RichText::new("Harmoniq Task Manager").color(palette.text_primary));
+                    ui.label(
+                        RichText::new(
+                            "Monitor floating widgets and force-close any that stop responding.",
+                        )
+                        .color(palette.text_muted)
+                        .size(13.0),
+                    );
+                    ui.add_space(10.0);
+
+                    let mut kill_target = None;
+                    let mut kill_title = None;
+                    let mut windows: Vec<_> = self
+                        .floating
+                        .windows
+                        .iter()
+                        .filter_map(|(id, window)| {
+                            window
+                                .open
+                                .then(|| (*id, window.title.clone(), window.kind.clone()))
+                        })
+                        .collect();
+
+                    if windows.is_empty() {
+                        ui.label(
+                            RichText::new("No widgets are currently running.")
+                                .color(palette.text_muted),
+                        );
+                        return;
+                    }
+
+                    windows.sort_by(|a, b| a.1.cmp(&b.1));
+
+                    egui::ScrollArea::vertical()
+                        .id_source("task_manager_scroll")
+                        .show(ui, |ui| {
+                            for (id, title, kind) in windows {
+                                let uid = kind.uid_label();
+                                egui::Frame::group(ui.style())
+                                    .fill(palette.panel)
+                                    .stroke(egui::Stroke::new(1.0, palette.toolbar_outline))
+                                    .rounding(6.0)
+                                    .inner_margin(egui::Margin::symmetric(12.0, 10.0))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.vertical(|ui| {
+                                                ui.label(
+                                                    RichText::new(&title)
+                                                        .color(palette.text_primary)
+                                                        .strong(),
+                                                );
+                                                ui.label(
+                                                    RichText::new(format!("UID: {uid}"))
+                                                        .color(palette.text_muted),
+                                                );
+                                            });
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    let kill_text = RichText::new("Kill")
+                                                        .color(ui.visuals().error_fg_color);
+                                                    if ui.button(kill_text).clicked() {
+                                                        kill_target = Some(id);
+                                                        kill_title = Some(title.clone());
+                                                    }
+                                                },
+                                            );
+                                        });
+                                    });
+                                ui.add_space(8.0);
+                            }
+                        });
+
+                    if let Some(target) = kill_target {
+                        self.floating.kill(target);
+                        if let Some(title) = kill_title {
+                            self.status_message = Some(format!("Force-closed widget '{title}'"));
+                        }
+                    }
+                });
+            }
             FloatingKind::Inspector { selection } => {
                 if let Some(selection) = selection {
                     ui.label(format!("Inspector for {selection} coming soon."));
@@ -2737,7 +2825,8 @@ impl CommandHandler for HarmoniqStudioApp {
                 }
                 ViewCommand::TogglePlaylist => {
                     self.open_widget(UID_PLAYLIST);
-                    self.console.log(LogLevel::Info, "Playlist shown".to_string());
+                    self.console
+                        .log(LogLevel::Info, "Playlist shown".to_string());
                 }
                 ViewCommand::ToggleSequencer => {
                     self.toggle_widget(UID_SEQUENCER);
@@ -2909,6 +2998,9 @@ impl CommandHandler for HarmoniqStudioApp {
                 }
             },
             Command::Options(cmd) => match cmd {
+                OptionsCommand::TaskManager => {
+                    self.open_floating_window(FloatingKind::TaskManager);
+                }
                 OptionsCommand::AudioDeviceDialog => {
                     let config = self.engine_runner.config().clone();
                     let runtime = self.engine_runner.runtime_options().clone();
