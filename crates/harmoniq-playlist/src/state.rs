@@ -45,6 +45,30 @@ impl TrackId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ClipId(pub u64);
 
+/// Flattened clip representation shared with the engine and UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlaylistClip {
+    pub id: ClipId,
+    pub track_index: u32,
+    pub lane_id: u32,
+    pub start_ticks: u64,
+    pub length_ticks: u64,
+    pub kind: PlaylistClipKind,
+}
+
+impl PlaylistClip {
+    pub fn end_ticks(&self) -> u64 {
+        self.start_ticks + self.length_ticks
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PlaylistClipKind {
+    Pattern { pattern_id: u32 },
+    Audio { source: AudioSourceId },
+    Automation { lane: AutomationLane },
+}
+
 /// Kind of clip stored in the playlist.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ClipKind {
@@ -85,6 +109,25 @@ pub struct Clip {
 impl Clip {
     pub fn end_ticks(&self) -> u64 {
         self.start_ticks + self.duration_ticks
+    }
+
+    pub fn to_playlist_clip(&self, track_index: usize, lane_id: u32) -> PlaylistClip {
+        PlaylistClip {
+            id: self.id,
+            track_index: track_index as u32,
+            lane_id,
+            start_ticks: self.start_ticks,
+            length_ticks: self.duration_ticks,
+            kind: match &self.kind {
+                ClipKind::Pattern { pattern_id } => PlaylistClipKind::Pattern {
+                    pattern_id: *pattern_id,
+                },
+                ClipKind::Audio { source } => PlaylistClipKind::Audio { source: *source },
+                ClipKind::Automation { lane } => PlaylistClipKind::Automation {
+                    lane: lane.clone(),
+                },
+            },
+        }
     }
 
     pub fn new(
@@ -436,6 +479,18 @@ impl Playlist {
             })
     }
 
+    pub fn playback_clips(&self) -> Vec<PlaylistClip> {
+        let mut clips = Vec::new();
+        for (track_index, track) in self.tracks.iter().enumerate() {
+            for lane in &track.lanes {
+                for clip in &lane.clips {
+                    clips.push(clip.to_playlist_clip(track_index, lane.id));
+                }
+            }
+        }
+        clips
+    }
+
     pub fn pattern(&self, id: u32) -> Option<&Pattern> {
         self.patterns.get(&id)
     }
@@ -756,5 +811,15 @@ mod tests {
             .clips
             .windows(2)
             .all(|w| w[0].start_ticks <= w[1].start_ticks));
+    }
+
+    #[test]
+    fn playback_clips_projection_exposes_track_and_lane() {
+        let playlist = Playlist::new_default(960);
+        let clips = playlist.playback_clips();
+        assert!(!clips.is_empty());
+        let first = &clips[0];
+        assert_eq!(first.start_ticks + first.length_ticks, first.end_ticks());
+        assert!(clips.iter().any(|clip| clip.track_index == 0 && clip.lane_id == 0));
     }
 }
