@@ -566,6 +566,17 @@ impl MenuBarState {
         ui.menu_button("Options", |ui| {
             if ui
                 .button(with_shortcut(
+                    "Task Manager…",
+                    shortcuts,
+                    CommandId::OptionsTaskManager,
+                ))
+                .clicked()
+            {
+                let _ = commands.try_send(Command::Options(OptionsCommand::TaskManager));
+                ui.close_menu();
+            }
+            if ui
+                .button(with_shortcut(
                     "Audio Device…",
                     shortcuts,
                     CommandId::OptionsAudioDevice,

@@ -54,6 +54,7 @@ pub enum CommandId {
     TransportLoopToSelection,
     TransportGoToStart,
     TransportTapTempo,
+    OptionsTaskManager,
     OptionsAudioDevice,
     OptionsProjectSettings,
     OptionsThemeDark,
@@ -116,6 +117,7 @@ impl CommandId {
             CommandId::TransportLoopToSelection => "transport.loop_to_selection",
             CommandId::TransportGoToStart => "transport.go_to_start",
             CommandId::TransportTapTempo => "transport.tap_tempo",
+            CommandId::OptionsTaskManager => "options.task_manager",
             CommandId::OptionsAudioDevice => "options.audio_device",
             CommandId::OptionsProjectSettings => "options.project_settings",
             CommandId::OptionsThemeDark => "options.theme_dark",
@@ -182,6 +184,7 @@ impl FromStr for CommandId {
             "transport.loop_to_selection" => Ok(CommandId::TransportLoopToSelection),
             "transport.go_to_start" => Ok(CommandId::TransportGoToStart),
             "transport.tap_tempo" => Ok(CommandId::TransportTapTempo),
+            "options.task_manager" => Ok(CommandId::OptionsTaskManager),
             "options.audio_device" => Ok(CommandId::OptionsAudioDevice),
             "options.project_settings" => Ok(CommandId::OptionsProjectSettings),
             "options.theme_dark" => Ok(CommandId::OptionsThemeDark),
@@ -282,6 +285,7 @@ impl Command {
             }
             CommandId::TransportGoToStart => Command::Transport(TransportCommand::GoToStart),
             CommandId::TransportTapTempo => Command::Transport(TransportCommand::TapTempo),
+            CommandId::OptionsTaskManager => Command::Options(OptionsCommand::TaskManager),
             CommandId::OptionsAudioDevice => Command::Options(OptionsCommand::AudioDeviceDialog),
             CommandId::OptionsProjectSettings => Command::Options(OptionsCommand::ProjectSettings),
             CommandId::OptionsThemeDark => Command::Options(OptionsCommand::Theme(ThemeMode::Dark)),
@@ -499,6 +503,7 @@ pub enum ThemeMode {
 
 #[derive(Debug, Clone)]
 pub enum OptionsCommand {
+    TaskManager,
     AudioDeviceDialog,
     ProjectSettings,
     Theme(ThemeMode),
@@ -509,6 +514,7 @@ pub enum OptionsCommand {
 impl OptionsCommand {
     pub fn id(&self) -> CommandId {
         match self {
+            OptionsCommand::TaskManager => CommandId::OptionsTaskManager,
             OptionsCommand::AudioDeviceDialog => CommandId::OptionsAudioDevice,
             OptionsCommand::ProjectSettings => CommandId::OptionsProjectSettings,
             OptionsCommand::Theme(ThemeMode::Dark) => CommandId::OptionsThemeDark,

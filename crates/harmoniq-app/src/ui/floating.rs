@@ -19,7 +19,26 @@ pub enum FloatingKind {
     MidiMonitor,
     Performance,
     Inspector { selection: Option<String> },
+    TaskManager,
     UiWidget { uid: String },
+}
+
+impl FloatingKind {
+    pub fn uid_label(&self) -> String {
+        match self {
+            FloatingKind::UiWidget { uid } => uid.clone(),
+            FloatingKind::PluginEditor { plugin_uid } => format!("plugin.{plugin_uid}"),
+            FloatingKind::PianoRoll { track_id } => format!("piano_roll.{track_id}"),
+            FloatingKind::MixerInsert { insert_idx } => format!("mixer_insert.{insert_idx}"),
+            FloatingKind::MidiMonitor => "midi_monitor".into(),
+            FloatingKind::Performance => "performance".into(),
+            FloatingKind::Inspector { selection } => selection
+                .as_ref()
+                .map(|selection| format!("inspector.{selection}"))
+                .unwrap_or_else(|| "inspector".into()),
+            FloatingKind::TaskManager => "task_manager".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -149,6 +168,17 @@ impl FloatingWindows {
         } else {
             self.spawn(kind, title, pos, size);
         }
+    }
+
+    pub fn kill(&mut self, id: FloatingWindowId) -> bool {
+        let removed = self.windows.shift_remove(&id).is_some();
+        if removed {
+            if self.last_focus == Some(id) {
+                self.last_focus = None;
+            }
+            self.mark_dirty();
+        }
+        removed
     }
 
     pub fn close_all_of_kind(&mut self, kind: &FloatingKind) {
