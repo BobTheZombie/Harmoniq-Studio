@@ -196,7 +196,8 @@ impl QwertyKeyboardInput {
                 channel: self.channel,
                 note,
                 velocity,
-                timestamp: midi_timestamp_from_instant(timestamp),
+                sample_offset: 0,
+                timestamp: Some(midi_timestamp_from_instant(timestamp)),
             };
             self.emit(timestamp, event);
         }
@@ -218,7 +219,8 @@ impl QwertyKeyboardInput {
             let event = MidiEvent::NoteOff {
                 channel: self.channel,
                 note,
-                timestamp: midi_timestamp_from_instant(timestamp),
+                sample_offset: 0,
+                timestamp: Some(midi_timestamp_from_instant(timestamp)),
             };
             self.emit(timestamp, event);
         }
@@ -260,7 +262,8 @@ impl QwertyKeyboardInput {
             channel: self.channel,
             control: SUSTAIN_CC,
             value,
-            timestamp: midi_timestamp_from_instant(timestamp),
+            sample_offset: 0,
+            timestamp: Some(midi_timestamp_from_instant(timestamp)),
         };
         self.emit(timestamp, event);
         if !pressed {
@@ -268,7 +271,8 @@ impl QwertyKeyboardInput {
                 let event = MidiEvent::NoteOff {
                     channel: note.channel,
                     note: note.note,
-                    timestamp: midi_timestamp_from_instant(timestamp),
+                    sample_offset: 0,
+                    timestamp: Some(midi_timestamp_from_instant(timestamp)),
                 };
                 self.emit(timestamp, event);
             }
@@ -281,7 +285,8 @@ impl QwertyKeyboardInput {
             channel: self.channel,
             control: PANIC_CC,
             value: 0,
-            timestamp: midi_timestamp_from_instant(timestamp),
+            sample_offset: 0,
+            timestamp: Some(midi_timestamp_from_instant(timestamp)),
         };
         self.emit(timestamp, event);
         let drained_keys: Vec<_> = self.held_keys.drain().collect();
@@ -290,7 +295,8 @@ impl QwertyKeyboardInput {
                 let event = MidiEvent::NoteOff {
                     channel: self.channel,
                     note,
-                    timestamp: midi_timestamp_from_instant(timestamp),
+                    sample_offset: 0,
+                    timestamp: Some(midi_timestamp_from_instant(timestamp)),
                 };
                 self.emit(timestamp, event);
             }
