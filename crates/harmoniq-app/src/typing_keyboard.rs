@@ -47,14 +47,16 @@ impl TypingKeyboard {
                                     channel: MIDI_CHANNEL,
                                     note,
                                     velocity,
-                                    timestamp: MidiTimestamp::now(),
+                                    sample_offset: 0,
+                                    timestamp: Some(MidiTimestamp::now()),
                                 });
                             }
                         } else if let Some(note) = self.active_notes.remove(key) {
                             events.push(MidiEvent::NoteOff {
                                 channel: MIDI_CHANNEL,
                                 note,
-                                timestamp: MidiTimestamp::now(),
+                                sample_offset: 0,
+                                timestamp: Some(MidiTimestamp::now()),
                             });
                         }
                     } else if !pressed {
@@ -130,7 +132,8 @@ impl TypingKeyboard {
                 .map(|(_, note)| MidiEvent::NoteOff {
                     channel: MIDI_CHANNEL,
                     note,
-                    timestamp: MidiTimestamp::now(),
+                    sample_offset: 0,
+                    timestamp: Some(MidiTimestamp::now()),
                 })
                 .collect()
         }

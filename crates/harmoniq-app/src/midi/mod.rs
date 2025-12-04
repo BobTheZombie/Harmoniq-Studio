@@ -390,7 +390,8 @@ fn parse_midi_event(event: &QueuedMidiEvent, mode: &MidiChannelMode) -> Option<M
             Some(MidiEvent::NoteOff {
                 channel,
                 note: event.data[1],
-                timestamp: event.timestamp,
+                sample_offset: 0,
+                timestamp: Some(event.timestamp),
             })
         }
         0x90 => {
@@ -402,14 +403,16 @@ fn parse_midi_event(event: &QueuedMidiEvent, mode: &MidiChannelMode) -> Option<M
                 Some(MidiEvent::NoteOff {
                     channel,
                     note: event.data[1],
-                    timestamp: event.timestamp,
+                    sample_offset: 0,
+                    timestamp: Some(event.timestamp),
                 })
             } else {
                 Some(MidiEvent::NoteOn {
                     channel,
                     note: event.data[1],
                     velocity,
-                    timestamp: event.timestamp,
+                    sample_offset: 0,
+                    timestamp: Some(event.timestamp),
                 })
             }
         }
@@ -421,7 +424,8 @@ fn parse_midi_event(event: &QueuedMidiEvent, mode: &MidiChannelMode) -> Option<M
                 channel,
                 control: event.data[1],
                 value: event.data[2],
-                timestamp: event.timestamp,
+                sample_offset: 0,
+                timestamp: Some(event.timestamp),
             })
         }
         0xE0 => {
@@ -432,7 +436,8 @@ fn parse_midi_event(event: &QueuedMidiEvent, mode: &MidiChannelMode) -> Option<M
                 channel,
                 lsb: event.data[1],
                 msb: event.data[2],
-                timestamp: event.timestamp,
+                sample_offset: 0,
+                timestamp: Some(event.timestamp),
             })
         }
         _ => None,
@@ -524,7 +529,10 @@ mod tests {
 
         let mut worst = Duration::from_micros(0);
         for (observed, expected) in observed.iter().zip(scheduled.iter()) {
-            let diff = observed.timestamp().abs_diff(*expected);
+            let diff = observed
+                .timestamp()
+                .unwrap_or_else(|| MidiTimestamp::from_micros(0))
+                .abs_diff(*expected);
             if diff > worst {
                 worst = diff;
             }

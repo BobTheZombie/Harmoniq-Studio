@@ -102,30 +102,34 @@ pub enum MidiEvent {
         channel: u8,
         note: u8,
         velocity: u8,
-        timestamp: MidiTimestamp,
+        sample_offset: u32,
+        timestamp: Option<MidiTimestamp>,
     },
     NoteOff {
         channel: u8,
         note: u8,
-        timestamp: MidiTimestamp,
+        sample_offset: u32,
+        timestamp: Option<MidiTimestamp>,
     },
     ControlChange {
         channel: u8,
         control: u8,
         value: u8,
-        timestamp: MidiTimestamp,
+        sample_offset: u32,
+        timestamp: Option<MidiTimestamp>,
     },
     PitchBend {
         channel: u8,
         lsb: u8,
         msb: u8,
-        timestamp: MidiTimestamp,
+        sample_offset: u32,
+        timestamp: Option<MidiTimestamp>,
     },
 }
 
 impl MidiEvent {
-    /// Returns the timestamp associated with this event.
-    pub fn timestamp(&self) -> MidiTimestamp {
+    /// Returns the optional timestamp associated with this event.
+    pub fn timestamp(&self) -> Option<MidiTimestamp> {
         match self {
             MidiEvent::NoteOn { timestamp, .. }
             | MidiEvent::NoteOff { timestamp, .. }
@@ -136,11 +140,18 @@ impl MidiEvent {
 
     /// Helper to construct a MIDI event from raw bytes.
     ///
-    /// The `sample_offset` is interpreted as microseconds to align with
-    /// [`MidiTimestamp`], preserving approximate ordering when events are
-    /// sorted by time.
+    /// The `sample_offset` is interpreted as a position in samples relative to
+    /// the start of the current processing block.
     pub fn new(sample_offset: u32, data: [u8; 3]) -> Self {
-        let timestamp = MidiTimestamp::from_micros(sample_offset as u64);
+        Self::from_bytes(sample_offset, data, None)
+    }
+
+    /// Construct a MIDI event from raw bytes and an absolute timestamp.
+    pub fn from_timestamp(sample_offset: u32, data: [u8; 3], timestamp: MidiTimestamp) -> Self {
+        Self::from_bytes(sample_offset, data, Some(timestamp))
+    }
+
+    fn from_bytes(sample_offset: u32, data: [u8; 3], timestamp: Option<MidiTimestamp>) -> Self {
         let status = data[0] & 0xF0;
         let channel = data[0] & 0x0F;
 
@@ -148,40 +159,47 @@ impl MidiEvent {
             0x80 => MidiEvent::NoteOff {
                 channel,
                 note: data[1],
+                sample_offset,
                 timestamp,
             },
             0x90 => MidiEvent::NoteOn {
                 channel,
                 note: data[1],
                 velocity: data[2],
+                sample_offset,
                 timestamp,
             },
             0xB0 => MidiEvent::ControlChange {
                 channel,
                 control: data[1],
                 value: data[2],
+                sample_offset,
                 timestamp,
             },
             0xE0 => MidiEvent::PitchBend {
                 channel,
                 lsb: data[1],
                 msb: data[2],
+                sample_offset,
                 timestamp,
             },
             _ => MidiEvent::NoteOff {
                 channel,
                 note: data[1],
+                sample_offset,
                 timestamp,
             },
         }
     }
 
-    /// Returns the timestamp expressed as an approximate sample offset.
+    /// Returns the sample offset associated with this event.
     pub fn sample_offset(&self) -> u32 {
-        self.timestamp()
-            .as_duration()
-            .as_micros()
-            .min(u32::MAX as u128) as u32
+        match self {
+            MidiEvent::NoteOn { sample_offset, .. }
+            | MidiEvent::NoteOff { sample_offset, .. }
+            | MidiEvent::ControlChange { sample_offset, .. }
+            | MidiEvent::PitchBend { sample_offset, .. } => *sample_offset,
+        }
     }
 }
 
