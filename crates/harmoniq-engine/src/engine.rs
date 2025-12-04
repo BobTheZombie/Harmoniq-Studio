@@ -726,6 +726,7 @@ impl HarmoniqEngine {
                             if let Some(pattern) = playlist.pattern(pattern_id) {
                                 self.schedule_pattern_clip(
                                     clip.start_ticks,
+                                    track_index,
                                     pattern,
                                     block_start_tick,
                                     block_end_tick,
@@ -825,6 +826,7 @@ impl HarmoniqEngine {
     fn schedule_pattern_clip(
         &self,
         clip_start_tick: u64,
+        track_index: usize,
         pattern: &harmoniq_playlist::state::Pattern,
         block_start_tick: u64,
         block_end_tick: u64,
@@ -832,6 +834,8 @@ impl HarmoniqEngine {
         pending_midi: &mut Vec<MidiEvent>,
         block_len_samples: u32,
     ) {
+        let track_channel = (track_index as u8) & 0x0F;
+
         for note in &pattern.notes {
             if note.duration_ticks <= 0 {
                 continue;
@@ -847,7 +851,7 @@ impl HarmoniqEngine {
                     samples_per_tick,
                     block_len_samples,
                 ) {
-                    pending_midi.push(Self::note_event(note, offset, true));
+                    pending_midi.push(Self::note_event(note, offset, true, track_channel));
                 }
             }
 
@@ -858,7 +862,7 @@ impl HarmoniqEngine {
                     samples_per_tick,
                     block_len_samples,
                 ) {
-                    pending_midi.push(Self::note_event(note, offset, false));
+                    pending_midi.push(Self::note_event(note, offset, false, track_channel));
                 }
             }
         }
@@ -894,9 +898,8 @@ impl HarmoniqEngine {
         (samples as f64 / samples_per_tick).floor() as u64
     }
 
-    fn note_event(note: &PatternNote, sample_offset: u32, on: bool) -> MidiEvent {
-        let channel = note.channel & 0x0F;
-        let status = if on { 0x90 } else { 0x80 } | channel;
+    fn note_event(note: &PatternNote, sample_offset: u32, on: bool, channel: u8) -> MidiEvent {
+        let status = (if on { 0x90 } else { 0x80 }) | (channel & 0x0F);
         let velocity = if on { note.velocity } else { 0 };
         MidiEvent::new(sample_offset, [status, note.pitch, velocity])
     }
