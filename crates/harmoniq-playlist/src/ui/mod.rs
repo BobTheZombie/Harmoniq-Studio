@@ -6,7 +6,8 @@ use egui::{
 };
 
 use crate::state::{
-    Clip, ClipId, ClipKind, Playlist, RackSlotKind, Snap, Track, TrackId as StateTrackId,
+    Clip, ClipId, ClipKind, Playlist, PlaylistClipKind, RackSlotKind, Snap, Track,
+    TrackId as StateTrackId,
 };
 
 const TRACK_HEADER_HEIGHT: f32 = 68.0;
@@ -693,6 +694,7 @@ fn draw_timeline(
             let mut resort_lane = false;
             for clip_index in 0..lane.clips.len() {
                 let clip = lane.clips[clip_index].clone();
+                let clip_kind = clip.to_playlist_clip(layout.track_index, lane.id).kind;
                 let clip_rect = clip_rect(lane_rect, &clip, ppq);
                 let clip_id =
                     Id::new(("playlist_clip", track.id.0, lane_row.lane_index, clip.id.0));
@@ -719,6 +721,20 @@ fn draw_timeline(
                     &clip.name,
                     TextStyle::Body.resolve(painter.ctx().style().as_ref()),
                     Color32::from_rgb(10, 10, 10),
+                );
+
+                let (badge_label, badge_color) = clip_kind_badge(&clip_kind);
+                let badge_rect = Rect::from_min_max(
+                    Pos2::new(clip_rect.right() - 94.0, clip_rect.top() + 6.0),
+                    Pos2::new(clip_rect.right() - 10.0, clip_rect.top() + 22.0),
+                );
+                painter.rect_filled(badge_rect, 4.0, badge_color);
+                painter.text(
+                    badge_rect.center(),
+                    Align2::CENTER_CENTER,
+                    badge_label,
+                    TextStyle::Small.resolve(painter.ctx().style().as_ref()),
+                    Color32::from_rgb(8, 8, 8),
                 );
 
                 let handle_width = 8.0;
@@ -894,6 +910,14 @@ fn clip_drag_id(ctx: &egui::Context) -> Id {
 fn snap_beats(delta_beats: f32, snap: Snap, _ppq: u32) -> f32 {
     let division = snap.division() as f32;
     (delta_beats * division).round() / division
+}
+
+fn clip_kind_badge(kind: &PlaylistClipKind) -> (&'static str, Color32) {
+    match kind {
+        PlaylistClipKind::Pattern { .. } => ("Pattern", Color32::from_rgb(164, 209, 255)),
+        PlaylistClipKind::Audio { .. } => ("Audio", Color32::from_rgb(255, 205, 140)),
+        PlaylistClipKind::Automation { .. } => ("Automation", Color32::from_rgb(196, 164, 255)),
+    }
 }
 
 fn clip_rect(lane_rect: Rect, clip: &Clip, ppq: u32) -> Rect {

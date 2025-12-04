@@ -32,7 +32,7 @@ use crate::{
     transport::Transport as TransportMetrics,
     AudioBuffer, AudioClip, AudioProcessor, BufferConfig,
 };
-use harmoniq_playlist::state::{AudioSourceId, ClipKind, PatternNote, Playlist};
+use harmoniq_playlist::state::{AudioSourceId, PatternNote, Playlist, PlaylistClipKind};
 use harmoniq_rt::RtEvent;
 #[cfg(feature = "mixer_api")]
 use log::debug;
@@ -731,48 +731,42 @@ impl HarmoniqEngine {
             samples_per_tick,
         );
 
-        for (track_index, track) in playlist.tracks.iter().enumerate() {
-            for lane in &track.lanes {
-                for clip in &lane.clips {
-                    if block_start_tick >= clip.end_ticks() || block_end_tick <= clip.start_ticks {
-                        continue;
-                    }
+        for clip in playlist.playback_clips() {
+            if block_start_tick >= clip.end_ticks() || block_end_tick <= clip.start_ticks {
+                continue;
+            }
 
-                    match clip.kind {
-                        ClipKind::Pattern { pattern_id } => {
-                            if let Some(pattern) = playlist.pattern(pattern_id) {
-                                self.schedule_pattern_clip(
-                                    clip.start_ticks,
-                                    track_index,
-                                    pattern,
-                                    block_start_tick,
-                                    block_end_tick,
-                                    samples_per_tick,
-                                    pending_midi,
-                                    block_len_samples as u32,
-                                );
-                            }
-                        }
-                        ClipKind::Audio { source } => {
-                            if block_start_tick <= clip.start_ticks
-                                && clip.start_ticks < block_end_tick
-                            {
-                                self.trigger_audio_clip(source);
-                            }
-                        }
-                        ClipKind::Automation { ref lane } => {
-                            self.schedule_automation_clip(
-                                track_index,
-                                clip.start_ticks,
-                                clip.duration_ticks,
-                                lane,
-                                block_start_tick,
-                                block_end_tick,
-                                block_start_samples,
-                                samples_per_tick,
-                            );
-                        }
+            match clip.kind {
+                PlaylistClipKind::Pattern { pattern_id } => {
+                    if let Some(pattern) = playlist.pattern(pattern_id) {
+                        self.schedule_pattern_clip(
+                            clip.start_ticks,
+                            clip.track_index as usize,
+                            pattern,
+                            block_start_tick,
+                            block_end_tick,
+                            samples_per_tick,
+                            pending_midi,
+                            block_len_samples as u32,
+                        );
                     }
+                }
+                PlaylistClipKind::Audio { source } => {
+                    if block_start_tick <= clip.start_ticks && clip.start_ticks < block_end_tick {
+                        self.trigger_audio_clip(source);
+                    }
+                }
+                PlaylistClipKind::Automation { ref lane } => {
+                    self.schedule_automation_clip(
+                        clip.track_index as usize,
+                        clip.start_ticks,
+                        clip.length_ticks,
+                        lane,
+                        block_start_tick,
+                        block_end_tick,
+                        block_start_samples,
+                        samples_per_tick,
+                    );
                 }
             }
         }
