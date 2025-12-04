@@ -47,8 +47,8 @@ pub struct PlaylistProps<'a> {
 }
 
 pub fn render(ui: &mut Ui, mut props: PlaylistProps<'_>) {
-    let ppq = props.playlist.ppq() as f32;
-    let ppq_ticks = props.playlist.ppq() as u64;
+    let ppq = props.playlist.ppq().max(1) as f32;
+    let ppq_ticks = props.playlist.ppq().max(1) as u64;
     let total_beats = props
         .playlist
         .tracks
@@ -272,15 +272,10 @@ fn handle_file_drop(
         let snap_division = snap.division() as f32;
         let snapped_beats = (beat * snap_division).round() / snap_division;
         let start_ticks = (snapped_beats * playlist.ppq() as f32).round().max(0.0) as u64;
-        if playlist.tracks.get(track_index).is_some() {
-            let (track_id, track_color) = {
-                let track = playlist
-                    .tracks
-                    .get_mut(track_index)
-                    .expect("track should still exist");
-                track.ensure_audio_routing();
-                (track.id, track.color)
-            };
+        if let Some(track) = playlist.tracks.get_mut(track_index) {
+            track.ensure_audio_routing();
+            let track_id = track.id;
+            let track_color = track.color;
 
             let name = path
                 .file_stem()
