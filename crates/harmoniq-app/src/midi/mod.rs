@@ -1,12 +1,13 @@
 use std::env;
 use std::ops::RangeInclusive;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context};
 use harmoniq_engine::{EngineCommand, EngineCommandQueue, MidiEvent, MidiTimestamp};
+use harmoniq_midi::{config as midi_config, device::MidiInputConfig};
 use midir::{Ignore, MidiInput, MidiInputConnection};
 use ringbuf::{HeapConsumer, HeapRb};
 use tracing::{info, warn};
@@ -31,19 +32,19 @@ pub trait MidiInputDevice: Send {
 pub struct MidiConnection {
     stop: Arc<AtomicBool>,
     dispatcher: Option<JoinHandle<()>>,
-    _connection: MidiInputConnection<()>,
+    _connections: Vec<MidiInputConnection<()>>,
 }
 
 impl MidiConnection {
     fn new(
         stop: Arc<AtomicBool>,
         dispatcher: JoinHandle<()>,
-        connection: MidiInputConnection<()>,
+        connections: Vec<MidiInputConnection<()>>,
     ) -> Self {
         Self {
             stop,
             dispatcher: Some(dispatcher),
-            _connection: connection,
+            _connections: connections,
         }
     }
 }
@@ -78,10 +79,6 @@ pub fn open_midi_input(
     requested: Option<String>,
     command_queue: EngineCommandQueue,
 ) -> anyhow::Result<Option<MidiConnection>> {
-    let Some(requested_name) = requested else {
-        return Ok(None);
-    };
-
     let mut input = MidiInput::new("harmoniq-midi").context("failed to open MIDI input")?;
     input.ignore(Ignore::None);
 
@@ -90,56 +87,95 @@ pub fn open_midi_input(
         anyhow::bail!("no MIDI inputs available");
     }
 
-    let requested_lower = requested_name.trim().to_lowercase();
-    let target_port = if matches!(requested_lower.as_str(), "" | "auto" | "default") {
-        ports.get(0)
-    } else {
-        ports.iter().find(|port| {
+    let mut configs: Vec<MidiInputConfig> = midi_config::load()
+        .inputs
+        .into_iter()
+        .filter(|cfg| cfg.enabled)
+        .collect();
+
+    if configs.is_empty() {
+        let Some(requested_name) = requested else {
+            return Ok(None);
+        };
+        let requested_lower = requested_name.trim().to_lowercase();
+        if let Some((port_index, port)) = ports.iter().enumerate().find(|(_idx, port)| {
             input
                 .port_name(port)
                 .map(|name| name.to_lowercase().contains(&requested_lower))
                 .unwrap_or(false)
-        })
+        }) {
+            let name = input
+                .port_name(port)
+                .unwrap_or_else(|_| "Unknown".to_string());
+            configs.push(MidiInputConfig {
+                enabled: true,
+                name,
+                port_index,
+                ..MidiInputConfig::default()
+            });
+        } else {
+            anyhow::bail!("could not find MIDI input matching '{requested_name}'");
+        }
     }
-    .ok_or_else(|| anyhow!("could not find MIDI input matching '{requested_name}'"))?;
-
-    let port_name = input
-        .port_name(target_port)
-        .unwrap_or_else(|_| "Unknown".to_string());
 
     let (producer, consumer) = HeapRb::new(MIDI_QUEUE_CAPACITY).split();
+    let producer = Arc::new(Mutex::new(producer));
     let stop = Arc::new(AtomicBool::new(false));
     let mode = detect_channel_mode();
     let dispatcher = spawn_dispatcher(consumer, command_queue.clone(), mode, Arc::clone(&stop))?;
 
     let start = Instant::now();
     let stop_flag = Arc::clone(&stop);
-    let mut producer = producer;
-    let connection = input
-        .connect(
-            target_port,
-            "harmoniq-midi-connection",
-            move |_timestamp, message, _| {
-                if stop_flag.load(Ordering::Relaxed) {
-                    return;
-                }
-                if let Some(event) = QueuedMidiEvent::from_message(
-                    MidiTimestamp::from_duration(start.elapsed()),
-                    message,
-                ) {
-                    if producer.push(event).is_err() {
-                        warn!("MIDI queue full; dropping event");
-                    }
-                } else {
-                    warn!(?message, "unsupported MIDI message received");
-                }
-            },
-            (),
-        )
-        .map_err(|err| anyhow!("failed to create MIDI connection: {err}"))?;
+    let mut connections = Vec::new();
+    for (index, mut cfg) in configs.into_iter().enumerate() {
+        let Some(port) = ports.get(cfg.port_index) else {
+            warn!(index = cfg.port_index, "configured MIDI port not available; skipping");
+            continue;
+        };
 
-    info!(port = %port_name, "Connected MIDI input");
-    Ok(Some(MidiConnection::new(stop, dispatcher, connection)))
+        if cfg.name.is_empty() {
+            cfg.name = input
+                .port_name(port)
+                .unwrap_or_else(|_| format!("Input #{}", cfg.port_index + 1));
+        }
+
+        let stop_flag = Arc::clone(&stop);
+        let producer = Arc::clone(&producer);
+        let callback_cfg = cfg.clone();
+        let connection = input
+            .connect(
+                port,
+                &format!("harmoniq-midi-connection-{index}"),
+                move |_timestamp, message, _| {
+                    if stop_flag.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    if let Some(event) = QueuedMidiEvent::from_message_with_config(
+                        MidiTimestamp::from_duration(start.elapsed()),
+                        message,
+                        &callback_cfg,
+                    ) {
+                        if let Ok(mut guard) = producer.lock() {
+                            if guard.push(event).is_err() {
+                                warn!("MIDI queue full; dropping event");
+                            }
+                        }
+                    }
+                },
+                (),
+            )
+            .map_err(|err| anyhow!("failed to create MIDI connection: {err}"))?;
+
+        info!(port = %cfg.name, "Connected MIDI input");
+        connections.push(connection);
+    }
+
+    if connections.is_empty() {
+        warn!("No MIDI inputs connected after applying configuration");
+        return Ok(None);
+    }
+
+    Ok(Some(MidiConnection::new(stop, dispatcher, connections)))
 }
 
 fn spawn_dispatcher(
@@ -268,20 +304,56 @@ struct QueuedMidiEvent {
     timestamp: MidiTimestamp,
     data: [u8; 3],
     len: u8,
+    channel_mode_override: Option<MidiChannelMode>,
 }
 
 impl QueuedMidiEvent {
-    fn from_message(timestamp: MidiTimestamp, message: &[u8]) -> Option<Self> {
+    fn from_message_with_config(
+        timestamp: MidiTimestamp,
+        message: &[u8],
+        config: &MidiInputConfig,
+    ) -> Option<Self> {
         if message.is_empty() {
             return None;
         }
+
         let len = message.len().min(3);
         let mut data = [0u8; 3];
         data[..len].copy_from_slice(&message[..len]);
+
+        let status = data[0] & 0xF0;
+        let channel = data[0] & 0x0F;
+
+        if !config.mpe {
+            if let Some(filter) = config.channel_filter {
+                if filter != 0 && channel != filter.saturating_sub(1) {
+                    return None;
+                }
+            }
+        }
+
+        if matches!(status, 0x80 | 0x90) && len >= 2 {
+            if let Some(note) = Self::transpose_note(data[1], config.transpose) {
+                data[1] = note;
+            } else {
+                return None;
+            }
+        }
+
+        if status == 0x90 && len >= 3 {
+            data[2] = Self::apply_velocity_curve(data[2], config.velocity_curve);
+        }
+
+        if let Some(route) = config.route_to_channel {
+            let target = route.saturating_sub(1).min(15) as u8;
+            data[0] = (data[0] & 0xF0) | target;
+        }
+
         Some(Self {
             timestamp,
             data,
             len: len as u8,
+            channel_mode_override: config.mpe.then_some(MidiChannelMode::Omni),
         })
     }
 
@@ -292,10 +364,21 @@ impl QueuedMidiEvent {
     fn status(&self) -> u8 {
         self.data[0] & 0xF0
     }
+    fn transpose_note(note: u8, transpose: i8) -> Option<u8> {
+        let shifted = note as i16 + transpose as i16;
+        (0..=127).contains(&shifted).then_some(shifted as u8)
+    }
+
+    fn apply_velocity_curve(velocity: u8, curve: u8) -> u8 {
+        const SCALES: [f32; 5] = [0.6, 0.8, 1.0, 1.2, 1.4];
+        let scale = SCALES[curve.min((SCALES.len() - 1) as u8) as usize];
+        (velocity as f32 * scale).round().clamp(0.0, 127.0) as u8
+    }
 }
 
 fn parse_midi_event(event: &QueuedMidiEvent, mode: &MidiChannelMode) -> Option<MidiEvent> {
-    let channel = mode.remap(event.channel());
+    let channel_mode = event.channel_mode_override.as_ref().unwrap_or(mode);
+    let channel = channel_mode.remap(event.channel());
     match event.status() {
         0x80 => {
             if event.len < 2 {
@@ -357,6 +440,15 @@ fn parse_midi_event(event: &QueuedMidiEvent, mode: &MidiChannelMode) -> Option<M
 mod tests {
     use super::*;
 
+    fn base_config() -> MidiInputConfig {
+        MidiInputConfig {
+            enabled: true,
+            name: "Test".into(),
+            port_index: 0,
+            ..MidiInputConfig::default()
+        }
+    }
+
     fn collect_events(events: &[QueuedMidiEvent], mode: MidiChannelMode) -> Vec<MidiEvent> {
         let ring = HeapRb::new(events.len().max(1));
         let (mut producer, mut consumer) = ring.split();
@@ -377,9 +469,34 @@ mod tests {
             timestamp: MidiTimestamp::from_micros(0),
             data: [0x90, 60, 0],
             len: 3,
+            channel_mode_override: None,
         };
         let result = collect_events(&[event], MidiChannelMode::Omni);
         assert!(matches!(result.as_slice(), [MidiEvent::NoteOff { .. }]));
+    }
+
+    #[test]
+    fn channel_filter_drops_mismatched_events() {
+        let mut cfg = base_config();
+        cfg.channel_filter = Some(2);
+        let ts = MidiTimestamp::from_micros(0);
+        assert!(QueuedMidiEvent::from_message_with_config(ts, &[0x90, 60, 100], &cfg).is_none());
+        assert!(QueuedMidiEvent::from_message_with_config(ts, &[0x91, 60, 100], &cfg).is_some());
+    }
+
+    #[test]
+    fn transpose_velocity_and_routing_applied() {
+        let mut cfg = base_config();
+        cfg.transpose = 1;
+        cfg.velocity_curve = 0;
+        cfg.route_to_channel = Some(3);
+
+        let ts = MidiTimestamp::from_micros(0);
+        let event = QueuedMidiEvent::from_message_with_config(ts, &[0x90, 60, 100], &cfg)
+            .expect("event should be produced");
+        assert_eq!(event.data[0], 0x92); // routed to channel 3 (0-indexed 2)
+        assert_eq!(event.data[1], 61); // transposed
+        assert_eq!(event.data[2], 60); // soft curve applied
     }
 
     #[test]
@@ -395,6 +512,7 @@ mod tests {
                 timestamp: *timestamp,
                 data: [0x90, 60 + index as u8, 100],
                 len: 3,
+                channel_mode_override: None,
             })
             .collect();
 
