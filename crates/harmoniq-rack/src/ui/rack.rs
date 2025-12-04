@@ -3,6 +3,8 @@ use crate::state::{Channel, ChannelId, ChannelKind, PatternId, RackState, Step};
 use crate::{RackCallbacks, RackProps};
 use egui::{self, Align2, Id, RichText, Sense, Stroke};
 
+const STEPS_PER_BAR_DEFAULT: usize = 16;
+
 #[derive(Clone, Copy, Debug)]
 struct ChannelDragState {
     channel: ChannelId,
@@ -167,6 +169,55 @@ fn drop_hint(ui: &mut egui::Ui) {
     });
 }
 
+fn step_grid(ui: &mut egui::Ui, pat: PatternId, ch: &mut Channel) {
+    let steps_per_bar = ch.steps_per_bar as usize;
+    let steps = ch
+        .steps
+        .entry(pat)
+        .or_insert_with(|| vec![Step::default(); steps_per_bar.max(STEPS_PER_BAR_DEFAULT)]);
+
+    if steps.len() != steps_per_bar {
+        steps.resize(steps_per_bar, Step::default());
+    }
+
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.spacing_mut().button_padding = egui::vec2(4.0, 6.0);
+
+        let chunks = steps.chunks(4).enumerate();
+        for (chunk_idx, chunk) in chunks {
+            ui.horizontal(|ui| {
+                for (i, step) in chunk.iter_mut().enumerate() {
+                    let step_idx = chunk_idx * 4 + i + 1;
+                    let fill = if step.on {
+                        ui.visuals().selection.bg_fill
+                    } else {
+                        ui.visuals().widgets.noninteractive.bg_fill
+                    };
+
+                    let label = RichText::new(format!("{}", step_idx)).color(if step.on {
+                        ui.visuals().strong_text_color()
+                    } else {
+                        ui.visuals().weak_text_color()
+                    });
+
+                    if ui
+                        .add(
+                            egui::Button::new(label)
+                                .min_size(egui::vec2(28.0, 24.0))
+                                .fill(fill),
+                        )
+                        .on_hover_text("Toggle step")
+                        .clicked()
+                    {
+                        step.on = !step.on;
+                    }
+                }
+            });
+        }
+    });
+}
+
 #[allow(clippy::too_many_arguments)]
 fn channel_row(
     ui: &mut egui::Ui,
@@ -267,6 +318,12 @@ fn channel_row(
                 (callbacks.open_piano_roll)(ch.id, pat);
                 ui.close_menu();
             }
+        });
+
+        ui.separator();
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Steps").strong());
+            step_grid(ui, pat, ch);
         });
 
         ui.separator();
