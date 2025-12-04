@@ -1,7 +1,21 @@
 use crate::convert::steps_to_midi;
 use crate::state::{Channel, ChannelId, ChannelKind, PatternId, RackState, Step};
 use crate::{RackCallbacks, RackProps};
-use egui::{self, Align2, Id, RichText};
+use egui::{self, Align2, Id, RichText, Sense, Stroke};
+
+#[derive(Clone, Copy, Debug)]
+struct ChannelDragState {
+    channel: ChannelId,
+    insert_at: usize,
+}
+
+fn channel_drag_id() -> Id {
+    Id::new("rack_channel_reorder")
+}
+
+fn mixer_assign_drag_id() -> Id {
+    Id::new("rack_mixer_assign")
+}
 
 pub fn render(ui: &mut egui::Ui, mut props: RackProps) {
     let RackProps { state, callbacks } = &mut props;
@@ -17,12 +31,13 @@ pub fn render(ui: &mut egui::Ui, mut props: RackProps) {
     let pattern_id = state.current_pattern;
     let mut pending_remove: Vec<ChannelId> = Vec::new();
     let mut pending_convert: Vec<(ChannelId, PatternId)> = Vec::new();
+    let mut pending_move: Option<(ChannelId, usize)> = None;
 
-    let total_channels = state.channels.len();
     egui::ScrollArea::vertical()
         .auto_shrink([false, false])
         .show(ui, |ui| {
             let mut index = 0usize;
+            let total_channels = state.channels.len();
             while index < total_channels {
                 let (_, tail) = state.channels.split_at_mut(index);
                 let channel = &mut tail[0];
@@ -30,9 +45,12 @@ pub fn render(ui: &mut egui::Ui, mut props: RackProps) {
                     ui,
                     pattern_id,
                     channel,
+                    index,
+                    total_channels,
                     callbacks,
                     &mut pending_remove,
                     &mut pending_convert,
+                    &mut pending_move,
                 );
                 ui.separator();
                 index += 1;
@@ -47,6 +65,22 @@ pub fn render(ui: &mut egui::Ui, mut props: RackProps) {
 
     for (channel_id, pat) in pending_convert {
         let _ = steps_to_midi(state, pat, channel_id);
+    }
+
+    if let Some((channel_id, insert_at)) = pending_move {
+        if let Some(from_idx) = state.channels.iter().position(|c| c.id == channel_id) {
+            let mut target = insert_at.min(state.channels.len());
+            let channel = state.channels.remove(from_idx);
+            if target > from_idx {
+                target = target.saturating_sub(1);
+            }
+            if target != from_idx {
+                state.channels.insert(target, channel);
+                (callbacks.reorder_channels)(state.channels.iter().map(|c| c.id).collect());
+            } else {
+                state.channels.insert(from_idx, channel);
+            }
+        }
     }
 }
 
@@ -138,26 +172,83 @@ fn channel_row(
     ui: &mut egui::Ui,
     pat: PatternId,
     ch: &mut Channel,
+    index: usize,
+    total_channels: usize,
     callbacks: &mut RackCallbacks,
     pending_remove: &mut Vec<ChannelId>,
     pending_convert: &mut Vec<(ChannelId, PatternId)>,
+    pending_move: &mut Option<(ChannelId, usize)>,
 ) {
-    ui.horizontal(|ui| {
+    let row = ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+
+        let is_dragging = ui
+            .ctx()
+            .data(|data| data.get_temp::<ChannelDragState>(channel_drag_id()))
+            .is_some();
+        let handle = ui
+            .add(egui::Label::new("≡").sense(Sense::drag()))
+            .on_hover_text("Drag to reorder");
+        if handle.drag_started() {
+            ui.ctx().data_mut(|data| {
+                data.insert_temp(
+                    channel_drag_id(),
+                    ChannelDragState {
+                        channel: ch.id,
+                        insert_at: index,
+                    },
+                );
+            });
+        }
+        if handle.dragged() || is_dragging {
+            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+        }
+
+        let mute_label = RichText::new("M").color(if ch.mute {
+            ui.visuals().warn_fg_color
+        } else {
+            ui.visuals().text_color()
+        });
+        let mute_fill = if ch.mute {
+            ui.visuals().selection.bg_fill
+        } else {
+            ui.visuals().widgets.inactive.bg_fill
+        };
         if ui
-            .selectable_label(ch.mute, "M")
+            .add(
+                egui::Button::new(mute_label)
+                    .min_size(egui::vec2(22.0, 22.0))
+                    .fill(mute_fill),
+            )
             .on_hover_text("Mute")
             .clicked()
         {
             ch.mute = !ch.mute;
         }
+
+        let solo_label = RichText::new("S").color(if ch.solo {
+            ui.visuals().selection.stroke.color
+        } else {
+            ui.visuals().text_color()
+        });
+        let solo_fill = if ch.solo {
+            ui.visuals().selection.bg_fill
+        } else {
+            ui.visuals().widgets.inactive.bg_fill
+        };
         if ui
-            .selectable_label(ch.solo, "S")
+            .add(
+                egui::Button::new(solo_label)
+                    .min_size(egui::vec2(22.0, 22.0))
+                    .fill(solo_fill),
+            )
             .on_hover_text("Solo")
             .clicked()
         {
             ch.solo = !ch.solo;
         }
 
+        ui.color_edit_button_srgba(&mut ch.color);
         ui.text_edit_singleline(&mut ch.name);
 
         ui.separator();
@@ -188,6 +279,32 @@ fn channel_row(
 
         ui.horizontal(|ui| {
             let mut track_val = ch.mixer_track;
+            let badge_fill = if ch.mixer_track == 0 {
+                ui.visuals().widgets.inactive.bg_fill
+            } else {
+                ui.visuals().selection.bg_fill
+            };
+            let track_badge = ui
+                .add(
+                    egui::Button::new(
+                        RichText::new(format!("CH {}", ch.mixer_track))
+                            .monospace()
+                            .color(ui.visuals().strong_text_color()),
+                    )
+                    .min_size(egui::vec2(56.0, 20.0))
+                    .fill(badge_fill),
+                )
+                .on_hover_text("Drag onto a mixer strip to assign");
+
+            if track_badge.drag_started() {
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(mixer_assign_drag_id(), ch.id));
+            }
+            if track_badge.drag_stopped() {
+                ui.ctx()
+                    .data_mut(|data| data.remove::<ChannelId>(mixer_assign_drag_id()));
+            }
+
             egui::ComboBox::from_label("Mixer Track")
                 .selected_text(track_val.to_string())
                 .show_ui(ui, |ui| {
@@ -245,6 +362,43 @@ fn channel_row(
         });
     });
 
+    if let Some(mut state) = ui
+        .ctx()
+        .data_mut(|data| data.get_temp::<ChannelDragState>(channel_drag_id()))
+    {
+        let row_rect = row.response.rect;
+        if let Some(pointer) = ui.ctx().pointer_interact_pos() {
+            if row_rect.contains(pointer) {
+                state.insert_at = if pointer.y < row_rect.center().y {
+                    index
+                } else {
+                    (index + 1).min(total_channels)
+                };
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(channel_drag_id(), state));
+
+                let y_line = if pointer.y < row_rect.center().y {
+                    row_rect.top()
+                } else {
+                    row_rect.bottom()
+                };
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(row_rect.left(), y_line),
+                        egui::pos2(row_rect.right(), y_line),
+                    ],
+                    Stroke::new(2.0, ui.visuals().selection.stroke.color),
+                );
+            }
+        }
+
+        if ui.ctx().input(|i| i.pointer.any_released()) {
+            *pending_move = Some((state.channel, state.insert_at));
+            ui.ctx()
+                .data_mut(|data| data.remove::<ChannelDragState>(channel_drag_id()));
+        }
+    }
+
     ui.add_space(4.0);
     step_grid(ui, pat, ch);
 }
@@ -261,14 +415,27 @@ fn step_grid(ui: &mut egui::Ui, pat: PatternId, ch: &mut Channel) {
 
     let id_base = Id::new(("rack_step_drag", ch.id, pat));
     let mut painting = ui.memory(|m| m.data.get_temp::<bool>(id_base));
+    let accent = ch.color;
 
     ui.horizontal_wrapped(|ui| {
         for (i, st) in steps.iter_mut().enumerate() {
             let label = if st.on { "●" } else { "○" };
-            let mut button = egui::Button::new(label).min_size(egui::vec2(18.0, 18.0));
-            if (i % 4) == 0 {
-                button = button.fill(ui.visuals().extreme_bg_color);
-            }
+            let text_color = if st.on {
+                ui.visuals().strong_text_color()
+            } else {
+                ui.visuals().text_color()
+            };
+            let mut button = egui::Button::new(RichText::new(label).color(text_color))
+                .min_size(egui::vec2(18.0, 18.0));
+            let beat_fill = ui.visuals().extreme_bg_color;
+            let on_fill = accent.gamma_multiply(0.6);
+            let off_fill = if (i % 4) == 0 {
+                beat_fill
+            } else {
+                ui.visuals().widgets.inactive.bg_fill
+            };
+
+            button = button.fill(if st.on { on_fill } else { off_fill });
             let resp = ui.add(button);
             if resp.clicked() {
                 st.on = !st.on;

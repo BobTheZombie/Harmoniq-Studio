@@ -1,3 +1,4 @@
+use egui::Color32;
 use std::{collections::HashMap, path::PathBuf};
 
 pub type ChannelId = u32;
@@ -97,6 +98,7 @@ impl Default for Step {
 pub struct Channel {
     pub id: ChannelId,
     pub name: String,
+    pub color: Color32,
     pub kind: ChannelKind,
     pub plugin_uid: Option<String>,
     pub instrument_id: Option<InstrumentId>,
@@ -116,6 +118,7 @@ impl Channel {
         Self {
             id,
             name,
+            color: Color32::from_rgb(108, 170, 255),
             kind,
             plugin_uid,
             instrument_id: None,
