@@ -36,7 +36,9 @@ pub struct MidiOutputManager;
 impl MidiOutputManager {
     /// Initialize a new MIDI output manager.
     pub fn new() -> anyhow::Result<Self> {
-        MidiOutput::new("harmoniq-midi").map(|_| Self)
+        MidiOutput::new("harmoniq-midi")
+            .map(|_| Self)
+            .map_err(Into::into)
     }
 
     /// Enumerate available output port names.
