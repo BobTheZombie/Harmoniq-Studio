@@ -129,7 +129,10 @@ pub fn open_midi_input(
     let mut connections = Vec::new();
     for (index, mut cfg) in configs.into_iter().enumerate() {
         let Some(port) = ports.get(cfg.port_index) else {
-            warn!(index = cfg.port_index, "configured MIDI port not available; skipping");
+            warn!(
+                index = cfg.port_index,
+                "configured MIDI port not available; skipping"
+            );
             continue;
         };
 
