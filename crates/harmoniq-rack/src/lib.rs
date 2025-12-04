@@ -19,6 +19,8 @@ pub struct RackCallbacks {
     pub create_automation_for: Box<dyn FnMut(&str) + Send>,
     /// Assign a mixer track for a rack channel.
     pub set_channel_mixer_track: Box<dyn FnMut(ChannelId, u16) + Send>,
+    /// Persist channel order changes to the engine/host.
+    pub reorder_channels: Box<dyn FnMut(Vec<ChannelId>) + Send>,
 }
 
 impl RackCallbacks {
@@ -30,6 +32,7 @@ impl RackCallbacks {
             import_sample_file: Box::new(|_, _| {}),
             create_automation_for: Box::new(|_| {}),
             set_channel_mixer_track: Box::new(|_, _| {}),
+            reorder_channels: Box::new(|_| {}),
         }
     }
 }
