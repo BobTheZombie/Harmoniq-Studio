@@ -312,15 +312,55 @@ pub fn build_graph(
     let mut nodes: Vec<NodeSpec> = Vec::new();
     let mut mixer_inputs = Vec::new();
 
+    let plugin_tracks: Vec<Option<u8>> = plugin_ids
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| {
+            if idx < mixer_cfg.max_tracks {
+                Some(idx as u8)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let mut track_to_plugin: HashMap<u8, usize> = HashMap::new();
+    for (plugin_index, track) in plugin_tracks.iter().enumerate() {
+        if let Some(track) = track {
+            track_to_plugin.entry(*track).or_insert(plugin_index);
+        }
+    }
+
+    let mut midi_buckets: Vec<Vec<MidiEvent>> = vec![Vec::new(); plugin_ids.len()];
+    let mut midi_channel = |event: &MidiEvent| -> Option<u8> {
+        match event {
+            MidiEvent::NoteOn { channel, .. }
+            | MidiEvent::NoteOff { channel, .. }
+            | MidiEvent::ControlChange { channel, .. }
+            | MidiEvent::PitchBend { channel, .. } => Some(*channel),
+        }
+    };
+
+    for event in midi {
+        if let Some(channel) = midi_channel(event) {
+            if let Some(&plugin_index) = track_to_plugin.get(&channel) {
+                if let Some(bucket) = midi_buckets.get_mut(plugin_index) {
+                    bucket.push(event.clone());
+                }
+            }
+        }
+    }
+
     for (index, (plugin_id, processor)) in plugin_ids.iter().zip(processors.iter()).enumerate() {
         let automation_bucket = automation.get(index).cloned().unwrap_or_default();
+        let midi_bucket = midi_buckets.get(index).cloned().unwrap_or_default();
         let latency = *latencies.get(index).unwrap_or(&0);
         let proc_idx = nodes.len();
         nodes.push(NodeSpec {
             node: Box::new(ProcessorNode::new(
                 Arc::clone(processor),
                 automation_bucket,
-                midi.to_vec(),
+                midi_bucket,
                 latency,
             )),
             inputs: Vec::new(),
