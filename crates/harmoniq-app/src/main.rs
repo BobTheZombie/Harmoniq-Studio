@@ -2076,7 +2076,14 @@ impl HarmoniqStudioApp {
             None => {}
         }
 
-        self.sync_engine_pattern_notes();
+        let should_sync_pattern = matches!(
+            self.transport_state,
+            TransportState::Playing | TransportState::Recording
+        );
+
+        if should_sync_pattern {
+            self.sync_engine_pattern_notes();
+        }
     }
 
     fn sync_engine_pattern_notes(&mut self) {
