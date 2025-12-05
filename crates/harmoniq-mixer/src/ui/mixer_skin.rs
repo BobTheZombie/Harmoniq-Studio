@@ -1,6 +1,6 @@
 use crate::{
     state::{ChannelId, SendId},
-    MixerCallbacks,
+    MixerCallbacks, RoutingDelta,
 };
 use egui::{
     self, Align, Align2, Color32, Frame, Layout, Margin, Pos2, Rect, Response, Rounding, Sense,
@@ -33,6 +33,12 @@ pub struct SendSlot {
 pub struct StripModel {
     pub channel_id: ChannelId,
     pub name: String,
+    pub input: String,
+    pub output: String,
+    pub available_inputs: Vec<String>,
+    pub available_outputs: Vec<String>,
+    pub group: Option<String>,
+    pub available_groups: Vec<String>,
     pub color: Color32,
     pub meter_l: f32,
     pub meter_r: f32,
@@ -47,6 +53,7 @@ pub struct StripModel {
     pub rec: bool,
     pub inserts: Vec<Slot>,
     pub sends: Vec<SendSlot>,
+    pub send_targets: Vec<String>,
 }
 
 /// Layout density presets for the mixer strips.
@@ -134,33 +141,33 @@ impl Default for MixerTheme {
     fn default() -> Self {
         Self {
             colors: ThemeColors {
-                background: Color32::from_rgb(0x16, 0x18, 0x1F),
-                panel: Color32::from_rgb(0x1C, 0x20, 0x28),
-                strip_bg: Color32::from_rgb(0x21, 0x26, 0x31),
-                strip_bg_alt: Color32::from_rgb(0x1D, 0x22, 0x2B),
-                master_strip_bg: Color32::from_rgb(0x27, 0x2E, 0x3C),
-                meter_background: Color32::from_rgb(0x0B, 0x0E, 0x14),
-                meter_low: Color32::from_rgb(0x3C, 0xC6, 0x9A),
-                meter_mid: Color32::from_rgb(0xF1, 0xC4, 0x61),
-                meter_high: Color32::from_rgb(0xF0, 0x90, 0x5C),
-                meter_peak: Color32::from_rgb(0xF2, 0x60, 0x66),
-                meter_clip: Color32::from_rgb(0xFF, 0x4B, 0x4B),
-                meter_grid: Color32::from_rgb(0x29, 0x2F, 0x3A),
-                meter_border: Color32::from_rgb(0x37, 0x3E, 0x4B),
-                text_primary: Color32::from_rgb(0xF0, 0xF3, 0xF8),
-                text_dim: Color32::from_rgb(0x9D, 0xA7, 0xB8),
-                button_on: Color32::from_rgb(0x28, 0x36, 0x45),
-                button_off: Color32::from_rgb(0x19, 0x1F, 0x27),
-                button_mute_on: Color32::from_rgb(0x36, 0x9B, 0xE6),
+                background: Color32::from_rgb(0x0E, 0x10, 0x14),
+                panel: Color32::from_rgb(0x13, 0x16, 0x1D),
+                strip_bg: Color32::from_rgb(0x18, 0x1C, 0x24),
+                strip_bg_alt: Color32::from_rgb(0x14, 0x18, 0x20),
+                master_strip_bg: Color32::from_rgb(0x1E, 0x23, 0x30),
+                meter_background: Color32::from_rgb(0x08, 0x0B, 0x0F),
+                meter_low: Color32::from_rgb(0x30, 0xD1, 0x7D),
+                meter_mid: Color32::from_rgb(0xF5, 0xB8, 0x38),
+                meter_high: Color32::from_rgb(0xFF, 0x7A, 0x3D),
+                meter_peak: Color32::from_rgb(0xFF, 0x63, 0x7E),
+                meter_clip: Color32::from_rgb(0xFF, 0x42, 0x42),
+                meter_grid: Color32::from_rgba_unmultiplied(0x44, 0x4C, 0x5A, 140),
+                meter_border: Color32::from_rgb(0x35, 0x3D, 0x4A),
+                text_primary: Color32::from_rgb(0xE9, 0xEE, 0xF5),
+                text_dim: Color32::from_rgb(0x8A, 0x94, 0xA3),
+                button_on: Color32::from_rgb(0x1F, 0x2C, 0x35),
+                button_off: Color32::from_rgb(0x13, 0x18, 0x20),
+                button_mute_on: Color32::from_rgb(0x2F, 0xC9, 0xA1),
                 button_solo_on: Color32::from_rgb(0xF7, 0xC0, 0x4C),
-                button_rec_on: Color32::from_rgb(0xF2, 0x5B, 0x5B),
-                button_badge: Color32::from_rgb(0x12, 0x18, 0x22),
-                rack_header: Color32::from_rgb(0xD2, 0xD8, 0xE4),
-                rack_panel: Color32::from_rgb(0x1A, 0x1F, 0x28),
-                strip_header: Color32::from_rgb(0x18, 0x1E, 0x27),
-                fader_track: Color32::from_rgb(0x12, 0x17, 0x21),
-                fader_track_inner: Color32::from_rgb(0x1C, 0x23, 0x30),
-                fader_handle: Color32::from_rgb(0xC8, 0xD2, 0xDE),
+                button_rec_on: Color32::from_rgb(0xFC, 0x52, 0x52),
+                button_badge: Color32::from_rgb(0x16, 0x1C, 0x24),
+                rack_header: Color32::from_rgb(0xC9, 0xD2, 0xE0),
+                rack_panel: Color32::from_rgb(0x11, 0x14, 0x1A),
+                strip_header: Color32::from_rgb(0x0F, 0x12, 0x18),
+                fader_track: Color32::from_rgb(0x0C, 0x10, 0x16),
+                fader_track_inner: Color32::from_rgb(0x14, 0x19, 0x22),
+                fader_handle: Color32::from_rgb(0xC7, 0xE7, 0xFF),
             },
             sizes: ThemeSizes {
                 strip_width_narrow: 68.0,
@@ -483,11 +490,15 @@ fn strip_widget(
         theme.colors.strip_bg
     };
 
-    Frame::none()
+    let mut strip_frame = Frame::none()
         .fill(fill)
         .stroke(theme.chrome_stroke)
         .rounding(Rounding::same(theme.rounding()))
-        .inner_margin(Margin::symmetric(sizes.strip_inner_margin, sizes.spacing))
+        .inner_margin(Margin::symmetric(sizes.strip_inner_margin, sizes.spacing));
+
+    let mut highlight = theme.chrome_stroke;
+
+    let response = strip_frame
         .show(ui, |ui| {
             ui.set_width(width);
             ui.spacing_mut().item_spacing = Vec2::new(sizes.spacing, sizes.spacing);
@@ -498,45 +509,127 @@ fn strip_widget(
                 .inner_margin(Margin::symmetric(sizes.spacing * 0.6, sizes.spacing * 0.4))
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(sizes.spacing * 0.6, 0.0);
-                    let (badge_rect, _badge_response) = ui.allocate_exact_size(
-                        Vec2::new(10.0 * sizes.zoom, sizes.button_height * 0.9),
-                        Sense::hover(),
+                    let (badge_rect, badge_resp) = ui.allocate_exact_size(
+                        Vec2::new(12.0 * sizes.zoom, sizes.button_height * 1.1),
+                        Sense::click(),
                     );
                     ui.painter().rect_filled(
                         badge_rect,
-                        Rounding::same(theme.rounding() * 0.3),
+                        Rounding::same(theme.rounding() * 0.35),
                         theme.colors.button_badge,
                     );
-                    let accent_rect = Rect::from_min_max(
-                        badge_rect.left_top(),
-                        Pos2::new(
-                            badge_rect.left() + badge_rect.width() * 0.55,
-                            badge_rect.bottom(),
-                        ),
-                    );
                     ui.painter().rect_filled(
-                        accent_rect,
-                        Rounding::same(theme.rounding() * 0.3),
+                        badge_rect.shrink(badge_rect.width() * 0.15),
+                        Rounding::same(theme.rounding() * 0.25),
                         strip.color,
                     );
                     ui.painter().rect_stroke(
                         badge_rect,
-                        Rounding::same(theme.rounding() * 0.3),
-                        Stroke::new(1.0, theme.chrome_stroke.color),
+                        Rounding::same(theme.rounding() * 0.35),
+                        Stroke::new(1.0, theme.colors.meter_peak),
                     );
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&strip.name)
-                                .size(12.5 * sizes.zoom)
-                                .color(theme.colors.text_primary),
-                        )
-                        .sense(Sense::click()),
-                    )
+                    if badge_resp.hovered() {
+                        ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::PointingHand);
+                    }
+
+                    let mut name_edit = strip.name.clone();
+                    let name_resp = ui.add_sized(
+                        Vec2::new(
+                            width - badge_rect.width() - sizes.spacing * 2.0,
+                            sizes.button_height * 1.1,
+                        ),
+                        egui::TextEdit::singleline(&mut name_edit)
+                            .font(egui::TextStyle::Body)
+                            .hint_text("Track name"),
+                    );
+                    if name_resp.changed() {
+                        strip.name = name_edit;
+                    }
+                    name_resp.on_hover_text("Rename this mixer track");
                 })
-                .inner;
+                .response;
             if header_response.clicked() {
                 strip.clip = false;
             }
+
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(sizes.spacing * 0.75, 0.0);
+
+                let current_input = strip.input.clone();
+                egui::ComboBox::from_id_source((strip.channel_id, "input_bus"))
+                    .selected_text(format!("In: {}", strip.input))
+                    .width(90.0 * sizes.zoom)
+                    .show_ui(ui, |ui| {
+                        for input in &strip.available_inputs {
+                            let resp = ui.selectable_label(input == &strip.input, input);
+                            if resp.clicked() {
+                                strip.input = input.clone();
+                                let mut delta = RoutingDelta::default();
+                                delta.remove.push((strip.channel_id, current_input.clone()));
+                                delta.set.push((strip.channel_id, strip.input.clone(), 1.0));
+                                (callbacks.apply_routing)(delta);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Select input routing");
+
+                let current_output = strip.output.clone();
+                egui::ComboBox::from_id_source((strip.channel_id, "output_bus"))
+                    .selected_text(format!("Out: {}", strip.output))
+                    .width(90.0 * sizes.zoom)
+                    .show_ui(ui, |ui| {
+                        for output in &strip.available_outputs {
+                            let resp = ui.selectable_label(output == &strip.output, output);
+                            if resp.clicked() {
+                                strip.output = output.clone();
+                                let mut delta = RoutingDelta::default();
+                                delta
+                                    .remove
+                                    .push((strip.channel_id, current_output.clone()));
+                                delta
+                                    .set
+                                    .push((strip.channel_id, strip.output.clone(), 1.0));
+                                (callbacks.apply_routing)(delta);
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Select output routing");
+
+                let mut group_text = strip.group.clone().unwrap_or_else(|| "Ungrouped".into());
+                egui::ComboBox::from_id_source((strip.channel_id, "group"))
+                    .selected_text(format!("Grp: {}", group_text))
+                    .width(86.0 * sizes.zoom)
+                    .show_ui(ui, |ui| {
+                        let options = strip
+                            .available_groups
+                            .iter()
+                            .cloned()
+                            .chain(std::iter::once("Ungrouped".to_string()))
+                            .collect::<Vec<_>>();
+                        for grp in options {
+                            let resp = ui.selectable_label(
+                                strip
+                                    .group
+                                    .as_ref()
+                                    .map(|g| g == &grp)
+                                    .unwrap_or(grp == "Ungrouped"),
+                                &grp,
+                            );
+                            if resp.clicked() {
+                                strip.group = if grp == "Ungrouped" {
+                                    None
+                                } else {
+                                    Some(grp.clone())
+                                };
+                                group_text = grp;
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Assign track grouping for quick selection");
+            });
 
             if show_meter_bridge {
                 let bridge_height = sizes.fader_height * 0.35;
@@ -571,7 +664,18 @@ fn strip_widget(
                 egui::FontId::proportional(11.0 * sizes.zoom),
                 theme.colors.text_primary,
             );
-        });
+        })
+        .response;
+
+    if response.hovered() {
+        highlight = Stroke::new(theme.chrome_stroke.width * 1.6, theme.colors.meter_mid);
+    }
+
+    ui.painter().rect_stroke(
+        response.rect.expand(1.5),
+        Rounding::same(theme.rounding() * 1.05),
+        highlight,
+    );
 }
 
 fn density_button(ui: &mut Ui, label: &str, active: bool, theme: &MixerTheme) -> Response {
@@ -895,11 +999,10 @@ fn sends_section(
                             ))
                             .selected_text(send.dest.clone())
                             .show_ui(ui, |ui| {
-                                for slot in 0..MAX_RACK_SLOTS {
-                                    let label = format!("Bus {}", (b'A' + slot as u8) as char);
-                                    let selected = send.dest == label;
-                                    if ui.selectable_label(selected, &label).clicked() {
-                                        send.dest = label;
+                                for target in strip.send_targets.iter() {
+                                    let selected = &send.dest == target;
+                                    if ui.selectable_label(selected, target).clicked() {
+                                        send.dest = target.clone();
                                         (callbacks.configure_send)(
                                             strip.channel_id,
                                             send.id,
@@ -927,17 +1030,8 @@ fn sends_section(
                                 }
                             }
 
-                            let mut level = send.gain;
-                            let slider = egui::Slider::new(&mut level, 0.0..=1.0)
-                                .show_value(false)
-                                .step_by(0.01)
-                                .clamp_to_range(true);
-                            let resp = ui.add_sized(
-                                Vec2::new(80.0 * sizes.zoom, sizes.spacing * 3.0),
-                                slider,
-                            );
+                            let resp = knob_small(ui, "LVL", &mut send.gain, 0.0, 1.0, theme);
                             if resp.changed() {
-                                send.gain = level;
                                 let level = if send.on { send.gain } else { 0.0 };
                                 (callbacks.configure_send)(
                                     strip.channel_id,
@@ -946,6 +1040,7 @@ fn sends_section(
                                     send.pre,
                                 );
                             }
+                            resp.on_hover_text("Send level");
                             ui.label(
                                 egui::RichText::new(format!("{:.0}%", send.gain * 100.0))
                                     .small()
@@ -1296,15 +1391,26 @@ pub fn meter_pair(ui: &mut Ui, l: f32, r: f32, height: f32, theme: &MixerTheme) 
 
     let gutter = 3.0 * theme.zoom();
     let usable_height = rect.height() - gutter * 2.0;
-    for tick in [0.25_f32, 0.5, 0.75] {
-        let y = rect.bottom() - gutter - tick * usable_height;
+    const DB_TICKS: [f32; 7] = [-60.0, -30.0, -18.0, -12.0, -6.0, 0.0, 6.0];
+    for tick in DB_TICKS {
+        let norm = gain_to_norm(tick, db_to_gain(DB_MIN), db_to_gain(DB_MAX));
+        let y = rect.bottom() - gutter - norm * usable_height;
         painter.line_segment(
             [
-                Pos2::new(rect.left() + gutter * 0.6, y),
-                Pos2::new(rect.right() - gutter * 0.6, y),
+                Pos2::new(rect.left() + gutter * 0.4, y),
+                Pos2::new(rect.right() - gutter * 0.4, y),
             ],
-            Stroke::new(0.8, theme.colors.meter_grid.gamma_multiply(0.6)),
+            Stroke::new(0.9, theme.colors.meter_grid.gamma_multiply(0.7)),
         );
+        if tick >= -18.0 {
+            painter.text(
+                Pos2::new(rect.right() + 4.0, y),
+                Align2::LEFT_CENTER,
+                format!("{tick:+.0} dB"),
+                egui::FontId::proportional(9.0 * sizes.zoom),
+                theme.colors.text_dim,
+            );
+        }
     }
     theme.paint_meter(painter, rect, l, true);
     theme.paint_meter(painter, rect, r, false);
@@ -1388,6 +1494,16 @@ pub fn run_demo() {
         .map(|i| StripModel {
             channel_id: i as ChannelId + 1,
             name: format!("CH {:02}", i + 1),
+            input: format!("IN {}", (i % 2) + 1),
+            output: format!("BUS {}", (b'A' + (i % 3) as u8) as char),
+            available_inputs: vec!["IN 1".into(), "IN 2".into(), "USB".into()],
+            available_outputs: vec!["BUS A".into(), "BUS B".into(), "BUS C".into()],
+            group: if i % 2 == 0 {
+                Some("DRUMS".into())
+            } else {
+                None
+            },
+            available_groups: vec!["DRUMS".into(), "SYNTH".into(), "VOCAL".into()],
             color: Color32::from_rgb(0x46, 0x50 + (i as u8 * 3), 0x5A + (i as u8 * 2)),
             meter_l: (0.25 + 0.03 * i as f32).fract(),
             meter_r: (0.35 + 0.028 * i as f32).fract(),
@@ -1415,12 +1531,24 @@ pub fn run_demo() {
                     on: true,
                 })
                 .collect(),
+            send_targets: vec![
+                "Bus A".into(),
+                "Bus B".into(),
+                "Bus C".into(),
+                "Master".into(),
+            ],
         })
         .collect();
 
     let master = StripModel {
         channel_id: 0,
         name: "MASTER".into(),
+        input: "Mix".into(),
+        output: "Audio Out".into(),
+        available_inputs: vec!["Mix".into(), "Submix".into()],
+        available_outputs: vec!["Audio Out".into(), "Rec Bus".into()],
+        group: None,
+        available_groups: vec!["Master".into()],
         color: Color32::from_rgb(0x64, 0x80, 0x90),
         meter_l: 0.82,
         meter_r: 0.78,
@@ -1450,6 +1578,7 @@ pub fn run_demo() {
             pre: false,
             on: true,
         }],
+        send_targets: vec!["Phones".into(), "Stream".into()],
     };
 
     let callbacks = MixerCallbacks::noop();
