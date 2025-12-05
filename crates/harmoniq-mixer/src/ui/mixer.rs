@@ -1,4 +1,4 @@
-use crate::state::{Channel, ChannelId, MixerState, RoutingDelta, MAX_INSERT_SLOTS};
+use crate::state::{Channel, MixerState, RoutingDelta, MAX_INSERT_SLOTS};
 use egui::{
     self, Align, Color32, ComboBox, Frame, Id, Layout, Margin, Pos2, RichText, Rounding, Sense,
     Stroke, TextStyle, Vec2,
@@ -12,23 +12,24 @@ pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
         palette,
     } = props;
 
-    let strip_width = state.layout.strip_width.clamp(140.0, 260.0);
+    // FL-style: strips can be fairly thin, but still resizable.
+    let strip_width = state.layout.strip_width.clamp(110.0, 210.0);
     let metrics = StripMetrics::scaled(strip_width);
 
-    mixer_toolbar(ui, state, palette);
+    mixer_toolbar(ui, state, callbacks, palette);
 
-    ui.add_space(6.0);
+    ui.add_space(4.0);
 
     egui::ScrollArea::horizontal()
         .id_source("mixer_strip_scroll")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(10.0, 0.0);
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
 
                 let mut master: Option<usize> = None;
 
-                // Render all non-master channels and remember master index
+                // First draw all non-master channels, remember master index.
                 for idx in 0..state.channels.len() {
                     if state.channels[idx].is_master {
                         master = Some(idx);
@@ -46,7 +47,7 @@ pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
                     );
                 }
 
-                // Render master at the end if present
+                // Draw master at right edge (like FL's master).
                 if let Some(idx) = master {
                     strip_ui(ui, idx, state, callbacks, palette, &metrics, true);
                 }
@@ -65,55 +66,85 @@ struct StripMetrics {
 
 impl StripMetrics {
     fn scaled(strip_width: f32) -> Self {
-        let scale = (strip_width / 188.0).clamp(0.6, 1.6);
+        // Base around a slightly thinner nominal width to encourage slim strips.
+        let scale = (strip_width / 160.0).clamp(0.6, 1.4);
         Self {
             strip_width,
-            meter_width: 26.0 * scale,
-            fader_height: 220.0 * scale,
-            knob_size: 52.0 * scale,
-            send_knob: 42.0 * scale,
+            meter_width: 20.0 * scale,
+            fader_height: 240.0 * scale,
+            knob_size: 40.0 * scale,   // “smaller” knob look
+            send_knob: 34.0 * scale,   // “smaller” send knob feel
         }
     }
 }
 
-fn mixer_toolbar(ui: &mut egui::Ui, state: &mut MixerState, palette: &HarmoniqPalette) {
-    ui.horizontal(|ui| {
+fn mixer_toolbar(
+    ui: &mut egui::Ui,
+    state: &mut MixerState,
+    callbacks: &mut crate::MixerCallbacks,
+    palette: &HarmoniqPalette,
+) {
+    let frame = Frame::none()
+        .fill(palette.mixer_strip_bg.gamma_multiply(0.9))
+        .stroke(Stroke::new(1.0, palette.mixer_strip_border))
+        .inner_margin(Margin::symmetric(8.0, 6.0));
+
+    frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing = egui::vec2(10.0, 6.0);
 
-        ui.label(
-            RichText::new("Mixer")
-                .heading()
-                .color(palette.accent)
-                .strong(),
-        );
+        ui.horizontal(|ui| {
+            // Left side: title + add track.
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("Mixer")
+                        .heading()
+                        .color(palette.accent)
+                        .strong(),
+                );
 
-        let mut width = state.layout.strip_width;
-        let slider = egui::Slider::new(&mut width, 140.0..=260.0)
-            .text("Zoom")
-            .step_by(2.0)
-            .custom_formatter(|v, _| format!("{}%", ((v - 140.0) / 1.2).round()));
-        if ui
-            .add(slider)
-            .on_hover_text("Resize mixer strips")
-            .changed()
-        {
-            state.layout.strip_width = width;
-        }
+                if ui
+                    .button(RichText::new("+ Track").color(palette.text_primary))
+                    .on_hover_text("Add new mixer track")
+                    .clicked()
+                {
+                    // Ensure MixerCallbacks has something like:
+                    // pub add_channel: fn(),
+                    (callbacks.add_channel)();
+                }
+            });
 
-        ui.separator();
+            ui.add_space(12.0);
 
-        ui.label(RichText::new("Group select (shift-click)").color(palette.text_muted));
-
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let mut routing = state.routing_visible;
+            // Strip width / zoom
+            let mut width = state.layout.strip_width;
+            let slider = egui::Slider::new(&mut width, 110.0..=210.0)
+                .text("Width")
+                .step_by(2.0)
+                .custom_formatter(|v, _| format!("{v:.0}px"));
             if ui
-                .toggle_value(&mut routing, "Routing")
-                .on_hover_text("Show routing controls")
-                .clicked()
+                .add(slider)
+                .on_hover_text("Adjust mixer strip width")
+                .changed()
             {
-                state.routing_visible = routing;
+                state.layout.strip_width = width;
             }
+
+            ui.separator();
+
+            ui.label(RichText::new("Shift-click: group select").color(palette.text_muted));
+
+            // Right side: routing toggle.
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let mut routing = state.routing_visible;
+                if ui
+                    .toggle_value(&mut routing, "Routing")
+                    .on_hover_text("Show routing controls per track")
+                    .clicked()
+                {
+                    state.routing_visible = routing;
+                }
+            });
         });
     });
 }
@@ -127,7 +158,7 @@ fn strip_ui(
     metrics: &StripMetrics,
     is_master: bool,
 ) {
-    // Clone channel for editing, write back at the end
+    // Clone channel for editing, commit back after painting.
     let mut channel = state.channels[channel_index].clone();
 
     let hover_accent = Color32::from_rgb(70, 90, 120);
@@ -139,25 +170,34 @@ fn strip_ui(
 
     let frame = Frame::none()
         .fill(bg)
-        .rounding(Rounding::same(10.0))
-        .stroke(Stroke::new(1.0, palette.mixer_strip_border))
-        .inner_margin(Margin::symmetric(10.0, 8.0));
+        .rounding(Rounding::same(8.0))
+        .stroke(Stroke::new(
+            if is_master { 2.0 } else { 1.0 },
+            palette.mixer_strip_border,
+        ))
+        .inner_margin(Margin::symmetric(6.0, 6.0));
 
     frame.show(ui, |ui| {
         ui.set_width(metrics.strip_width);
-        ui.set_min_height(metrics.fader_height + 260.0);
+        ui.set_min_height(metrics.fader_height + 220.0);
 
         let inner = ui.vertical_centered(|ui| {
             header_ui(ui, &mut channel, state, palette, is_master);
-            ui.add_space(6.0);
+            ui.add_space(4.0);
+
+            // FL-like layout: meter+fader tall, with small pan/controls.
             meter_and_fader(ui, &mut channel, callbacks, palette, metrics);
-            ui.add_space(6.0);
+            ui.add_space(4.0);
+
             transport_row(ui, &mut channel, callbacks, palette);
             ui.add_space(4.0);
+
             inserts_ui(ui, &mut channel, callbacks, palette);
             ui.add_space(4.0);
+
             sends_ui(ui, &mut channel, state, callbacks, palette, metrics);
-            ui.add_space(6.0);
+            ui.add_space(4.0);
+
             routing_ui(ui, &mut channel, state, callbacks, palette);
         });
 
@@ -165,19 +205,19 @@ fn strip_ui(
         if inner.response.hovered() {
             ui.painter().rect(
                 rect.expand(2.0),
-                12.0,
+                10.0,
                 Color32::from_rgba_premultiplied(
                     hover_accent.r(),
                     hover_accent.g(),
                     hover_accent.b(),
-                    20,
+                    18,
                 ),
                 Stroke::new(1.0, hover_accent),
             );
         }
     });
 
-    // Write back updated channel
+    // Commit changes back.
     state.channels[channel_index] = channel;
 }
 
@@ -189,10 +229,13 @@ fn header_ui(
     is_master: bool,
 ) {
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+
+        // FL-like color chip
         let color = Color32::from_rgb(channel.color[0], channel.color[1], channel.color[2]);
-        let (rect, resp) = ui.allocate_exact_size(Vec2::new(14.0, 14.0), Sense::click());
+        let (rect, resp) = ui.allocate_exact_size(Vec2::new(10.0, 10.0), Sense::click());
         ui.painter()
-            .rect_filled(rect.expand(1.0), 4.0, color.gamma_multiply(1.1));
+            .rect_filled(rect.expand(1.0), 3.0, color.gamma_multiply(1.1));
         if resp.clicked() {
             channel.color = [color.r(), color.g(), color.b()];
         }
@@ -201,7 +244,7 @@ fn header_ui(
         let mut name = channel.name.clone();
         let text = egui::TextEdit::singleline(&mut name)
             .desired_width(ui.available_width())
-            .hint_text("Track name")
+            .hint_text(if is_master { "Master" } else { "Track" })
             .font(TextStyle::Monospace);
         let response = ui.add(text).on_hover_text("Rename track");
         if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -222,9 +265,10 @@ fn header_ui(
         }
     });
 
-    ui.add_space(4.0);
+    // Small routing label row (like “IN → OUT”)
+    ui.add_space(2.0);
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
+        ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
         ui.label(
             RichText::new(channel.input_bus.clone())
                 .small()
@@ -237,7 +281,12 @@ fn header_ui(
                 .color(palette.text_primary),
         );
         if is_master {
-            ui.label(RichText::new("MASTER").color(palette.accent));
+            ui.label(
+                RichText::new("MASTER")
+                    .small()
+                    .color(palette.accent)
+                    .strong(),
+            );
         }
     });
 }
@@ -250,6 +299,7 @@ fn meter_and_fader(
     metrics: &StripMetrics,
 ) {
     ui.horizontal(|ui| {
+        // Thin vertical meter
         let meter = LevelMeter::new(palette)
             .with_size(Vec2::new(metrics.meter_width, metrics.fader_height))
             .with_levels(
@@ -259,6 +309,8 @@ fn meter_and_fader(
             )
             .with_clip(channel.meter.clip_l, channel.meter.clip_r);
         ui.add(meter).on_hover_text("Level meter with peak hold");
+
+        ui.add_space(2.0);
 
         ui.vertical(|ui| {
             let mut gain = channel.gain_db;
@@ -275,18 +327,48 @@ fn meter_and_fader(
                 (callbacks.set_gain_pan)(channel.id, gain, channel.pan);
             }
 
-            ui.add_space(6.0);
+            ui.add_space(4.0);
 
-            let mut pan = channel.pan;
-            // Knob::new(value, min, max, default, label, palette)
-            if ui
-                .add(Knob::new(&mut pan, -1.0, 1.0, 0.0, "Pan", palette))
-                .on_hover_text("Pan")
-                .changed()
-            {
-                channel.pan = pan;
-                (callbacks.set_gain_pan)(channel.id, channel.gain_db, pan);
-            }
+            // Compact pan row under fader
+            ui.horizontal(|ui| {
+                let mut pan = channel.pan;
+                if ui
+                    .add(Knob::new(
+                        &mut pan,
+                        -1.0,
+                        1.0,
+                        0.0,
+                        "Pan",
+                        palette,
+                    ))
+                    .on_hover_text("Pan")
+                    .changed()
+                {
+                    channel.pan = pan;
+                    (callbacks.set_gain_pan)(channel.id, channel.gain_db, pan);
+                }
+
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new(format!("{:.1} dB", channel.gain_db))
+                            .small()
+                            .color(palette.text_muted),
+                    );
+                    ui.label(
+                        RichText::new(
+                            if channel.pan.abs() < 0.01 {
+                                "C".to_string()
+                            } else if channel.pan < 0.0 {
+                                format!("L{:.0}", -channel.pan * 100.0)
+                            } else {
+                                format!("R{:.0}", channel.pan * 100.0)
+                            },
+                        )
+                        .small()
+                        .color(palette.text_muted),
+                    );
+                });
+            });
         });
     });
 }
@@ -298,15 +380,17 @@ fn transport_row(
     palette: &HarmoniqPalette,
 ) {
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+
         let mute = ui
-            .add(StateToggleButton::new(&mut channel.mute, "Mute", palette))
+            .add(StateToggleButton::new(&mut channel.mute, "M", palette))
             .on_hover_text("Mute channel");
         if mute.changed() {
             (callbacks.set_mute)(channel.id, channel.mute);
         }
 
         let solo = ui
-            .add(StateToggleButton::new(&mut channel.solo, "Solo", palette))
+            .add(StateToggleButton::new(&mut channel.solo, "S", palette))
             .on_hover_text("Solo channel");
         if solo.changed() {
             (callbacks.set_solo)(channel.id, channel.solo);
@@ -314,7 +398,7 @@ fn transport_row(
 
         ui.add(StateToggleButton::new(
             &mut channel.record_enable,
-            "Arm",
+            "R",
             palette,
         ))
         .on_hover_text("Arm for recording");
@@ -328,7 +412,7 @@ fn inserts_ui(
     palette: &HarmoniqPalette,
 ) {
     ui.label(
-        RichText::new("FX Inserts")
+        RichText::new("Inserts")
             .small()
             .color(palette.text_muted),
     );
@@ -360,8 +444,8 @@ fn inserts_ui(
         let mut resp = Frame::none()
             .fill(slot_bg)
             .stroke(Stroke::new(1.0, palette.mixer_slot_border))
-            .rounding(Rounding::same(6.0))
-            .inner_margin(Margin::symmetric(8.0, 6.0))
+            .rounding(Rounding::same(5.0))
+            .inner_margin(Margin::symmetric(6.0, 4.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let drag = ui
@@ -417,7 +501,7 @@ fn inserts_ui(
 
         if drop_here {
             ui.painter()
-                .rect_stroke(resp.rect.expand(2.0), 6.0, Stroke::new(1.0, palette.accent));
+                .rect_stroke(resp.rect.expand(2.0), 5.0, Stroke::new(1.0, palette.accent));
         }
     }
 
@@ -434,16 +518,16 @@ fn sends_ui(
     palette: &HarmoniqPalette,
     _metrics: &StripMetrics,
 ) {
-    ui.add_space(4.0);
+    ui.add_space(2.0);
     ui.label(RichText::new("Sends").small().color(palette.text_muted));
     ui.add_space(2.0);
 
     for send in channel.sends.iter_mut() {
         Frame::none()
             .fill(palette.mixer_slot_bg)
-            .rounding(Rounding::same(6.0))
+            .rounding(Rounding::same(5.0))
             .stroke(Stroke::new(1.0, palette.mixer_slot_border))
-            .inner_margin(Margin::symmetric(8.0, 6.0))
+            .inner_margin(Margin::symmetric(6.0, 4.0))
             .show(ui, |ui| {
                 ui.vertical(|ui| {
                     ComboBox::from_id_source(("send_target", channel.id, send.id))
@@ -460,7 +544,7 @@ fn sends_ui(
                         .response
                         .on_hover_text("Send destination");
 
-                    ui.add_space(4.0);
+                    ui.add_space(2.0);
 
                     let mut level = send.level;
                     if ui
@@ -487,7 +571,7 @@ fn routing_ui(
         return;
     }
 
-    ui.add_space(4.0);
+    ui.add_space(2.0);
     ui.label(RichText::new("Routing").small().color(palette.text_muted));
 
     let mut delta = RoutingDelta::default();
