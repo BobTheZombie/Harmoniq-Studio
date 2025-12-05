@@ -123,9 +123,9 @@ impl Clip {
                     pattern_id: *pattern_id,
                 },
                 ClipKind::Audio { source } => PlaylistClipKind::Audio { source: *source },
-                ClipKind::Automation { lane } => PlaylistClipKind::Automation {
-                    lane: lane.clone(),
-                },
+                ClipKind::Automation { lane } => {
+                    PlaylistClipKind::Automation { lane: lane.clone() }
+                }
             },
         }
     }
@@ -820,6 +820,8 @@ mod tests {
         assert!(!clips.is_empty());
         let first = &clips[0];
         assert_eq!(first.start_ticks + first.length_ticks, first.end_ticks());
-        assert!(clips.iter().any(|clip| clip.track_index == 0 && clip.lane_id == 0));
+        assert!(clips
+            .iter()
+            .any(|clip| clip.track_index == 0 && clip.lane_id == 0));
     }
 }
