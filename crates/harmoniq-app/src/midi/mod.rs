@@ -113,7 +113,11 @@ pub fn open_midi_input(
     let ports = input.ports();
     let port_names: Vec<String> = ports
         .iter()
-        .map(|port| input.port_name(port).unwrap_or_else(|_| "Unknown".to_string()))
+        .map(|port| {
+            input
+                .port_name(port)
+                .unwrap_or_else(|_| "Unknown".to_string())
+        })
         .collect();
     if ports.is_empty() {
         anyhow::bail!("no MIDI inputs available");
@@ -156,8 +160,7 @@ pub fn open_midi_input(
     let start = Instant::now();
     let mut connections = Vec::new();
     for (index, mut cfg) in configs.into_iter().enumerate() {
-        let mut input =
-            MidiInput::new("harmoniq-midi").context("failed to open MIDI input")?;
+        let mut input = MidiInput::new("harmoniq-midi").context("failed to open MIDI input")?;
         input.ignore(Ignore::None);
         let ports = input.ports();
 

@@ -35,7 +35,7 @@ use harmoniq_plugin_scanner::Scanner as PluginBrowserScanner;
 use harmoniq_plugins::{GainPlugin, NoisePlugin, SineSynth};
 use harmoniq_ui::{
     perf_hud::{self, PerfHudState, PerfMetrics},
-    startup_banner, HarmoniqPalette, HarmoniqTheme, MixerSkin,
+    startup_banner, HarmoniqPalette, HarmoniqTheme,
 };
 use hound::{SampleFormat, WavSpec, WavWriter};
 use parking_lot::Mutex;
@@ -1510,23 +1510,6 @@ impl HarmoniqStudioApp {
         cc: &CreationContext<'_>,
     ) -> anyhow::Result<Self> {
         let mut theme = HarmoniqTheme::init(&cc.egui_ctx);
-        let skin_path = PathBuf::from("config/mixer_skin.json");
-        match MixerSkin::load_from_path(&skin_path) {
-            Ok(skin) => {
-                if !skin.is_empty() {
-                    theme.apply_mixer_skin(&skin);
-                }
-            }
-            Err(err) => {
-                let is_missing = err
-                    .io_error()
-                    .map(|io| io.kind() == ErrorKind::NotFound)
-                    .unwrap_or(false);
-                if !is_missing {
-                    warn!("failed to load mixer skin from {skin_path:?}: {err}");
-                }
-            }
-        }
         let icons = AppIcons::load(&cc.egui_ctx)?;
 
         let mut engine = HarmoniqEngine::new(config.clone()).context("failed to build engine")?;

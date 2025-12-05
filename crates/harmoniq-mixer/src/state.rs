@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::time::Instant;
 
 pub type ChannelId = u32;
@@ -177,6 +177,7 @@ pub struct SendSlot {
     pub id: SendId, // index, rendered as 'A','B',...
     pub level: f32, // 0..1 linear
     pub pre_fader: bool,
+    pub target: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -410,6 +411,7 @@ impl Channel {
                     id: new_id,
                     level: 0.0,
                     pre_fader: false,
+                    target: None,
                 });
             }
         }
@@ -423,6 +425,7 @@ impl Channel {
 pub struct MixerState {
     pub channels: Vec<Channel>,
     pub selected: Option<ChannelId>,
+    pub grouped: BTreeSet<ChannelId>,
     pub routing_visible: bool,
     pub routing: RoutingMatrix,
     pub view_tab: MixerViewTab,
@@ -439,6 +442,7 @@ impl Default for MixerState {
         Self {
             channels: Vec::new(),
             selected: None,
+            grouped: BTreeSet::new(),
             routing_visible: false,
             routing: RoutingMatrix::default(),
             view_tab: MixerViewTab::default(),
@@ -532,6 +536,7 @@ impl MixerState {
                         id: id as u8,
                         level: 0.0,
                         pre_fader: false,
+                        target: None,
                     })
                     .collect(),
                 meter: Meter::default(),

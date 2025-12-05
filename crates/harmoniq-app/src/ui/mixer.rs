@@ -288,6 +288,7 @@ impl MixerView {
                 id: slot as u8,
                 level,
                 pre_fader: self.api.send_is_pre(idx, slot),
+                target: Some(self.api.send_label(idx, slot)),
             });
             send_levels_db.push(level_db);
         }
