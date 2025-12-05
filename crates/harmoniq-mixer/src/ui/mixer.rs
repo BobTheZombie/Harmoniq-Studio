@@ -27,24 +27,28 @@ pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
                 ui.spacing_mut().item_spacing = egui::vec2(10.0, 0.0);
 
                 let mut master: Option<usize> = None;
-                for (idx, ch) in state.channels.iter().enumerate() {
-                    if ch.is_master {
+
+                // Render all non-master channels and remember master index
+                for idx in 0..state.channels.len() {
+                    if state.channels[idx].is_master {
                         master = Some(idx);
                         continue;
                     }
-                    strip_ui(ui, ch, state, callbacks, palette, &metrics, false);
-                }
 
-                if let Some(idx) = master {
                     strip_ui(
                         ui,
-                        &state.channels[idx],
+                        idx,
                         state,
                         callbacks,
                         palette,
                         &metrics,
-                        true,
+                        false, // is_master
                     );
+                }
+
+                // Render master at the end if present
+                if let Some(idx) = master {
+                    strip_ui(ui, idx, state, callbacks, palette, &metrics, true);
                 }
             });
         });
@@ -116,14 +120,16 @@ fn mixer_toolbar(ui: &mut egui::Ui, state: &mut MixerState, palette: &HarmoniqPa
 
 fn strip_ui(
     ui: &mut egui::Ui,
-    channel: &Channel,
+    channel_index: usize,
     state: &mut MixerState,
     callbacks: &mut crate::MixerCallbacks,
     palette: &HarmoniqPalette,
     metrics: &StripMetrics,
     is_master: bool,
 ) {
-    let mut channel = channel.clone();
+    // Clone channel for editing, write back at the end
+    let mut channel = state.channels[channel_index].clone();
+
     let hover_accent = Color32::from_rgb(70, 90, 120);
     let bg = if is_master {
         Color32::from_rgb(30, 32, 38)
@@ -141,7 +147,7 @@ fn strip_ui(
         ui.set_width(metrics.strip_width);
         ui.set_min_height(metrics.fader_height + 260.0);
 
-        let response = ui.vertical_centered(|ui| {
+        let inner = ui.vertical_centered(|ui| {
             header_ui(ui, &mut channel, state, palette, is_master);
             ui.add_space(6.0);
             meter_and_fader(ui, &mut channel, callbacks, palette, metrics);
@@ -155,9 +161,10 @@ fn strip_ui(
             routing_ui(ui, &mut channel, state, callbacks, palette);
         });
 
-        if response.response.hovered() {
+        let rect = inner.response.rect;
+        if inner.response.hovered() {
             ui.painter().rect(
-                ui.min_rect(),
+                rect.expand(2.0),
                 12.0,
                 Color32::from_rgba_premultiplied(
                     hover_accent.r(),
@@ -168,13 +175,10 @@ fn strip_ui(
                 Stroke::new(1.0, hover_accent),
             );
         }
-
-        state
-            .channels
-            .iter_mut()
-            .find(|ch| ch.id == channel.id)
-            .map(|ch| *ch = channel);
     });
+
+    // Write back updated channel
+    state.channels[channel_index] = channel;
 }
 
 fn header_ui(
@@ -258,8 +262,12 @@ fn meter_and_fader(
 
         ui.vertical(|ui| {
             let mut gain = channel.gain_db;
+            // Fader::new(value, min, max, default, palette)
             if ui
-                .add(Fader::vertical(palette, &mut gain).with_height(metrics.fader_height))
+                .add(
+                    Fader::new(&mut gain, -60.0, 12.0, 0.0, palette)
+                        .with_height(metrics.fader_height),
+                )
                 .on_hover_text("Volume fader (dB)")
                 .changed()
             {
@@ -268,13 +276,11 @@ fn meter_and_fader(
             }
 
             ui.add_space(6.0);
+
             let mut pan = channel.pan;
+            // Knob::new(value, min, max, default, label, palette)
             if ui
-                .add(
-                    Knob::new(&mut pan)
-                        .with_size(metrics.knob_size)
-                        .with_palette(palette),
-                )
+                .add(Knob::new(&mut pan, -1.0, 1.0, 0.0, "Pan", palette))
                 .on_hover_text("Pan")
                 .changed()
             {
@@ -351,7 +357,7 @@ fn inserts_ui(
             palette.mixer_slot_bg
         };
 
-        let resp = Frame::none()
+        let mut resp = Frame::none()
             .fill(slot_bg)
             .stroke(Stroke::new(1.0, palette.mixer_slot_border))
             .rounding(Rounding::same(6.0))
@@ -399,7 +405,7 @@ fn inserts_ui(
         }
 
         if !is_dragged && resp.hovered() {
-            resp.on_hover_text(format!("Insert slot {}", slot_idx + 1));
+            resp = resp.on_hover_text(format!("Insert slot {}", slot_idx + 1));
         }
 
         if let Some(pointer) = ui.ctx().pointer_interact_pos() {
@@ -426,7 +432,7 @@ fn sends_ui(
     state: &MixerState,
     callbacks: &mut crate::MixerCallbacks,
     palette: &HarmoniqPalette,
-    metrics: &StripMetrics,
+    _metrics: &StripMetrics,
 ) {
     ui.add_space(4.0);
     ui.label(RichText::new("Sends").small().color(palette.text_muted));
@@ -455,13 +461,10 @@ fn sends_ui(
                         .on_hover_text("Send destination");
 
                     ui.add_space(4.0);
+
                     let mut level = send.level;
                     if ui
-                        .add(
-                            Knob::new(&mut level)
-                                .with_size(metrics.send_knob)
-                                .with_palette(palette),
-                        )
+                        .add(Knob::new(&mut level, 0.0, 1.0, 0.0, "Send", palette))
                         .on_hover_text("Send level")
                         .changed()
                     {
@@ -511,3 +514,4 @@ fn routing_ui(
         (callbacks.apply_routing)(delta);
     }
 }
+
