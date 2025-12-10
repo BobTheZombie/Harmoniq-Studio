@@ -222,16 +222,16 @@ fn insert_column(
                 let rows = channel.inserts.len().max(3);
 
                 for idx in 0..rows {
-                    let slot = channel.inserts.get_mut(idx);
-                    let (name, format, bypassed) = match slot {
+                    let (name, format, bypassed, has_plugin) = match channel.inserts.get(idx) {
                         Some(slot) if slot.plugin_uid.is_some() => (
                             slot.name.clone(),
                             slot.format
                                 .map(|f| f.label().to_string())
                                 .unwrap_or_else(|| "".to_string()),
                             slot.bypass,
+                            true,
                         ),
-                        _ => ("Empty".to_string(), String::new(), false),
+                        _ => ("Empty".to_string(), String::new(), false, false),
                     };
 
                     let response = Frame::none()
@@ -260,8 +260,6 @@ fn insert_column(
                         })
                         .response;
 
-                    let has_plugin = matches!(slot, Some(slot) if slot.plugin_uid.is_some());
-
                     if response.clicked() {
                         if has_plugin {
                             (callbacks.open_insert_ui)(channel.id, idx);
@@ -273,7 +271,7 @@ fn insert_column(
 
                     response.context_menu(|ui| {
                         if has_plugin {
-                            if let Some(slot) = slot {
+                            if let Some(slot) = channel.inserts.get_mut(idx) {
                                 if ui.checkbox(&mut slot.bypass, "Bypass").changed() {
                                     (callbacks.set_insert_bypass)(channel.id, idx, slot.bypass);
                                 }
