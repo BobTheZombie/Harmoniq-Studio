@@ -39,7 +39,7 @@ pub struct MixerCallbacks {
     pub set_mute: Box<dyn FnMut(ChannelId, bool) + Send>,
     pub set_solo: Box<dyn FnMut(ChannelId, bool) + Send>,
     /// Callback to add a new channel (host/app should handle creating the channel).
-    pub add_channel: Box<dyn FnMut() + Send>,    
+    pub add_channel: Box<dyn FnMut() + Send>,
 }
 
 impl MixerCallbacks {
@@ -55,8 +55,8 @@ impl MixerCallbacks {
             set_gain_pan: Box::new(|_, _, _| {}),
             set_stereo_separation: Box::new(|_, _| {}),
             set_mute: Box::new(|_, _| {}),
-            set_solo:            Box::new(|_, _| {}),
-            add_channel:         Box::new(|| {}),            
+            set_solo: Box::new(|_, _| {}),
+            add_channel: Box::new(|| {}),
         }
     }
 }
