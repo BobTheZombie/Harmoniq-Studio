@@ -1,4 +1,4 @@
-use crate::state::MixerState;
+use crate::state::{InsertSlot, MixerState};
 use egui::{self, Align, ComboBox, Frame, Margin, RichText, Rounding, Slider, Stroke, Vec2};
 use harmoniq_ui::{Fader, HarmoniqPalette, LevelMeter, StateToggleButton};
 
@@ -113,9 +113,9 @@ fn strip_ui(
                 ui.horizontal(|ui| {
                     meter_and_fader(ui, &mut channel, palette, callbacks);
                     ui.add_space(6.0);
-                    slot_column(ui, "Inserts", &channel, palette);
+                    insert_column(ui, &mut channel, palette, callbacks);
                     ui.add_space(4.0);
-                    slot_column(ui, "Sends", &channel, palette);
+                    send_column(ui, &channel, palette);
                 });
 
                 ui.add_space(8.0);
@@ -204,11 +204,11 @@ fn meter_and_fader(
     });
 }
 
-fn slot_column(
+fn insert_column(
     ui: &mut egui::Ui,
-    title: &str,
-    channel: &crate::state::Channel,
+    channel: &mut crate::state::Channel,
     palette: &HarmoniqPalette,
+    callbacks: &mut crate::MixerCallbacks,
 ) {
     Frame::none()
         .fill(palette.mixer_strip_bg.gamma_multiply(0.95))
@@ -217,27 +217,118 @@ fn slot_column(
         .inner_margin(Margin::symmetric(6.0, 4.0))
         .show(ui, |ui| {
             ui.vertical(|ui| {
-                ui.label(RichText::new(title).color(palette.text_muted).small());
+                ui.label(RichText::new("Inserts").color(palette.text_muted).small());
 
-                let rows = if title == "Inserts" {
-                    channel.inserts.len().max(3)
-                } else {
-                    channel.sends.len().max(2)
-                };
+                let rows = channel.inserts.len().max(3);
 
                 for idx in 0..rows {
-                    let slot_name = match title {
-                        "Inserts" => channel
-                            .inserts
-                            .get(idx)
-                            .map(|ins| ins.name.clone())
-                            .unwrap_or_else(|| "Empty".to_string()),
-                        _ => channel
-                            .sends
-                            .get(idx)
-                            .and_then(|send| send.target.clone())
-                            .unwrap_or_else(|| "Unassigned".to_string()),
+                    let slot = channel.inserts.get_mut(idx);
+                    let (name, format, bypassed) = match slot {
+                        Some(slot) if slot.plugin_uid.is_some() => (
+                            slot.name.clone(),
+                            slot.format
+                                .map(|f| f.label().to_string())
+                                .unwrap_or_else(|| "".to_string()),
+                            slot.bypass,
+                        ),
+                        _ => ("Empty".to_string(), String::new(), false),
                     };
+
+                    let response = Frame::none()
+                        .fill(if bypassed {
+                            palette.mixer_slot_bg.gamma_multiply(0.8)
+                        } else {
+                            palette.mixer_slot_bg
+                        })
+                        .rounding(Rounding::same(3.0))
+                        .stroke(Stroke::new(1.0, palette.mixer_slot_border))
+                        .inner_margin(Margin::symmetric(4.0, 3.0))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(name.clone()).small().color(if bypassed {
+                                    palette.text_muted
+                                } else {
+                                    palette.text_primary
+                                }));
+
+                                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                                    if !format.is_empty() {
+                                        ui.label(RichText::new(format.clone()).small());
+                                    }
+                                });
+                            });
+                        })
+                        .response;
+
+                    let has_plugin = matches!(slot, Some(slot) if slot.plugin_uid.is_some());
+
+                    if response.clicked() {
+                        if has_plugin {
+                            (callbacks.open_insert_ui)(channel.id, idx);
+                        } else {
+                            (callbacks.open_insert_browser)(channel.id, Some(idx));
+                            channel.ensure_insert_slot(idx);
+                        }
+                    }
+
+                    response.context_menu(|ui| {
+                        if has_plugin {
+                            if let Some(slot) = slot {
+                                if ui.checkbox(&mut slot.bypass, "Bypass").changed() {
+                                    (callbacks.set_insert_bypass)(channel.id, idx, slot.bypass);
+                                }
+
+                                if ui.button("Open editor").clicked() {
+                                    (callbacks.open_insert_ui)(channel.id, idx);
+                                    ui.close_menu();
+                                }
+
+                                if ui.button("Remove").clicked() {
+                                    *slot = InsertSlot::empty();
+                                    (callbacks.remove_insert)(channel.id, idx);
+                                    ui.close_menu();
+                                }
+                            }
+                        } else if ui.button("Add effect...").clicked() {
+                            (callbacks.open_insert_browser)(channel.id, Some(idx));
+                            channel.ensure_insert_slot(idx);
+                            ui.close_menu();
+                        }
+                    });
+                }
+
+                ui.add_space(4.0);
+
+                if ui
+                    .button(RichText::new("+ Add effect").color(palette.text_primary))
+                    .clicked()
+                {
+                    let next_slot = channel.inserts.len();
+                    (callbacks.open_insert_browser)(channel.id, None);
+                    channel.ensure_insert_slot(next_slot);
+                }
+            });
+        });
+}
+
+fn send_column(ui: &mut egui::Ui, channel: &crate::state::Channel, palette: &HarmoniqPalette) {
+    Frame::none()
+        .fill(palette.mixer_strip_bg.gamma_multiply(0.95))
+        .rounding(Rounding::same(4.0))
+        .stroke(Stroke::new(1.0, palette.mixer_strip_border))
+        .inner_margin(Margin::symmetric(6.0, 4.0))
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.label(RichText::new("Sends").color(palette.text_muted).small());
+
+                let rows = channel.sends.len().max(2);
+
+                for idx in 0..rows {
+                    let slot_name = channel
+                        .sends
+                        .get(idx)
+                        .and_then(|send| send.target.clone())
+                        .unwrap_or_else(|| "Unassigned".to_string());
 
                     Frame::none()
                         .fill(palette.mixer_slot_bg)
