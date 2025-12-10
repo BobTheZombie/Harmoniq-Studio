@@ -55,8 +55,9 @@ pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
             ui.horizontal(|ui| {
                 let mut master = None;
-                for (idx, ch) in state.channels.iter().enumerate() {
-                    if ch.is_master {
+                for idx in 0..state.channels.len() {
+                    let is_master = state.channels[idx].is_master;
+                    if is_master {
                         master = Some(idx);
                         continue;
                     }
