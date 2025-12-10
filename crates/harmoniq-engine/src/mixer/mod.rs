@@ -731,3 +731,86 @@ fn add_scaled(target: &mut AudioBuffer, source: &AudioBuffer, gain: f32) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buffer_with_value(channels: usize, frames: usize, value: f32) -> AudioBuffer {
+        let mut buf = AudioBuffer::new(channels, frames);
+        buf.as_mut_slice().fill(value);
+        buf
+    }
+
+    #[test]
+    fn pre_fader_aux_reaches_master_mix() {
+        let mut track = MixerTrackState::default();
+        track.name = "Track 1".into();
+        track.fader_db = -60.0;
+        track.target = MixerTargetState::Bus(0);
+        track.aux_sends.push(MixerAuxSendState {
+            aux_index: 0,
+            level_db: 0.0,
+            pre_fader: true,
+        });
+
+        let mut bus = MixerBusState::default();
+        bus.target = MixerTargetState::Master;
+
+        let aux = MixerAuxState::default();
+
+        let state = MixerState {
+            tracks: vec![track],
+            buses: vec![bus],
+            auxes: vec![aux],
+            master: MixerMasterState::default(),
+        };
+
+        let model = MixerModel::new(state);
+        let mut engine = MixerEngine::from_model(&model, 48_000.0, 16);
+
+        let input = buffer_with_value(2, 8, 1.0);
+        let mut output = AudioBuffer::new(2, 8);
+        engine.process(&[input], &mut output);
+
+        let track_linear = db_to_linear(-60.0);
+        for sample in output.as_slice() {
+            assert!((*sample) > 0.99, "pre-fader aux should dominate master mix");
+            assert!((sample - (1.0 + track_linear)).abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn post_fader_aux_tracks_fader_level() {
+        let mut track = MixerTrackState::default();
+        track.fader_db = -12.0;
+        track.target = MixerTargetState::Bus(0);
+        track.aux_sends.push(MixerAuxSendState {
+            aux_index: 0,
+            level_db: 0.0,
+            pre_fader: false,
+        });
+
+        let mut bus = MixerBusState::default();
+        bus.target = MixerTargetState::Master;
+
+        let state = MixerState {
+            tracks: vec![track],
+            buses: vec![bus],
+            auxes: vec![MixerAuxState::default()],
+            master: MixerMasterState::default(),
+        };
+
+        let model = MixerModel::new(state);
+        let mut engine = MixerEngine::from_model(&model, 48_000.0, 16);
+
+        let input = buffer_with_value(2, 4, 1.0);
+        let mut output = AudioBuffer::new(2, 4);
+        engine.process(&[input], &mut output);
+
+        let expected = db_to_linear(-12.0) * 2.0; // bus + post-fader aux return
+        for sample in output.as_slice() {
+            assert!((sample - expected).abs() < 0.02);
+        }
+    }
+}
