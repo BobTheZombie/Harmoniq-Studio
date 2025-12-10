@@ -21,6 +21,7 @@ const MIN_BEATS: f32 = 8.0;
 const BEAT_WIDTH: f32 = 72.0;
 const RACK_SLOT_HEIGHT: f32 = 34.0;
 const RACK_SLOT_GAP: f32 = 8.0;
+const MAX_BEATS: f32 = 1024.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TrackId(pub u32);
@@ -55,7 +56,8 @@ pub fn render(ui: &mut Ui, mut props: PlaylistProps<'_>) {
         .iter()
         .flat_map(|track| track.lanes.iter().flat_map(|lane| lane.clips.iter()))
         .map(|clip| clip.end_ticks() as f32 / ppq)
-        .fold(MIN_BEATS, f32::max);
+        .fold(MIN_BEATS, f32::max)
+        .min(MAX_BEATS);
     let timeline_width = total_beats.max(MIN_BEATS) * BEAT_WIDTH;
     let tracks_height = playlist_tracks_height(&props.playlist.tracks);
 
