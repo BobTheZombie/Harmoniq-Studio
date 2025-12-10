@@ -1,7 +1,5 @@
 use crate::state::MixerState;
-use egui::{
-    self, Align, CollapsingHeader, Frame, Grid, Margin, RichText, Rounding, Slider, Stroke, Vec2,
-};
+use egui::{self, Align, ComboBox, Frame, Margin, RichText, Rounding, Slider, Stroke, Vec2};
 use harmoniq_ui::{Fader, HarmoniqPalette, LevelMeter, StateToggleButton};
 
 pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
@@ -12,25 +10,35 @@ pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
     } = props;
 
     Frame::none()
-        .fill(palette.panel.gamma_multiply(0.85))
-        .inner_margin(Margin::symmetric(8.0, 6.0))
+        .fill(palette.panel.gamma_multiply(0.9))
+        .inner_margin(Margin::symmetric(10.0, 8.0))
         .stroke(Stroke::new(1.0, palette.mixer_strip_border))
-        .rounding(Rounding::same(6.0))
+        .rounding(Rounding::same(8.0))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Mixer").heading().color(palette.accent));
+                ui.label(RichText::new("MixConsole").heading().color(palette.accent));
                 ui.add_space(10.0);
 
-                let mut width = state.layout.strip_width.clamp(50.0, 100.0);
+                ComboBox::from_id_source("strip_width_picker")
+                    .selected_text(format!(
+                        "Strip width: {}px",
+                        state.layout.strip_width as i32
+                    ))
+                    .show_ui(ui, |ui| {
+                        for (label, value) in
+                            [("Narrow", 120.0f32), ("Standard", 152.0), ("Wide", 188.0)]
+                        {
+                            ui.selectable_value(&mut state.layout.strip_width, value, label);
+                        }
+                    });
+
+                ui.separator();
+
                 if ui
-                    .add(
-                        Slider::new(&mut width, 50.0..=100.0)
-                            .text("Strip width")
-                            .step_by(1.0),
-                    )
-                    .changed()
+                    .button(RichText::new("Reset clips").color(palette.text_primary))
+                    .clicked()
                 {
-                    state.layout.strip_width = width;
+                    state.reset_peaks_all();
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
@@ -46,10 +54,10 @@ pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
 
     ui.add_space(6.0);
 
-    let strip_width = state.layout.strip_width.clamp(50.0, 100.0);
+    let strip_width = state.layout.strip_width.clamp(110.0, 220.0);
 
     egui::ScrollArea::horizontal()
-        .id_source("mixer_strip_scroll_compact")
+        .id_source("mixer_strip_scroll_channel_strip")
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
@@ -83,9 +91,9 @@ fn strip_ui(
     let mut channel = state.channels[channel_index].clone();
 
     let bg = if is_master {
-        palette.mixer_strip_bg.gamma_multiply(0.55)
+        palette.mixer_strip_bg.gamma_multiply(0.5)
     } else {
-        palette.mixer_strip_bg.gamma_multiply(0.9)
+        palette.mixer_strip_bg.gamma_multiply(0.92)
     };
 
     Frame::none()
@@ -98,124 +106,205 @@ fn strip_ui(
             ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
 
             ui.vertical(|ui| {
-                ui.centered_and_justified(|ui| {
-                    ui.label(
-                        RichText::new(channel.name.clone())
-                            .strong()
-                            .color(if is_master {
-                                palette.accent
-                            } else {
-                                palette.text_primary
-                            })
-                            .size(13.0),
-                    );
-                });
+                strip_header(ui, &channel, palette, is_master);
 
-                CollapsingHeader::new("Details")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.vertical(|ui| {
-                            let mut gain = channel.gain_db;
-                            if ui
-                                .add(Slider::new(&mut gain, -60.0..=12.0).text("Gain (dB)"))
-                                .changed()
-                            {
-                                channel.gain_db = gain;
-                                (callbacks.set_gain_pan)(channel.id, gain, channel.pan);
-                            }
-
-                            ui.separator();
-                            ui.label(RichText::new("FX / Inserts").color(palette.text_muted));
-                            Grid::new(("fx_slots", channel.id))
-                                .num_columns(1)
-                                .show(ui, |ui| {
-                                    for slot in 0..3 {
-                                        ui.label(
-                                            RichText::new(format!("Slot {}", slot + 1)).small(),
-                                        );
-                                        ui.end_row();
-                                    }
-                                });
-                        });
-                    });
-
-                ui.add_space(2.0);
+                ui.add_space(6.0);
 
                 ui.horizontal(|ui| {
-                    let time = ui.input(|i| i.time) as f32;
-                    let sim = (time * 1.7 + channel.id as f32).sin().abs() * 0.4;
-                    let peak_l = channel.meter.peak_l.max(sim);
-                    let peak_r = channel.meter.peak_r.max(sim * 0.9);
-                    let rms = channel.meter.rms_l.max(sim * 0.6);
-
-                    let meter = LevelMeter::new(palette)
-                        .with_size(Vec2::new(12.0, 180.0))
-                        .with_levels(peak_l, peak_r, rms)
-                        .with_clip(channel.meter.clip_l, channel.meter.clip_r);
-                    ui.add(meter);
-
-                    let mut gain = channel.gain_db;
-                    if ui
-                        .add(Fader::new(&mut gain, -60.0, 12.0, 0.0, palette).with_height(180.0))
-                        .on_hover_text("Volume")
-                        .changed()
-                    {
-                        channel.gain_db = gain;
-                        (callbacks.set_gain_pan)(channel.id, gain, channel.pan);
-                    }
-                });
-
-                let mut pan = channel.pan;
-                if ui
-                    .add(
-                        Slider::new(&mut pan, -1.0..=1.0)
-                            .text("Pan")
-                            .clamp_to_range(true),
-                    )
-                    .changed()
-                {
-                    channel.pan = pan;
-                    (callbacks.set_gain_pan)(channel.id, channel.gain_db, pan);
-                }
-
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        let mute = ui.add(StateToggleButton::new(&mut channel.mute, "M", palette));
-                        if mute.changed() {
-                            (callbacks.set_mute)(channel.id, channel.mute);
-                        }
-
-                        let solo = ui.add(StateToggleButton::new(&mut channel.solo, "S", palette));
-                        if solo.changed() {
-                            (callbacks.set_solo)(channel.id, channel.solo);
-                        }
-
-                        ui.add(StateToggleButton::new(
-                            &mut channel.record_enable,
-                            "R",
-                            palette,
-                        ));
-                    });
-
+                    meter_and_fader(ui, &mut channel, palette, callbacks);
                     ui.add_space(6.0);
-                    ui.vertical(|ui| {
-                        ui.label(RichText::new("FX").small().color(palette.text_muted));
-                        for _ in 0..2 {
-                            Frame::none()
-                                .fill(palette.mixer_slot_bg)
-                                .rounding(Rounding::same(4.0))
-                                .stroke(Stroke::new(1.0, palette.mixer_slot_border))
-                                .inner_margin(Margin::symmetric(4.0, 3.0))
-                                .show(ui, |ui| {
-                                    ui.centered_and_justified(|ui| {
-                                        ui.label(RichText::new("Insert").small());
-                                    });
-                                });
-                        }
-                    });
+                    slot_column(ui, "Inserts", &channel, palette);
+                    ui.add_space(4.0);
+                    slot_column(ui, "Sends", &channel, palette);
                 });
+
+                ui.add_space(8.0);
+
+                control_row(ui, &mut channel, palette, callbacks);
+
+                ui.add_space(4.0);
+
+                pan_row(ui, &mut channel, palette, callbacks);
             });
         });
 
     state.channels[channel_index] = channel;
+}
+
+fn strip_header(
+    ui: &mut egui::Ui,
+    channel: &crate::state::Channel,
+    palette: &HarmoniqPalette,
+    is_master: bool,
+) {
+    let title_bg = if is_master {
+        palette.mixer_strip_header_selected
+    } else {
+        palette.mixer_strip_header
+    };
+    Frame::none()
+        .fill(title_bg)
+        .rounding(Rounding::same(4.0))
+        .stroke(Stroke::new(1.0, palette.mixer_strip_border))
+        .inner_margin(Margin::symmetric(6.0, 4.0))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(channel.name.clone())
+                        .strong()
+                        .color(if is_master {
+                            palette.accent
+                        } else {
+                            palette.text_primary
+                        })
+                        .size(14.0),
+                );
+
+                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
+                    if channel.meter.clip_l || channel.meter.clip_r {
+                        ui.label(RichText::new("CLIP").color(palette.warning).strong());
+                    }
+                });
+            });
+        });
+}
+
+fn meter_and_fader(
+    ui: &mut egui::Ui,
+    channel: &mut crate::state::Channel,
+    palette: &HarmoniqPalette,
+    callbacks: &mut crate::MixerCallbacks,
+) {
+    ui.vertical(|ui| {
+        let meter = LevelMeter::new(palette)
+            .with_size(Vec2::new(18.0, 220.0))
+            .with_levels(
+                channel.meter.peak_l,
+                channel.meter.peak_r,
+                channel.meter.rms_l,
+            )
+            .with_clip(channel.meter.clip_l, channel.meter.clip_r);
+        let response = ui.add(meter.interactive(true));
+        if response.clicked() {
+            channel.meter.clip_l = false;
+            channel.meter.clip_r = false;
+        }
+
+        ui.add_space(6.0);
+
+        let mut gain = channel.gain_db;
+        if ui
+            .add(Fader::new(&mut gain, -60.0, 12.0, 0.0, palette).with_height(220.0))
+            .on_hover_text("Fader")
+            .changed()
+        {
+            channel.gain_db = gain;
+            (callbacks.set_gain_pan)(channel.id, gain, channel.pan);
+        }
+    });
+}
+
+fn slot_column(
+    ui: &mut egui::Ui,
+    title: &str,
+    channel: &crate::state::Channel,
+    palette: &HarmoniqPalette,
+) {
+    Frame::none()
+        .fill(palette.mixer_strip_bg.gamma_multiply(0.95))
+        .rounding(Rounding::same(4.0))
+        .stroke(Stroke::new(1.0, palette.mixer_strip_border))
+        .inner_margin(Margin::symmetric(6.0, 4.0))
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.label(RichText::new(title).color(palette.text_muted).small());
+
+                let rows = if title == "Inserts" {
+                    channel.inserts.len().max(3)
+                } else {
+                    channel.sends.len().max(2)
+                };
+
+                for idx in 0..rows {
+                    let slot_name = match title {
+                        "Inserts" => channel
+                            .inserts
+                            .get(idx)
+                            .map(|ins| ins.name.clone())
+                            .unwrap_or_else(|| "Empty".to_string()),
+                        _ => channel
+                            .sends
+                            .get(idx)
+                            .and_then(|send| send.target.clone())
+                            .unwrap_or_else(|| "Unassigned".to_string()),
+                    };
+
+                    Frame::none()
+                        .fill(palette.mixer_slot_bg)
+                        .rounding(Rounding::same(3.0))
+                        .stroke(Stroke::new(1.0, palette.mixer_slot_border))
+                        .inner_margin(Margin::symmetric(4.0, 3.0))
+                        .show(ui, |ui| {
+                            ui.centered_and_justified(|ui| {
+                                ui.label(RichText::new(slot_name).small());
+                            });
+                        });
+                }
+            });
+        });
+}
+
+fn control_row(
+    ui: &mut egui::Ui,
+    channel: &mut crate::state::Channel,
+    palette: &HarmoniqPalette,
+    callbacks: &mut crate::MixerCallbacks,
+) {
+    ui.horizontal(|ui| {
+        let mute = ui.add(StateToggleButton::new(&mut channel.mute, "Mute", palette));
+        if mute.changed() {
+            (callbacks.set_mute)(channel.id, channel.mute);
+        }
+
+        let solo = ui.add(StateToggleButton::new(&mut channel.solo, "Solo", palette));
+        if solo.changed() {
+            (callbacks.set_solo)(channel.id, channel.solo);
+        }
+
+        ui.add(StateToggleButton::new(
+            &mut channel.record_enable,
+            "Record",
+            palette,
+        ));
+    });
+}
+
+fn pan_row(
+    ui: &mut egui::Ui,
+    channel: &mut crate::state::Channel,
+    palette: &HarmoniqPalette,
+    callbacks: &mut crate::MixerCallbacks,
+) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Pan").color(palette.text_muted));
+        let mut pan = channel.pan;
+        if ui
+            .add(Slider::new(&mut pan, -1.0..=1.0).clamp_to_range(true))
+            .changed()
+        {
+            channel.pan = pan;
+            (callbacks.set_gain_pan)(channel.id, channel.gain_db, pan);
+        }
+
+        ui.add_space(8.0);
+        ui.label(RichText::new("Width").color(palette.text_muted));
+        let mut width = channel.stereo_separation;
+        if ui
+            .add(Slider::new(&mut width, 0.0..=2.0).clamp_to_range(true))
+            .changed()
+        {
+            channel.stereo_separation = width;
+            (callbacks.set_stereo_separation)(channel.id, width);
+        }
+    });
 }
