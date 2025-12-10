@@ -12,7 +12,7 @@ pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
     } = props;
 
     Frame::none()
-        .fill(palette.panel_bg.gamma_multiply(0.85))
+        .fill(palette.panel.gamma_multiply(0.85))
         .inner_margin(Margin::symmetric(8.0, 6.0))
         .stroke(Stroke::new(1.0, palette.mixer_strip_border))
         .rounding(Rounding::same(6.0))
@@ -33,7 +33,7 @@ pub fn render(ui: &mut egui::Ui, props: crate::MixerProps) {
                     state.layout.strip_width = width;
                 }
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.with_layout(egui::Layout::right_to_left(Align::Center), |ui| {
                     if ui
                         .button(RichText::new("+ Track").color(palette.text_primary))
                         .clicked()
