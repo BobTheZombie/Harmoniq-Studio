@@ -2359,15 +2359,6 @@ impl HarmoniqStudioApp {
     }
 
     fn process_playlist_playback(&mut self) {
-        if self.pattern_mode
-            || !matches!(
-                self.transport_state,
-                TransportState::Playing | TransportState::Recording
-            )
-        {
-            return;
-        }
-
         if let Err(command) = self
             .command_queue
             .try_send(EngineCommand::SetPlaylist(self.playlist_view.clone()))
