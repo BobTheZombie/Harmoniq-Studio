@@ -6,7 +6,22 @@ pub mod api;
 pub mod control;
 pub mod levels;
 
+// CURRENT ARCH SUMMARY:
+// - MixerEngine processes tracks->buses->master with pre/post inserts and aux returns.
+// - State structs hold mixer layout for serialization but lack strong track typing and RT/editor split.
+// - Meter taps exist per strip, driven by MixerEngine, with UI helpers in `mixer/api.rs`.
+// - Missing: Cubase-style channel roles, explicit mute/solo/arm/monitor flow, pan law control,
+//   and RT-safe parameter bridging between UI/editor and the audio graph.
+
+// Mixer Architecture Plan:
+// - Introduce typed channels (audio, group, fx, master) with shared flags (mute/solo/arm/monitor/polarity).
+// - Push pan/pan-law handling into the engine-side mixer and expose automation-friendly targets.
+// - Keep RT structs allocation-free; use editor-side state to drive atomics/lock-free updates into DSP.
+// - Expand MixerEngine to gate signals with mute/solo logic, apply pan/width, and mix sends/routes
+//   before master processing, mirroring Cubase-style signal flow.
+
 use harmoniq_dsp::gain::db_to_linear;
+use harmoniq_dsp::pan::constant_power;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
@@ -72,11 +87,33 @@ impl Default for MixerTargetState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum MixerTrackType {
+    Audio,
+    Group,
+    FxReturn,
+    Master,
+}
+
+impl Default for MixerTrackType {
+    fn default() -> Self {
+        MixerTrackType::Audio
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MixerTrackState {
     pub name: String,
     pub fader_db: f32,
     pub width: f32,
     pub phase_invert: bool,
+    pub pan: f32,
+    pub mute: bool,
+    pub solo: bool,
+    pub record_arm: bool,
+    pub monitor: bool,
+    pub track_type: MixerTrackType,
+    pub input_bus: Option<String>,
+    pub output_bus: Option<String>,
     pub target: MixerTargetState,
     pub aux_sends: Vec<MixerAuxSendState>,
     pub pre_inserts: Vec<MixerInsertState>,
@@ -90,6 +127,14 @@ impl Default for MixerTrackState {
             fader_db: 0.0,
             width: 1.0,
             phase_invert: false,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            record_arm: false,
+            monitor: false,
+            track_type: MixerTrackType::Audio,
+            input_bus: None,
+            output_bus: None,
             target: MixerTargetState::Master,
             aux_sends: Vec::new(),
             pre_inserts: Vec::new(),
@@ -104,6 +149,9 @@ pub struct MixerBusState {
     pub fader_db: f32,
     pub width: f32,
     pub phase_invert: bool,
+    pub pan: f32,
+    pub mute: bool,
+    pub solo: bool,
     pub aux_sends: Vec<MixerAuxSendState>,
     pub post_inserts: Vec<MixerInsertState>,
     pub target: MixerTargetState,
@@ -116,6 +164,9 @@ impl Default for MixerBusState {
             fader_db: 0.0,
             width: 1.0,
             phase_invert: false,
+            pan: 0.0,
+            mute: false,
+            solo: false,
             aux_sends: Vec::new(),
             post_inserts: Vec::new(),
             target: MixerTargetState::Master,
@@ -143,6 +194,7 @@ pub struct MixerMasterState {
     pub fader_db: f32,
     pub width: f32,
     pub phase_invert: bool,
+    pub pan: f32,
 }
 
 impl Default for MixerMasterState {
@@ -151,6 +203,7 @@ impl Default for MixerMasterState {
             fader_db: 0.0,
             width: 1.0,
             phase_invert: false,
+            pan: 0.0,
         }
     }
 }
@@ -352,6 +405,12 @@ struct TrackEngine {
     fader: FaderNode,
     width: StereoWidthNode,
     meter: MeterTapNode,
+    pan: f32,
+    mute: bool,
+    solo: bool,
+    track_type: MixerTrackType,
+    record_arm: bool,
+    monitor: bool,
     target: MixerTarget,
     sends: Vec<TrackSend>,
     pre_inserts: Vec<Option<Arc<Mutex<Box<dyn MixerInsertProcessor>>>>>,
@@ -392,6 +451,12 @@ impl TrackEngine {
             fader,
             width,
             meter,
+            pan: state.pan,
+            mute: state.mute,
+            solo: state.solo,
+            track_type: state.track_type.clone(),
+            record_arm: state.record_arm,
+            monitor: state.monitor,
             target,
             sends,
             pre_inserts,
@@ -412,8 +477,12 @@ impl TrackEngine {
         buses: &mut [AudioBuffer],
         master: &mut AudioBuffer,
         aux_buffers: &mut [AudioBuffer],
+        any_solo: bool,
     ) {
         if input.is_empty() {
+            return;
+        }
+        if self.mute || (any_solo && !self.solo) {
             return;
         }
         let channels = input.channel_count();
@@ -432,6 +501,7 @@ impl TrackEngine {
         self.post_buffer
             .as_mut_slice()
             .copy_from_slice(self.pre_buffer.as_slice());
+        apply_pan(&mut self.post_buffer, self.pan);
         self.width.process_buffer(&mut self.post_buffer);
         self.fader.process_buffer(&mut self.post_buffer);
         for proc_opt in self.post_inserts.iter() {
@@ -467,6 +537,9 @@ struct BusEngine {
     fader: FaderNode,
     width: StereoWidthNode,
     meter: MeterTapNode,
+    pan: f32,
+    mute: bool,
+    solo: bool,
     sends: Vec<TrackSend>,
     post_inserts: Vec<Option<Arc<Mutex<Box<dyn MixerInsertProcessor>>>>>,
     target: MixerTarget,
@@ -503,16 +576,28 @@ impl BusEngine {
             fader,
             width,
             meter,
+            pan: state.pan,
+            mute: state.mute,
+            solo: state.solo,
             sends,
             post_inserts,
             target,
         }
     }
 
-    fn process(&mut self, buffer: &mut AudioBuffer, aux_buffers: &mut [AudioBuffer]) {
+    fn process(
+        &mut self,
+        buffer: &mut AudioBuffer,
+        aux_buffers: &mut [AudioBuffer],
+        any_solo: bool,
+    ) {
         if buffer.is_empty() {
             return;
         }
+        if self.mute || (any_solo && !self.solo) {
+            return;
+        }
+        apply_pan(buffer, self.pan);
         self.width.process_buffer(buffer);
         self.fader.process_buffer(buffer);
         for proc_opt in self.post_inserts.iter() {
@@ -569,6 +654,7 @@ pub struct MixerEngine {
     master_fader: FaderNode,
     master_width: StereoWidthNode,
     master_meter: MeterTapNode,
+    master_pan: f32,
 }
 
 impl MixerEngine {
@@ -627,6 +713,7 @@ impl MixerEngine {
             master_fader,
             master_width,
             master_meter,
+            master_pan: model.state.master.pan,
         }
     }
 
@@ -654,8 +741,15 @@ impl MixerEngine {
             }
             buffer.clear();
         }
+        let any_track_solo = self.tracks.iter().any(|t| t.solo);
         for (engine, input) in self.tracks.iter_mut().zip(track_inputs.iter()) {
-            engine.process(input, &mut self.bus_buffers, output, &mut self.aux_buffers);
+            engine.process(
+                input,
+                &mut self.bus_buffers,
+                output,
+                &mut self.aux_buffers,
+                any_track_solo,
+            );
         }
         if !self.buses.is_empty() {
             let mut indegree = vec![0usize; self.buses.len()];
@@ -684,12 +778,13 @@ impl MixerEngine {
                 }
             }
 
+            let any_bus_solo = self.buses.iter().any(|b| b.solo);
             for index in order {
                 let target = self.buses[index].target();
                 let mut buffer = std::mem::take(&mut self.bus_buffers[index]);
                 {
                     let bus_engine = &mut self.buses[index];
-                    bus_engine.process(&mut buffer, &mut self.aux_buffers);
+                    bus_engine.process(&mut buffer, &mut self.aux_buffers, any_bus_solo);
                 }
                 match target {
                     MixerTarget::Master => add_scaled(output, &buffer, 1.0),
@@ -705,6 +800,7 @@ impl MixerEngine {
         for (aux_engine, buffer) in self.auxes.iter_mut().zip(self.aux_buffers.iter_mut()) {
             aux_engine.process(buffer, output);
         }
+        apply_pan(output, self.master_pan);
         self.master_width.process_buffer(output);
         self.master_fader.process_buffer(output);
         self.master_meter.process_buffer(output);
@@ -728,6 +824,28 @@ fn add_scaled(target: &mut AudioBuffer, source: &AudioBuffer, gain: f32) {
             let t = t_offset + frame;
             let s = s_offset + frame;
             tgt[t] += src[s] * gain;
+        }
+    }
+}
+
+fn apply_pan(buffer: &mut AudioBuffer, pan: f32) {
+    if buffer.channel_count() == 0 || buffer.is_empty() {
+        return;
+    }
+    let (g_l, g_r) = constant_power(pan.clamp(-1.0, 1.0));
+    let frames = buffer.len();
+    let channels = buffer.channel_count();
+    let data = buffer.as_mut_slice();
+    let left_offset = 0;
+    for frame in 0..frames {
+        let idx = left_offset + frame;
+        data[idx] *= g_l;
+    }
+    if channels > 1 {
+        let right_offset = frames;
+        for frame in 0..frames {
+            let idx = right_offset + frame;
+            data[idx] *= g_r;
         }
     }
 }
