@@ -1,6 +1,13 @@
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::time::Instant;
 
+// CURRENT ARCH SUMMARY:
+// - Mixer UI/state lives here with rich channel metadata (inserts, sends, EQ stubs, meters).
+// - Real-time mixer DSP lives in `rt.rs` as a lightweight pan/gain/mute mixer with aux/group sends.
+// - Engine wiring is thin: callbacks notify the host to update routing/params but no deep project IO.
+// - Missing: explicit track types, tighter separation of RT/editor data, full insert/send routing, and
+//   shared automation/meter transport between DSP and UI.
+
 pub type ChannelId = u32;
 pub type InsertSlotId = usize;
 pub type SendId = u8; // 0='A',1='B',...
