@@ -1753,11 +1753,28 @@ impl HarmoniqStudioApp {
     }
 
     fn toggle_widget(&mut self, uid: &str) {
-        let (pos, size, title) = self.widget_defaults(uid);
+        let (default_pos, default_size, default_title) = self.widget_defaults(uid);
         let kind = FloatingKind::UiWidget {
             uid: uid.to_string(),
         };
-        self.floating.toggle_by_kind(kind, title, pos, size);
+        if let Some(id) = self.floating.find_by_kind(&kind) {
+            if self.floating.is_open(id) {
+                self.floating.close(id);
+                return;
+            }
+
+            let (pos, size, title) = self
+                .floating
+                .windows
+                .get(&id)
+                .map(|window| (window.pos, window.size, window.title.clone()))
+                .unwrap_or((default_pos, default_size, default_title.clone()));
+
+            self.floating.ensure_open(kind, title, pos, size);
+        } else {
+            self.floating
+                .ensure_open(kind, default_title, default_pos, default_size);
+        }
     }
 
     fn on_engine_stats(&mut self, xruns_total: u64) {
@@ -2814,9 +2831,14 @@ impl CommandHandler for HarmoniqStudioApp {
                     self.console.log(LogLevel::Info, format!("Mixer {state}"));
                 }
                 ViewCommand::TogglePlaylist => {
-                    self.open_widget(UID_PLAYLIST);
+                    self.toggle_widget(UID_PLAYLIST);
+                    let state = if self.is_widget_open(UID_PLAYLIST) {
+                        "shown"
+                    } else {
+                        "hidden"
+                    };
                     self.console
-                        .log(LogLevel::Info, "Playlist shown".to_string());
+                        .log(LogLevel::Info, format!("Playlist {state}"));
                 }
                 ViewCommand::ToggleSequencer => {
                     self.toggle_widget(UID_SEQUENCER);
